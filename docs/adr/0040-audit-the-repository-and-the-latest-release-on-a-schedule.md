@@ -10,8 +10,9 @@
   directory out of the work area, and issue #614 accepts the CLI's built-in read-only Bash commands
   (2026-11-25); issue #632 mints the publish job's App token with no `permission-*` input (2026-11-26);
   issue #661 adds row 13's inputs that pass loading and row 14's second fuzz target (2026-11-26);
-  issue #658 fixes rows 3 and 10's scans and adds the history scan's ignore file (2026-11-26)
-- Date: 2026-11-21, amended 2026-11-22 to 2026-11-26
+  issue #658 fixes rows 3 and 10's scans and adds the history scan's ignore file (2026-11-26);
+  issue #687 derives the Go row 2 builds govulncheck with from go.mod at install (2026-11-27)
+- Date: 2026-11-21, amended 2026-11-22 to 2026-11-27
 
 ## Context
 
@@ -152,7 +153,7 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | # | Check | Job, run by | Network |
 |---|---|---|---|
 | 1 | Record the `main` SHA and the latest release tag | checks, workflow step | GitHub reads |
-| 2 | Download pinned tools, verify their checksums (govulncheck built with go.mod's Go, issue #658); `go mod download` for the module and `tools/`; trivy's database | checks, workflow step | yes |
+| 2 | Download pinned tools, verify their checksums (govulncheck built with the Go go.mod's go line names, read at install, issues #658 and #687); `go mod download` for the module and `tools/`; trivy's database | checks, workflow step | yes |
 | 3 | govulncheck (source) and osv-scanner on the module and `tools/`; govulncheck held to go.mod's Go first (issue #658) | checks, workflow step | vulnerability databases |
 | 4 | gitleaks on the full history, `--redact`, minus the closed false hits of the root `.gitleaksignore`, which only the maintainer's review grows (issue #658) | checks, workflow step | no |
 | 5 | zizmor and actionlint on `.github/workflows` | checks, workflow step | GitHub reads only |
@@ -165,7 +166,7 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
 | 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (`internal/adapter/report/htmlreport`'s `FuzzReportEscaping` and `FuzzInventoryDecoding` today, Decision 5; issue #661) | checks, container, `--network none`, `GOPROXY=off` | no |
-| 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments as the `release-tag` skill reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | GitHub reads |
+| 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments as the `release-tag` skill reads them, Renovate's state (its Dependency Dashboard issue, and its open pull requests through `repos/{owner}/{repo}/pulls?state=open`, `renovate[bot]`'s alone, up to ten pages of 100, issue #660), dependencies changed since the last report | checks, workflow step | GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | artifact upload |
 | 17 | Check the artifacts, download and decrypt `checks-result` into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight | model, workflow steps | tools, artifact download |
 | 18 | The `security-audit` checklist across the whole tree, a review of what the agents may run, triage of rows 3 to 15 with a PoC or precise trace for each finding, the status of the last report's public findings, the structured result | model, Claude Code, sandboxed | Bash: none (enforced); Claude Code: the model API only, by configuration, not enforced |
@@ -3017,7 +3018,12 @@ datasource, whose Go toolchain group moves it with go.mod's go line.
 **Read scopes**, each `read`, the token only in the step-level `env:` of rows 1, 5 (zizmor), 6, 7 and
 15, and never in a step that runs release code or a container: `contents` (the checkout, the latest
 release's tag, the release download), `attestations` (`gh attestation verify`, row 7), `actions`
-(scorecard's reads of the workflows' runs, row 6) and `issues` (Renovate's Dependency Dashboard, row 15).
+(scorecard's reads of the workflows' runs, row 6), `issues` (Renovate's Dependency Dashboard, row 15)
+and `pull-requests` (row 15's list of Renovate's open pull requests, issue #660). That list reads
+`repos/{owner}/{repo}/pulls?state=open`, and a job token that holds no `pull-requests` scope is refused
+it; the scope is read-only, so
+the job still writes nothing. Should the token be refused them anyway, the refusal is recorded in
+`read-refused.txt` and the limits, never a silent miss.
 No `packages` scope: the image is public, and rows 7 and 8 read the registry anonymously, with
 `DOCKER_CONFIG` an empty directory of the job's own. No read needs admin: scorecard's `Branch-Protection`
 and `Webhooks` checks are left out of its run (`scorecard-admin`, "not run (needs admin read)"), and row
@@ -3067,7 +3073,15 @@ scope above should allow is a finding, and a scope no read used is dropped.
   its pull requests filtered out with `select(.pull_request == null)` on the client, after one page of
   100 items, newest first: the open Renovate pull requests share that page, so the dashboard is missed only
   past 99 of them, and the limits line below then says no dashboard was found; a read that succeeded with no such issue writes the limits line `supply-chain:
-  no open Renovate Dependency Dashboard issue was found`, review round N) and its open pull requests; and `git diff` of the
+  no open Renovate Dependency Dashboard issue was found`, review round N) and its open pull requests
+  (`repos/{owner}/{repo}/pulls?state=open&per_page=100&page=N`, issue #660: each page's unfiltered
+  `count` beside Renovate's own, `select(.user.login == "renovate[bot]")`, with the named fields alone:
+  `number`, `title`, `draft`, `created_at`, `updated_at`, the head ref and the label names; a page the
+  budget skipped and one refused end the pages before any count is read; the count is read once, and a
+  page whose count is no number writes the limits line `supply-chain: page ${page} of the open pull
+  requests answered no count` and ends them; a page of fewer than 100 is the last; and a full tenth page
+  writes the limits line `supply-chain: the tenth page of 100 open pull requests was full: Renovate's past
+  it, if any, were not read`); and `git diff` of the
   dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
   `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
 
@@ -3156,7 +3170,9 @@ which the container is killed and removed.
 **To be checked on the first run** (runbook step 8), besides 5b's list: that cosign v3's
 `verify-attestation` reads the attestations `actions/attest` pushed as OCI referrers (`gh attestation
 verify` reads them, as `release.yml`'s `verify` job shows); that scorecard reads with these scopes and
-which row 15 reads are refused; that trivy runs offline with these flags; that `docker commit` keeps the
+which row 15 reads are refused; that row 15's pulls read is answered, not recorded in
+`read-refused.txt`, and whether the earlier search found no Renovate pull request because the token
+lacked the `pull-requests` scope (issue #660); that trivy runs offline with these flags; that `docker commit` keeps the
 release image's user, working directory and entry point; that `go test -fuzz` builds offline from
 the copied module cache without writing to it; and that `gh attestation verify` exits 1 for a refused
 verification and another code for a network failure (round E, below). If it exits 1 for both, a network
@@ -3552,6 +3568,18 @@ its step, and by a case of its test:
   once there were more than 100. The read is now `state=open` through `[.[] | select(.pull_request ==
   null)]`, and a read that exited 0 with an empty array writes `supply-chain: no open Renovate Dependency
   Dashboard issue was found` to the limits.
+  *Amended 2026-11-27 (issue #660):* row 15's open Renovate pull requests were read through
+  `search/issues?q=repo:...+is:pr+is:open+author:app/renovate`, which answered the first audit run with
+  the Dependency Dashboard issue and no pull request. They are now listed through the pulls endpoint,
+  `repos/{owner}/{repo}/pulls?state=open`, one page of 100 at a time, kept to `renovate[bot]`'s with the
+  named fields alone, for ten pages at most. A page skipped or refused ends the pages before any count is
+  read; a page whose `.count` is no number (so `[ "" -lt 100 ]` would be false and the loop would read
+  on) writes `supply-chain: page ${page} of the open pull requests answered no count` to the limits and
+  ends them; a page of fewer than 100 is the last; and a full tenth page writes `supply-chain: the tenth
+  page of 100 open pull requests was full: Renovate's past it, if any, were not read`, since the loop
+  never knows whether an eleventh holds anything. `check.AuditWorkflow` pins, whole-line and in order, the
+  read, the exit and refusal stop, the count read with its guard and limits line, the under-100 test and
+  the ten-page limit with its limits line, and refuses `search/issues` in the step.
 - **Point 10, row 9's failed unpack.** After a non-zero unpack the loop still counted and scanned the part
   of a member `head -c` had written, and a 124 was recorded as `tool-failed`. The branch now records 124
   as `timed-out` and any other exit as `tool-failed`, writes `binary-vulnerabilities: ${name} was not
@@ -4180,14 +4208,19 @@ scan raised test values on every run.
 - **Row 3's source govulncheck.** `go install pkg@version` picks its toolchain from that module's own go
   line, not from go.mod's, even in the checkout, so govulncheck was built with Go 1.26 and could not load
   the module (`go 1.27.4`): both source scans exited 1. The install, still in row 2's download step,
-  names go.mod's Go as `GOTOOLCHAIN=go<version>`. A `# renovate: datasource=golang-version depName=go`
-  comment and a matchString of the generic customManager keep it in the "Go toolchain" group, which moves
-  it with go.mod's go line, and `test/architecture` fails when the two differ. It stays in row 2's step
+  names go.mod's Go as `GOTOOLCHAIN=go<version>`. Since issue #687 (2026-11-27) it reads that version
+  from go.mod's go line at install, `GOTOOLCHAIN="go$(go list -m -f '{{.GoVersion}}')"` in the checkout,
+  so the workflow names no Go version of its own: no second copy, no `# renovate:` comment and no
+  Renovate matchString keep one in step (`test/architecture` refuses a literal `go1.<n>` anywhere in the
+  workflow, `test/lint` any customManager that matches a `GOTOOLCHAIN=` line). It stays in row 2's step
   because after the module download every Go command runs with `GOPROXY=off`, and `go install
   pkg@version` cannot: it looks up the module's deprecation through the proxy. Before the scan, the
   "Download the Go modules" step fails the run with an `::error` when `govulncheck -version` (the Go it
   scans for, which is the go command's) or `go version` of the binary (the Go that built it) names another
-  Go than go.mod's; only `go version` of the binary catches a tool built with another Go.
+  Go than go.mod's; only `go version` of the binary catches a tool built with another Go. go.mod carries
+  no `toolchain` line, and `go list -m -f '{{.GoVersion}}'` prints the go line even when one exists: adding
+  one would build govulncheck with the go line's Go while later go commands run the toolchain line's, so
+  the guard would fail the audit until the derivation and the guard read the same Go.
 - **Row 10's SBOM scan.** `--skip-check-update` is `trivy image`'s flag alone; `trivy sbom` at v0.76.2
   rejects it and exits 1 before scanning, and both scans shared it. The image scan alone passes it now.
   `test/architecture` holds each trivy subcommand's flags to a table read from the pinned release's CLI

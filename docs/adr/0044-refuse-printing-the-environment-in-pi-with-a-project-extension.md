@@ -5,6 +5,9 @@
 - Amended: 2026-11-26, the tester starts through `dev/pi-tester.sh` with only its own credential, and does
   not start when the refusal's files are not in place (issue #662; see "Amendment: the tester starts with
   only its model credential, and fails closed")
+- Amended: 2026-11-27, the tester starts from a root-owned copy of the wrapper and the refusal installed at
+  VM provisioning, and does not use the unit folder's copies for its checks or `--extension` (issue #692; see "Amendment: the tester starts
+  from a root-owned installed copy")
 
 ## Context
 
@@ -351,3 +354,85 @@ Consequences of the amendment:
   `DOT_AGENT_DECK_PI_TELEMETRY` and `OTEL_*`) does not reach the tester's pane.
 - The change reaches only tester panes started from a unit folder that has the script, after the
   maintainer approved the changed orchestration in the deck (`dot-agent-deck trust`).
+
+## Amendment: the tester starts from a root-owned installed copy
+
+The amendment above ran the wrapper, and checked the refusal's two files, from the unit's folder. That
+folder is writable by the agents, so a branch could weaken `dev/pi-tester.sh`, the extension or the list
+before the tester starts on it (the AI reviewer's point 2 on PR #679, accepted by the maintainer on
+2026-11-27, issue #692). The decisions above stand; this moves what the tester starts with out of the agents'
+reach.
+
+- **The VM installs a fixed copy.** `dev/lima.yaml`'s provisioning embeds the three files verbatim, as
+  here-documents (`PITESTER`, `PIDENYEXT`, `PIDENYLIST`) whose text `test/devenv` holds identical to the
+  repository's, and installs them with `install -o root -g root`, outside the workspace mount and every
+  path an agent writes:
+  - `/usr/local/lib/shift2eu/pi-tester/pi-tester.sh`, mode 0755, from `dev/pi-tester.sh`;
+  - `/usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts`, mode 0644, from
+    `.pi/extensions/deny-env-printing.ts`;
+  - `/usr/local/lib/shift2eu/pi-tester/deny-env-printing.json`, mode 0644, from `.pi/deny-env-printing.json`.
+  The extension finds its list at `../deny-env-printing.json` beside its own file, so the installed layout
+  keeps it working unchanged.
+- **The deck runs the installed wrapper.** `.dot-agent-deck.toml`'s tester `command` is
+  `/usr/local/lib/shift2eu/pi-tester/pi-tester.sh --provider deepseek --model deepseek-flash --thinking high --approve`,
+  `agent = "pi"` unchanged.
+- **The wrapper reads only its installed files.** It finds the extension and the list beside its own path
+  (`$0`, which must be absolute), never in the working directory, and runs every fail-closed check of the
+  amendment above on those, naming the installed file when it refuses. It passes pi
+  `--extension <installed extension>` before the deck's arguments (pi 1.6.1's flag for loading an extension
+  file), so pi always loads the installed refusal. The allow list and the `PATH` check are unchanged.
+- **The project's copy is not used for the checks or for `--extension`, with one line.** When
+  `dev/pi-tester.sh`, `.pi/extensions/deny-env-printing.ts` or `.pi/deny-env-printing.json` in the working
+  directory is missing or differs byte for byte (`cmp -s`) from the installed file, the wrapper still starts
+  pi with the installed files and prints one line on stderr naming each project path, its installed path,
+  that pi still loads the project's `.pi/extensions` (see Consequences, issue #702) and `make vm-pi-tester`.
+  The line is expected on a branch that changes one of the three files. It prints no file's content and no
+  value.
+- **The update path is the maintainer's.** A VM rebuild (`make vm-delete vm-create`) installs the template's
+  copy; `make vm-pi-tester`, a host target run from the host clone like `make vm-gh-wrapper`, installs the
+  host clone's three files into an existing VM (`dev/vm-pi-tester.sh`, over `limactl shell`'s standard
+  input; each file is replaced whole, the wrapper last, and it ends by naming the directory it installed
+  into and `vm-pi-tester: done`; the recipe runs it under `env -u SHIFT2EU_PI_TESTER_ROOT`, the tests' root
+  prefix, and requires both lines). Lima runs the provisioning on every boot, so provisioning installs the
+  three files as one set, guarded on the installed wrapper, which both installers write last and which so
+  marks a complete installation: with the wrapper there a boot installs nothing and keeps what
+  `make vm-pi-tester` installed last; without it, all three come from the template, the deny files first,
+  over any already there. A deny file missing behind an installed wrapper stays missing, and the wrapper then
+  refuses to start the tester visibly; reinstall with `make vm-pi-tester`. A VM rebuild installs the
+  template's copy. The maintainer
+  runs one of them after a merge that changes any of the three files; agents never do. Until then the tester
+  starts from the copy installed before, and its pane shows the one line.
+
+Alternatives considered for this amendment:
+
+- **Keep the files in the unit folder, reviewed like `.pi/`.** What the amendment above did; a branch that
+  changes them takes effect on the next tester pane of that unit, before any review.
+- **Copy the files from the workspace mount at provisioning.** The mount is the agents' to write, so the
+  installed copy would be whatever a branch left there; the template's here-documents are reviewed text the
+  VM keeps.
+
+Consequences of this amendment:
+
+- A branch's change to the wrapper or the refusal no longer changes what the tester starts with: it shows
+  up as the one line, and reaches the VM only when the maintainer, after review and merge, runs
+  `make vm-pi-tester` or rebuilds the VM.
+- pi still discovers the project's `.pi/extensions` (`--approve` trusts the project), so the unit folder's
+  copy of the extension, or any other extension a branch adds there, also loads, in the same node process
+  as the installed one. A project extension that blocks more is harmless, but one cannot be assumed unable
+  to undo the installed refusal: it runs arbitrary code in pi's process and could, for instance, tamper with
+  pi's event dispatch or the shared modules before the installed handler sees a call. This amendment does
+  not close that path; it stops a branch from silently changing the wrapper, its checks and the installed
+  refusal, which is what the review point asked. pi 1.6.1's `--no-extensions` turns off all extension
+  discovery (explicit `--extension` paths still load), which would close it but also stop the global
+  extensions under `~/.pi/agent`, the deck's own pi extension among them, from loading; that needs its own
+  check and is left for a later decision: issue #702 (start pi with `--no-extensions` and explicit
+  extension paths).
+- The tester `command` itself lives in the project's `.dot-agent-deck.toml`, so a branch could point it
+  elsewhere; that is the same same-uid residual, and the deck's trust approval (`dot-agent-deck trust
+  approve`) is what makes a changed command visible.
+- Like ADR 0031's gh wrapper, this is a guard against a branch silently changing the wrapper, not a security
+  boundary against a determined agent: the tester runs as the VM's one user, who has passwordless sudo, so
+  it can replace the installed files or start pi without the wrapper at will. The limits of the amendment
+  above (same uid, lexical patterns) stand.
+- The one line costs nothing when the copies agree, which they do after `make vm-pi-tester` on a VM whose
+  host clone is at the merged `main`.

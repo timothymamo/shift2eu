@@ -12,7 +12,9 @@
 // on the Advanced database plan alone. Since PRD #552 milestone 5 the snapshot
 // also serves the cache, MongoDB, load balancer and registry categories, prices
 // the first two by plan and records no price for the last two (decided question
-// 6). The storage an offering charges beyond what
+// 6). Since PRD #571 milestone 5 it serves the OpenSearch and Kafka search and
+// messaging categories as well, per node and per GiB of node storage. The storage
+// an offering charges beyond what
 // a plan includes is pinned against the embedded snapshot too (issue #219): a
 // compute.vm with a disk is estimated with its storage priced, and every offering
 // in scope carries a per-GiB storage price or says in SOURCES.md why it has none.
@@ -68,6 +70,20 @@ func wantRegions() []string {
 	return []string{"GRA", "LIM", "MIL", "PAR", "RBX", "SBG", "WAW"}
 }
 
+// oneAZRegions are the OVHcloud regions with a single availability zone: the
+// regions a 1-AZ offering of the snapshot is available in, in the order reports
+// list them.
+func oneAZRegions() []string {
+	return []string{"GRA", "LIM", "RBX", "SBG", "WAW"}
+}
+
+// genTwoRegions are the 1-AZ regions OVHcloud still prices the Gen 2 (DB1)
+// flavours in: GRA, LIM, SBG and WAW, with no Roubaix price, as for the Gen 2
+// flavours of the databases beside them.
+func genTwoRegions() []string {
+	return []string{"GRA", "LIM", "SBG", "WAW"}
+}
+
 // threeAZRegions are the OVHcloud regions where Paris and Milan sit: each holds
 // three availability zones, so a product deployed there can be highly available
 // across zones. PRD 11 lists the 3-AZ variants of such a product in these regions
@@ -84,8 +100,8 @@ var nonEURegions = []string{"ERI", "UK", "LON", "BHS", "TOR", "HIL", "VIN", "SGP
 
 // TestCatalogContract runs the target contract suite every target adapter must
 // pass: the display name, every offering only in a declared EU region, the six
-// categories PRD 11 requires and the four PRD #552 milestone 5 adds, the same
-// catalog on every call, and cancellation.
+// categories PRD 11 requires, the four PRD #552 milestone 5 adds and the two
+// PRD #571 milestone 5 adds, the same catalog on every call, and cancellation.
 func TestCatalogContract(t *testing.T) {
 	t.Parallel()
 
@@ -104,6 +120,8 @@ func TestCatalogContract(t *testing.T) {
 			taxonomy.DatabaseMongoDB,
 			taxonomy.NetworkLoadBalancer,
 			taxonomy.RegistryContainer,
+			taxonomy.SearchOpenSearch,
+			taxonomy.MessagingKafka,
 		},
 	})
 }
@@ -135,7 +153,7 @@ func TestCatalogSnapshotHeader(t *testing.T) {
 		t.Errorf("Snapshot().SourceURL = %s, want %s", text.Quote(snapshot.SourceURL), text.Quote(wantSourceURL))
 	}
 
-	wantRetrievedOn := time.Date(2026, time.November, 25, 0, 0, 0, 0, time.UTC)
+	wantRetrievedOn := time.Date(2026, time.November, 27, 0, 0, 0, 0, time.UTC)
 	if !snapshot.RetrievedOn.Equal(wantRetrievedOn) {
 		t.Errorf("Snapshot().RetrievedOn = %s, want %s",
 			snapshot.RetrievedOn.Format(time.RFC3339), wantRetrievedOn.Format(time.RFC3339))
@@ -177,16 +195,21 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 		taxonomy.DatabaseMySQL,
 		taxonomy.CacheRedis,
 		taxonomy.DatabaseMongoDB,
+		taxonomy.SearchOpenSearch,
+		taxonomy.MessagingKafka,
 	}
 
 	// storageCategories are the categories PRD #190 prices per GiB of storage
-	// kept: block volumes, objects, and the storage a managed database uses.
+	// kept: block volumes, objects, and the storage a managed database or an
+	// analytics service uses.
 	storageCategories := []taxonomy.Category{
 		taxonomy.StorageBlock,
 		taxonomy.StorageObject,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
 		taxonomy.DatabaseMongoDB,
+		taxonomy.SearchOpenSearch,
+		taxonomy.MessagingKafka,
 	}
 
 	// leftOut exempts an offering from the two coverage rules, never from the
@@ -1104,28 +1127,35 @@ func bestOf(c mapping.Candidate) bestFit {
 	return bestFit{Name: c.Offering.Name, Fit: c.Fit, Missing: c.Missing}
 }
 
-// TestNewCategoryBestOfferingAndFit pins PRD #552 milestone 5's mapping
-// criterion for the four categories the snapshot gains: a resource of each is
-// pointed at the offering that takes it over, with fit direct when the offering
-// lists every capability the resource lists and partial naming each capability it
-// lacks otherwise. Every row goes through mapping.Map on the embedded catalog, so
-// the offering's capabilities, the tiers the snapshot records and the mapping's
-// ordering (direct before partial, then by offering name) are pinned together.
+// TestCategoryBestOfferingAndFit pins the mapping criterion of PRD #552
+// milestone 5 and PRD #571 milestone 5 for the categories those milestones add:
+// a resource of each is pointed at the offering that takes it over, with fit
+// direct when the offering lists every capability the resource lists and partial
+// naming each capability it lacks otherwise. Every row goes through mapping.Map on
+// the embedded catalog, so the offering's capabilities, the tiers the snapshot
+// records and the mapping's ordering (direct before partial, then by offering
+// name) are pinned together.
 //
 // The capabilities are the ones a tier variant exists for: OVHcloud adds node
-// level high availability on the Valkey and MongoDB multi-node plans and zone
-// level in the 3-AZ regions, serves point-in-time restore on the Advanced MongoDB
-// plan alone, forwards UDP on its load balancer, and records neither sharding on
-// a cache ("Cluster mode (sharding) is not supported") nor IPv6 on a load
-// balancer. A private registry has no tier: PRD #552 milestone 5 records one
-// offering, because no quoted page says it keeps serving through the loss of a
-// zone, so a zone-level request is partial there.
+// level high availability on the Valkey, MongoDB, OpenSearch and Kafka multi-node
+// plans and zone level in the 3-AZ regions, serves point-in-time restore on the
+// Advanced MongoDB plan alone, forwards UDP on its load balancer, and records
+// neither sharding on a cache ("Cluster mode (sharding) is not supported") nor
+// IPv6 on a load balancer. A private registry has no tier: PRD #552 milestone 5
+// records one offering, because no quoted page says it keeps serving through the
+// loss of a zone, so a zone-level request is partial there. OpenSearch and Kafka
+// have no Advanced tier: PRD #571 milestone 5 records no capability it adds over
+// Production, so the plain offering is already direct for every capability the
+// vocabulary holds.
 //
 // The rows that list both node-high-availability and zone-high-availability
 // guard the naming convention: a 3-AZ offering records zone level alone, because
 // ADR 0011 makes zone level imply node level, and a resource that lists both is
-// still direct there.
-func TestNewCategoryBestOfferingAndFit(t *testing.T) {
+// still direct there. A capability both a 1-AZ and a 3-AZ offering list, such as
+// Kafka's node level, which every Kafka plan provides, is answered by the 1-AZ
+// one: the mapping orders the two direct candidates by name, and "Analytics for
+// Kafka" comes before "Analytics for Kafka 3-AZ".
+func TestCategoryBestOfferingAndFit(t *testing.T) {
 	t.Parallel()
 
 	cat := catalogOf(t)
@@ -1245,6 +1275,50 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 				Fit:     mapping.Partial,
 				Missing: []taxonomy.Capability{taxonomy.IPv6},
 			},
+		},
+		{
+			name:     "search.opensearch/no capabilities",
+			category: taxonomy.SearchOpenSearch,
+			want:     bestFit{Name: "Analytics for OpenSearch", Fit: mapping.Direct},
+		},
+		{
+			name:         "search.opensearch/node-high-availability",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			want:         bestFit{Name: "Analytics for OpenSearch Multi-node", Fit: mapping.Direct},
+		},
+		{
+			name:         "search.opensearch/zone-high-availability",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Analytics for OpenSearch Multi-node 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:     "messaging.kafka/no capabilities",
+			category: taxonomy.MessagingKafka,
+			want:     bestFit{Name: "Analytics for Kafka", Fit: mapping.Direct},
+		},
+		{
+			name:         "messaging.kafka/node-high-availability",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			want:         bestFit{Name: "Analytics for Kafka", Fit: mapping.Direct},
+		},
+		{
+			name:         "messaging.kafka/snapshots",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.Snapshots},
+			want: bestFit{
+				Name:    "Analytics for Kafka",
+				Fit:     mapping.Partial,
+				Missing: []taxonomy.Capability{taxonomy.Snapshots},
+			},
+		},
+		{
+			name:         "messaging.kafka/zone-high-availability",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Analytics for Kafka 3-AZ", Fit: mapping.Direct},
 		},
 		{
 			name:     "registry.container/no capabilities",
@@ -1460,6 +1534,437 @@ func TestNewCategoryPlansAndPrices(t *testing.T) {
 
 					if got != tc.want {
 						t.Errorf("offering %s storage price in region %s = %s, want %s: the page's price per GiB per hour x the tier's 3 nodes x 730",
+							text.Quote(o.Name), text.Quote(region), got, tc.want)
+					}
+				}
+			})
+		}
+	})
+}
+
+// TestOpenSearchAndKafkaOfferings pins PRD #571 milestone 5's offerings on the
+// embedded snapshot: the five OVHcloud sells for the two categories the snapshot
+// gains (PRD #571 milestone 5, decision D5), each with the category it serves, the regions it is
+// available in and the capabilities the Analytics pages state. The base offering
+// is the single-node Discovery plan beside its Gen 2 Essential flavours; the
+// multi-node one is Production beside the Gen 2 Business flavours, which survives
+// the loss of a node; the 3-AZ one is Production alone, which survives the loss of
+// a zone in Paris and Milan. snapshots is the hourly backup every OpenSearch plan
+// takes, and Kafka takes none ("We don't backup Kafka data"), so the messaging
+// offerings list it nowhere.
+//
+// The Advanced tiers get no offering of their own (PRD #571 milestone 5, decision
+// D1): they add
+// no capability the vocabulary holds, only two more nodes, a longer backup
+// retention and a higher SLA, so the tier-variant rule (ADR 0011) never prefers
+// them over the Production plan they share every per-node flavour with. The
+// second table pins that: exactly these five offerings serve the two categories.
+func TestOpenSearchAndKafkaOfferings(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	tests := []struct {
+		name         string
+		offering     string
+		category     taxonomy.Category
+		regions      []string
+		capabilities []taxonomy.Capability
+	}{
+		{
+			name:         "search.opensearch/single node",
+			offering:     "Analytics for OpenSearch",
+			category:     taxonomy.SearchOpenSearch,
+			regions:      oneAZRegions(),
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest, taxonomy.Snapshots},
+		},
+		{
+			name:     "search.opensearch/multi-node",
+			offering: "Analytics for OpenSearch Multi-node",
+			category: taxonomy.SearchOpenSearch,
+			regions:  oneAZRegions(),
+			capabilities: []taxonomy.Capability{
+				taxonomy.EncryptionAtRest,
+				taxonomy.NodeHighAvailability,
+				taxonomy.Snapshots,
+			},
+		},
+		{
+			name:     "search.opensearch/multi-node 3-AZ",
+			offering: "Analytics for OpenSearch Multi-node 3-AZ",
+			category: taxonomy.SearchOpenSearch,
+			regions:  threeAZRegions(),
+			capabilities: []taxonomy.Capability{
+				taxonomy.EncryptionAtRest,
+				taxonomy.NodeHighAvailability,
+				taxonomy.Snapshots,
+				taxonomy.ZoneHighAvailability,
+			},
+		},
+		{
+			name:     "messaging.kafka/multi-node",
+			offering: "Analytics for Kafka",
+			category: taxonomy.MessagingKafka,
+			regions:  oneAZRegions(),
+			capabilities: []taxonomy.Capability{
+				taxonomy.EncryptionAtRest,
+				taxonomy.NodeHighAvailability,
+			},
+		},
+		{
+			name:     "messaging.kafka/3-AZ",
+			offering: "Analytics for Kafka 3-AZ",
+			category: taxonomy.MessagingKafka,
+			regions:  threeAZRegions(),
+			capabilities: []taxonomy.Capability{
+				taxonomy.EncryptionAtRest,
+				taxonomy.NodeHighAvailability,
+				taxonomy.ZoneHighAvailability,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			o := offeringNamed(t, cat, tc.offering)
+
+			if diff := cmp.Diff([]taxonomy.Category{tc.category}, o.Categories); diff != "" {
+				t.Errorf("offering %s categories mismatch (-want +got):\n%s", text.Quote(o.Name), diff)
+			}
+
+			if diff := cmp.Diff(tc.capabilities, o.Capabilities); diff != "" {
+				t.Errorf("offering %s capabilities mismatch (-want +got):\n%s", text.Quote(o.Name), diff)
+			}
+
+			if diff := cmp.Diff(tc.regions, o.Regions); diff != "" {
+				t.Errorf("offering %s regions mismatch (-want +got):\n%s", text.Quote(o.Name), diff)
+			}
+		})
+	}
+
+	served := []struct {
+		category taxonomy.Category
+		want     []string
+	}{
+		{
+			category: taxonomy.SearchOpenSearch,
+			want: []string{
+				"Analytics for OpenSearch",
+				"Analytics for OpenSearch Multi-node",
+				"Analytics for OpenSearch Multi-node 3-AZ",
+			},
+		},
+		{
+			category: taxonomy.MessagingKafka,
+			want:     []string{"Analytics for Kafka", "Analytics for Kafka 3-AZ"},
+		},
+	}
+
+	for _, tc := range served {
+		t.Run("offerings serving "+string(tc.category), func(t *testing.T) {
+			t.Parallel()
+
+			var got []string
+
+			for _, o := range cat.Offerings() {
+				if slices.Contains(o.Categories, tc.category) {
+					got = append(got, o.Name)
+				}
+			}
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("offerings serving %s mismatch (-want +got):\n%s", text.Quote(string(tc.category)), diff)
+			}
+		})
+	}
+}
+
+// TestOpenSearchAndKafkaPlansAndPrices pins PRD #571 milestone 5's plans and
+// prices on the embedded snapshot. A plan's price is the prices page's per-node
+// hourly price x 730, stored per node and in ten-thousandths of a EUR (ADR 0024),
+// never the page's total for the tier's nodes: a Gen 3 (B3) flavour is priced at
+// one amount in all five 1-AZ regions and at a higher one in the 3-AZ regions, and
+// a Gen 2 (DB1) flavour in GRA, LIM, SBG and WAW only, with no Roubaix price. Every
+// plan is checked in each region of its offering, so a price that drifts into a
+// region the page does not quote it in fails here too.
+//
+// The included storage is per node (PRD #571 milestone 5, decision D2): the
+// "Usable storage" lower bound divided by the tier's nodes for a Gen 2 flavour,
+// which is derived; the page's own per-node figure for Kafka Gen 3, which the
+// Analytics pricing guide states ("180 GB x 30 days x 24 hours x 3 nodes"); and
+// the same lower bound for OpenSearch Gen 3's single-node Discovery plans, where
+// one node makes the range's lower bound that node's storage, as the product page
+// states ("Discovery ... 1 node included ... 40 GB storage", Discovery B3-4's
+// lower bound). OpenSearch Gen 3's 3-node Production plans read 0: the page quotes
+// the same range for the same flavour at 1, 3 and 6 nodes but never says it is per
+// node at three, where the lower bound could be the cluster's total, and decision
+// D2 records no inferred figure. Each plan's vCPUs and memory are the page's
+// columns for one node.
+//
+// The storage price is the page's hourly price per GiB per node x 730 and is never
+// multiplied by the tier's node count (PRD #571 milestone 5, decision D4): 0.292
+// EUR for the
+// Essential/Discovery tier and 0.365 for Business/Production and for Kafka, whose
+// two plans share one storage price.
+func TestOpenSearchAndKafkaPlansAndPrices(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	t.Run("plans", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name               string
+			offering           string
+			plan               string
+			wantVCPUs          int64
+			wantMemoryMilliGiB int64
+			wantIncludedGiB    int64
+			wantPricedRegions  []string
+			wantAmount         catalog.Amount
+		}{
+			{
+				name:               "opensearch/discovery-b3-4",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-4",
+				wantVCPUs:          1,
+				wantMemoryMilliGiB: 4_000,
+				wantIncludedGiB:    40,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(659_190),
+			},
+			{
+				name:               "opensearch/discovery-b3-8",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-8",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantIncludedGiB:    80,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(1_252_680),
+			},
+			{
+				name:               "opensearch/discovery-b3-16",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-16",
+				wantVCPUs:          4,
+				wantMemoryMilliGiB: 16_000,
+				wantIncludedGiB:    160,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(2_504_630),
+			},
+			{
+				name:               "opensearch/discovery-b3-32",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-32",
+				wantVCPUs:          8,
+				wantMemoryMilliGiB: 32_000,
+				wantIncludedGiB:    320,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(5_008_530),
+			},
+			{
+				name:               "opensearch/discovery-b3-64",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Discovery B3-64",
+				wantVCPUs:          16,
+				wantMemoryMilliGiB: 64_000,
+				wantIncludedGiB:    640,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(10_016_330),
+			},
+			{
+				name:               "opensearch/essential-db1-7",
+				offering:           "Analytics for OpenSearch",
+				plan:               "Essential DB1-7",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 7_000,
+				wantIncludedGiB:    80,
+				wantPricedRegions:  genTwoRegions(),
+				wantAmount:         catalog.Amount(1_198_660),
+			},
+			{
+				name:               "opensearch-multi-node/production-b3-8",
+				offering:           "Analytics for OpenSearch Multi-node",
+				plan:               "Production B3-8",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(1_314_730),
+			},
+			{
+				name:               "opensearch-multi-node/production-b3-32",
+				offering:           "Analytics for OpenSearch Multi-node",
+				plan:               "Production B3-32",
+				wantVCPUs:          8,
+				wantMemoryMilliGiB: 32_000,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(5_259_650),
+			},
+			{
+				name:               "opensearch-multi-node/business-db1-60",
+				offering:           "Analytics for OpenSearch Multi-node",
+				plan:               "Business DB1-60",
+				wantVCPUs:          16,
+				wantMemoryMilliGiB: 60_000,
+				wantIncludedGiB:    640,
+				wantPricedRegions:  genTwoRegions(),
+				wantAmount:         catalog.Amount(10_395_200),
+			},
+			{
+				name:               "opensearch-3az/production-b3-8",
+				offering:           "Analytics for OpenSearch Multi-node 3-AZ",
+				plan:               "Production B3-8",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantPricedRegions:  threeAZRegions(),
+				wantAmount:         catalog.Amount(1_392_110),
+			},
+			{
+				name:               "opensearch-3az/production-b3-64",
+				offering:           "Analytics for OpenSearch Multi-node 3-AZ",
+				plan:               "Production B3-64",
+				wantVCPUs:          16,
+				wantMemoryMilliGiB: 64_000,
+				wantPricedRegions:  threeAZRegions(),
+				wantAmount:         catalog.Amount(11_139_070),
+			},
+			{
+				name:               "kafka/production-b3-8",
+				offering:           "Analytics for Kafka",
+				plan:               "Production B3-8",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantIncludedGiB:    320,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(2_030_860),
+			},
+			{
+				name:               "kafka/production-b3-32",
+				offering:           "Analytics for Kafka",
+				plan:               "Production B3-32",
+				wantVCPUs:          8,
+				wantMemoryMilliGiB: 32_000,
+				wantIncludedGiB:    1_280,
+				wantPricedRegions:  oneAZRegions(),
+				wantAmount:         catalog.Amount(8_124_900),
+			},
+			{
+				name:               "kafka/business-db1-4",
+				offering:           "Analytics for Kafka",
+				plan:               "Business DB1-4",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 4_000,
+				wantIncludedGiB:    160,
+				wantPricedRegions:  genTwoRegions(),
+				wantAmount:         catalog.Amount(1_176_760),
+			},
+			{
+				name:               "kafka-3az/production-b3-8",
+				offering:           "Analytics for Kafka 3-AZ",
+				plan:               "Production B3-8",
+				wantVCPUs:          2,
+				wantMemoryMilliGiB: 8_000,
+				wantIncludedGiB:    320,
+				wantPricedRegions:  threeAZRegions(),
+				wantAmount:         catalog.Amount(2_133_060),
+			},
+			{
+				name:               "kafka-3az/production-b3-16",
+				offering:           "Analytics for Kafka 3-AZ",
+				plan:               "Production B3-16",
+				wantVCPUs:          4,
+				wantMemoryMilliGiB: 16_000,
+				wantIncludedGiB:    640,
+				wantPricedRegions:  threeAZRegions(),
+				wantAmount:         catalog.Amount(4_265_390),
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+				p := planNamed(t, o, tc.plan)
+
+				if p.VCPUs != tc.wantVCPUs {
+					t.Errorf("offering %s plan %s vCPUs = %d, want %d: the prices page's vCore column, per node",
+						text.Quote(o.Name), text.Quote(p.Name), p.VCPUs, tc.wantVCPUs)
+				}
+
+				if p.MemoryMilliGiB != tc.wantMemoryMilliGiB {
+					t.Errorf("offering %s plan %s memory = %d thousandths of a GiB, want %d: the prices page's memory column, per node",
+						text.Quote(o.Name), text.Quote(p.Name), p.MemoryMilliGiB, tc.wantMemoryMilliGiB)
+				}
+
+				if p.IncludedStorageGiB != tc.wantIncludedGiB {
+					t.Errorf("offering %s plan %s included storage = %d GiB, want %d, per node: the page's per-node figure for Kafka Gen 3, the \"Usable storage\" lower bound divided by the tier's nodes for Gen 2, that lower bound itself for a single-node OpenSearch Gen 3 plan, and 0 where only an inference covers it",
+						text.Quote(o.Name), text.Quote(p.Name), p.IncludedStorageGiB, tc.wantIncludedGiB)
+				}
+
+				for _, region := range o.Regions {
+					got, ok := o.PlanPrice(tc.plan, region)
+
+					if !slices.Contains(tc.wantPricedRegions, region) {
+						if ok {
+							t.Errorf("offering %s plan %s is priced in region %s at %s, want no price there: the page prices it in %v only",
+								text.Quote(o.Name), text.Quote(tc.plan), text.Quote(region), got, tc.wantPricedRegions)
+						}
+
+						continue
+					}
+
+					if !ok {
+						t.Errorf("offering %s lists no price for plan %s in region %s, want %s a month",
+							text.Quote(o.Name), text.Quote(tc.plan), text.Quote(region), tc.wantAmount)
+
+						continue
+					}
+
+					if got != tc.wantAmount {
+						t.Errorf("offering %s plan %s price in region %s = %s, want %s: the page's price per node per hour x 730, never the page's total for the tier's nodes",
+							text.Quote(o.Name), text.Quote(tc.plan), text.Quote(region), got, tc.wantAmount)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("storage prices", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			offering string
+			want     catalog.Amount
+		}{
+			{offering: "Analytics for OpenSearch", want: catalog.Amount(2_920)},
+			{offering: "Analytics for OpenSearch Multi-node", want: catalog.Amount(3_650)},
+			{offering: "Analytics for OpenSearch Multi-node 3-AZ", want: catalog.Amount(3_650)},
+			{offering: "Analytics for Kafka", want: catalog.Amount(3_650)},
+			{offering: "Analytics for Kafka 3-AZ", want: catalog.Amount(3_650)},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				for _, region := range o.Regions {
+					got, ok := o.StoragePrice(region)
+					if !ok {
+						t.Errorf("offering %s lists no storage price in region %s, want %s a GiB a month",
+							text.Quote(o.Name), text.Quote(region), tc.want)
+
+						continue
+					}
+
+					if got != tc.want {
+						t.Errorf("offering %s storage price in region %s = %s, want %s: the page's price per GiB per node per hour x 730, never multiplied by the tier's node count (PRD #571 milestone 5, decision D4)",
 							text.Quote(o.Name), text.Quote(region), got, tc.want)
 					}
 				}

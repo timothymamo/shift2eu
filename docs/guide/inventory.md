@@ -213,7 +213,11 @@ holds no environment variables, startup scripts, admin user names or SSH keys, a
 values beyond the few the programs read, except inside an AKS cluster's node pools, which the Azure
 query keeps whole. It still holds full ARNs and resource IDs, which carry the account, project or
 subscription, and can hold IP addresses, tag keys, and an AKS node pool's labels, tags (keys and
-values), taints, subnet ID and node image version. Share only the reviewed inventory file, never the
+values), taints, subnet ID and node image version. It also holds the names of your Route 53 hosted
+zones, which are your domains, public and private, and their zone IDs, and the names of your Cloud
+DNS managed zones, public and private, which often spell your domains; of a zone's records, only a
+count of routed record sets per zone, never a record's name or value, and of its DNSSEC configuration
+only whether it is signed, never a key. Share only the reviewed inventory file, never the
 directory, and delete the directory once the inventory is built (see [Privacy](#privacy)).
 
 The loops below go on when one call fails, so read what they print on stderr. A failed call
@@ -233,7 +237,10 @@ taxonomy, nothing else; which target offers what is the catalog's business, deci
 The programs write short IDs (an instance ID, a bucket, database or queue name), never an ARN, a full
 GCP resource name or an Azure resource ID, which carry the account, project or subscription. Two
 resources with the same short name, such as a function and a queue both called `orders`, get their
-type and region appended (`orders (AWS::SQS::Queue, eu-central-1)`) so every ID stays unique.
+type and region appended (`orders (AWS::SQS::Queue, eu-central-1)`) so every ID stays unique. Two
+Route 53 hosted zones with the same name, such as a public and a private zone both called
+`shop.example.com.`, each get their zone ID appended instead (`shop.example.com. (Z0123456789ABCDEFGHIJ)`),
+while a zone whose name no other zone shares keeps its plain name.
 
 The commands are written for a POSIX shell (sh, dash, bash, zsh).
 
@@ -282,6 +289,8 @@ only the calls this page makes:
         "aoss:ListCollections",
         "aoss:BatchGetCollection",
         "kafka:ListClustersV2",
+        "route53:ListHostedZones",
+        "route53:GetDNSSEC",
         "config:SelectResourceConfig"
       ],
       "Resource": "*"
@@ -294,6 +303,17 @@ The search and Kafka actions read only how a domain, collection or cluster is se
 grants no data-plane action (no `es:ESHttp*`, `aoss:APIAccessAll` or `kafka-cluster:*`, which would
 read or write the documents and topics) and no connection or credentials call (no
 `kafka:GetBootstrapBrokers` or `kafka:ListScramSecrets`).
+
+`route53:ListHostedZones` lists your hosted zones, public and private, by ID and name, and
+`route53:GetDNSSEC` reads whether a public zone is signed. The policy leaves out one more Route 53
+action on purpose: `route53:ListResourceRecordSets` is optional, needed only for the `dns-routing`
+capability, which the record-set loop below counts. Add it to the policy only if you want that
+capability. It lets its holder read every record of every zone (every name and every value): the
+loop's `--query` keeps a count per zone, but it filters on your machine, after the records were read.
+To run without it, leave the action out of the policy and skip the record-set loop under
+[Collect from AWS](#collect-from-aws); no zone then gets `dns-routing`, so check by hand which zones use
+weighted, latency, failover, geolocation, geoproximity, IP-based, multivalue answer, health-checked
+or traffic-policy records, and add `dns-routing` to them.
 
 `ViewOnlyAccess` is narrower than `ReadOnlyAccess`: it lists and describes resources and grants no
 reads of your data. It may lack some of the actions above, though, so check it against this list with
@@ -476,6 +496,28 @@ aws sns list-topics --output json | jq -r '.Topics[]?.TopicArn' | while read -r 
     TopicArn: Attributes.TopicArn, KmsMasterKeyId: Attributes.KmsMasterKeyId}}'
 done > "$out/sns-topics.json"
 
+# Route 53 hosted zones: each zone's ID, name and whether it is private.
+aws route53 list-hosted-zones --output json \
+  --query 'HostedZones[].{Id: Id, Name: Name, PrivateZone: Config.PrivateZone}' \
+  > "$out/route53-hosted-zones.json"
+# Whether each public zone is signed with DNSSEC: its signed state alone, never its keys.
+# The zone's ID is passed without the /hostedzone/ prefix the list writes.
+jq -r '.[] | select(.PrivateZone == false) | .Id | ltrimstr("/hostedzone/")' \
+    "$out/route53-hosted-zones.json" |
+  while IFS= read -r id; do
+    aws route53 get-dnssec --hosted-zone-id "$id" --output json --query 'Status.ServeSignature' |
+      jq --arg hz "$id" '{Id: ("/hostedzone/" + $hz), ServeSignature: .}'
+  done | jq -s . > "$out/route53-dnssec.json"
+# Optional, for dns-routing only (needs route53:ListResourceRecordSets, see "AWS permissions"):
+# how many record sets of each public zone route by client or by health, a count and no record.
+jq -r '.[] | select(.PrivateZone == false) | .Id | ltrimstr("/hostedzone/")' \
+    "$out/route53-hosted-zones.json" |
+  while IFS= read -r id; do
+    aws route53 list-resource-record-sets --hosted-zone-id "$id" --output json \
+      --query 'length(ResourceRecordSets[?SetIdentifier || HealthCheckId || MultiValueAnswer || TrafficPolicyInstanceId])' |
+      jq --arg hz "$id" '{Id: ("/hostedzone/" + $hz), RoutedRecordSets: .}'
+  done | jq -s . > "$out/route53-routed-record-sets.json"
+
 # Optional: everything else, from AWS Config (see "Everything else on AWS").
 aws configservice select-resource-config \
   --expression "SELECT resourceId, resourceName, resourceType, awsRegion" \
@@ -506,6 +548,20 @@ answers with an error on stderr and an empty file, which the program reads as no
 
 `sns get-topic-attributes` keeps only the topic's ARN and its KMS key: the attributes it leaves out
 include the owner's account ID and the topic's access policy.
+
+Route 53 is global too: `list-hosted-zones` returns every hosted zone of the account from any region,
+so each region's directory holds the same three `route53-*.json` files, and the program lists each zone
+once. `get-dnssec` and `list-resource-record-sets` run only for public zones: Route 53 signs only
+public zones ("DNSSEC signing is supported only for public hosted zones"), and a private zone is not
+classified. Each call asks for one zone by its ID with the `/hostedzone/` prefix removed: AWS's
+reference describes the ID as "A unique string used to identify a hosted zone" of at most 32
+characters, and the API's request path, `/2013-04-01/hostedzone/{Id}/dnssec`, already holds the
+prefix. Each loop writes one JSON list with an entry per zone, `Id` as the list wrote it. A call that
+fails prints its error on stderr and leaves its zone out of the list, so that zone gets neither
+`dnssec` nor `dns-routing`. `get-dnssec` keeps only `Status.ServeSignature` (`SIGNING`, `NOT_SIGNING`,
+`DELETING`, `ACTION_NEEDED` or `INTERNAL_FAILURE`), never the key-signing keys, and
+`list-resource-record-sets` keeps only the number of routed record sets, never a record's name, values,
+set identifier, health check, traffic policy instance or routing settings.
 
 S3 is global: `list-buckets` returns every bucket from any region, and the program lists each bucket
 once. A bucket's region comes from the `BucketRegion` field, which recent versions of the AWS CLI
@@ -614,6 +670,10 @@ The `rawType` is the resource's AWS CloudFormation type.
 | `AWS::OpenSearchServerless::Collection` | `search.opensearch` | `opensearchserverless batch-get-collection` |
 | `AWS::MSK::Cluster` (provisioned) | `messaging.kafka` | `kafka list-clusters-v2` |
 | `AWS::MSK::ServerlessCluster` | `messaging.kafka` | `kafka list-clusters-v2` |
+| `AWS::Route53::HostedZone`, a public zone (`PrivateZone` false) | `network.dns`, with no region | `route53 list-hosted-zones` |
+| `AWS::Route53::HostedZone`, a private zone (`PrivateZone` true) | `unclassified` | `route53 list-hosted-zones` |
+| `AWS::Route53::HostedZone`, `AWS::Route53::DNSSEC` | none: AWS Config's rows of a zone and its DNSSEC configuration, which `list-hosted-zones` and `get-dnssec` read | `configservice select-resource-config` |
+| `AWS::Route53::HealthCheck`, `AWS::Route53Resolver::*`, `AWS::Route53Profiles::*` | `unclassified`: a record's health check, and DNS resolution inside your networks, which no target sells | `configservice select-resource-config` |
 | `AWS::OpenSearch::Domain`, `AWS::Elasticsearch::Domain` | none: AWS Config's types for a domain, which `describe-domains` lists | `configservice select-resource-config` |
 | `AWS::MSK::Cluster`, `AWS::MSK::ServerlessCluster` or `AWS::OpenSearchServerless::Collection` that the service call lists by the same name or ID in the same region | none: the call lists it | `configservice select-resource-config` |
 | `AWS::MSK::Configuration`, `::ClusterPolicy`, `::BatchScramSecret`, `::VpcConnection`, `AWS::OpenSearchServerless::AccessPolicy`, `::SecurityPolicy`, `::SecurityConfig`, `::LifecyclePolicy`, `::VpcEndpoint` | none: settings and parts of a cluster or collection, which stands for them | `configservice select-resource-config` |
@@ -751,6 +811,16 @@ another region gets none of their capabilities.
 | `messaging.kafka` (provisioned) | `zone-high-availability` | two or more `ClientSubnets`: MSK spreads the brokers evenly over the subnets' zones, one subnet per zone |
 | `messaging.kafka` (provisioned or serverless) | `encryption-at-rest` | always: MSK always encrypts data at rest |
 | `messaging.kafka` (serverless) | `node-high-availability`, `zone-high-availability` | always: MSK manages a serverless cluster's partitions itself, and asks for at least two subnets per VPC "to help client applications switch over to another Availability Zone in the event of an outage" |
+| `network.dns` (public hosted zone) | `dnssec` | `get-dnssec`'s `ServeSignature` is `SIGNING` |
+| `network.dns` (public hosted zone) | `dns-routing` | it holds a routed record set: one with a `SetIdentifier` (weighted, latency, failover, geolocation, geoproximity, IP-based or multivalue answer routing, all of which need one), a `HealthCheckId`, `MultiValueAnswer`, or a `TrafficPolicyInstanceId` (a record a Route 53 traffic policy created, whose routing lives in the policy) (optional call: see [AWS permissions](#aws-permissions)) |
+
+A hosted zone's ID in the inventory is its name, with the trailing dot (`example.com.`). Its other
+`ServeSignature` states, `DELETING`, `ACTION_NEEDED` and `INTERNAL_FAILURE`, give no `dnssec`: check
+such a zone by hand. A zone whose answers come from a traffic policy is counted: the records the policy
+creates carry its `TrafficPolicyInstanceId`. One record the count does not catch: a simple alias with
+`EvaluateTargetHealth` true, which carries no set identifier and has no other record to answer with.
+An alias record to a resource of AWS (a load balancer, a CloudFront distribution) becomes a plain
+record or a CNAME on any target: that is a change the move makes, not a capability.
 
 A search domain's or a Kafka cluster's high availability holds only for data that is replicated, and
 no read-only call says how indexes or topics are: change it by hand when it is not.
@@ -787,8 +857,8 @@ reports it.
 ### Everything else on AWS
 
 The service calls above, with AWS Config's App Runner and ECR types, cover what the taxonomy
-classifies. Everything else (CloudFront distributions, Route 53 zones, DynamoDB tables, and also
-networking and IAM resources) should show up
+classifies. Everything else (CloudFront distributions, Route 53 private zones, health checks and
+Resolver, DynamoDB tables, and also networking and IAM resources) should show up
 as `unclassified`, so the report shows what has no place to go. Two AWS services list everything:
 
 - **AWS Config** (`configservice select-resource-config`, an SQL-like read-only query). Its
@@ -833,7 +903,28 @@ Prefer these roles on the project, each of which reads configuration only:
   download the artifacts in the repositories (`artifactregistry.repositories.downloadArtifacts`), which
   the listing does not need; no predefined Artifact Registry role lists repositories without it. If
   that is too much, grant a custom role with only `artifactregistry.repositories.list` and
-  `artifactregistry.repositories.get` instead.
+  `artifactregistry.repositories.get` instead;
+- `roles/dns.reader` (Cloud DNS managed zones: each zone's visibility and whether it is signed). It is
+  read-only, but it reads far more than the calls keep: beside `dns.resourceRecordSets.list`, see
+  below, it holds, among others, `dns.changes.list` and `dns.changes.get` (each zone's change history: every record
+  ever added or deleted, with its values), `dns.responsePolicies.list` and
+  `dns.responsePolicyRules.list` (the response policy rules, with their local records),
+  `dns.policies.list` (the server policies), `dns.dnsKeys.list` (the zones' DNSSEC keys) and
+  `dns.managedZones.get` (each zone's full configuration), and it also lists the projects its holder
+  can see (`resourcemanager.projects.list`) and reads networks (`compute.networks.get`) (the role's
+  full list: [Cloud DNS access control](https://cloud.google.com/dns/docs/access-control)); no predefined
+  Cloud DNS role lists zones without them.
+
+`dns.resourceRecordSets.list` is optional, needed only for the `dns-routing` capability, which the
+record-set loop under [Collect from GCP](#collect-from-gcp) counts. It lets its holder read
+every record of every zone (every name and every value): the loop's `--filter` and `--format` keep a
+count per zone, but the permission returns every record to whoever holds it. To run without it,
+grant a custom role with only `dns.managedZones.list` instead of `roles/dns.reader`, and skip the
+record-set loop; no zone then gets `dns-routing`, so check by hand which zones hold weighted round
+robin, geolocation or failover records, and add `dns-routing` to them. That role also reads no change
+history, response policy rule or server policy. It still returns each zone's whole configuration (its
+DNS name, name servers, attached networks and forwarding targets) to the caller, of which the
+`--format` keeps only the listed fields on disk.
 
 The simpler fallback is `roles/cloudasset.viewer` and the basic role `roles/viewer`, which covers
 every call too but is broad: it reads the configuration of every service in the project, far more
@@ -905,6 +996,23 @@ gcloud compute target-https-proxies list --project="$project" --quiet \
   --format='json(kind,selfLink,urlMap)' > "$out/compute-target-https-proxies.json"
 gcloud compute target-http-proxies list --project="$project" --quiet \
   --format='json(kind,selfLink,urlMap)' > "$out/compute-target-http-proxies.json"
+
+# Cloud DNS managed zones: each zone's number, name, visibility and whether it is
+# signed. The list writes no project, so jq adds it, for the join with the asset
+# listing, which names a zone by its number.
+gcloud dns managed-zones list --project="$project" --quiet \
+  --format='json(kind,id,name,visibility,dnssecConfig.state)' |
+  jq --arg p "$project" '[.[] | .project = $p]' > "$out/dns-managed-zones.json"
+# Optional, for dns-routing only (needs dns.resourceRecordSets.list, see "GCP permissions"):
+# how many record sets of each public zone route by a policy, a count and no record.
+jq -r '.[] | select(.visibility == "public") | "\(.id) \(.name)"' "$out/dns-managed-zones.json" |
+  while read -r id zone; do
+    if routed_types=$(gcloud dns record-sets list --project="$project" --zone="$zone" --quiet \
+        --filter='routingPolicy:*' --format='value(type)'); then
+      printf '%s' "$routed_types" | jq -R -s --arg p "$project" --arg i "$id" \
+        '{project: $p, id: $i, routedRecordSets: (split("\n") | map(select(. != "")) | length)}'
+    fi
+  done | jq -s . > "$out/dns-routed-record-sets.json"
 
 # Memorystore, per region: the regions come from the asset listing, and each
 # list runs only in a region that holds its asset type.
@@ -985,6 +1093,26 @@ of its route actions, and the error services of its custom error response polici
 actions' header values. Of a Managed Kafka cluster, only its name and its capacity
 (`capacityConfig`) are kept, never its bootstrap address, TLS settings or the networks allowed to
 reach it.
+
+`dns managed-zones list` lists the project's zones of the global Cloud DNS service, public and
+private, and its output names no project, so `jq` adds it to each entry: the program joins an entry to
+the zone's asset row on the project and the zone's number, its `id`, as the asset row names a zone by
+that number and never by its name (`//dns.googleapis.com/projects/PROJECT_ID/managedZones/ZONE_NUMBER`,
+Google's [resource name format](https://cloud.google.com/asset-inventory/docs/resource-name-format)).
+The `--format` keeps only the zone's number, its name, its `visibility` (`public` or `private`;
+forwarding and peering zones are private) and its `dnssecConfig.state` (`off`, `on` or `transfer`),
+never its DNS name, description or name servers. A zone in the asset listing that the list does not
+hold stays `unclassified`: check that `dns-managed-zones.json` holds every zone when the asset listing
+names some (`roles/dns.reader`). The record-set loop runs only for public zones, as a private zone is
+not classified, reads each zone's number and name from one line, separated by a space (a number is
+digits, and a zone's name only lowercase letters, digits and dashes, so neither holds one), and asks
+for one zone by its name with `--zone="$zone"`. `--filter='routingPolicy:*'` keeps the record sets
+that carry a routing policy (weighted round robin, geolocation or failover, with or without health
+checks), and `--format='value(type)'` writes one record type per such record set, which `jq` reduces
+to a count: the file holds an entry per public zone with its project, its number and
+`routedRecordSets`, never a record's name, values, TTL or routing policy. The record types stay in a
+shell variable and are never written to a file. A call that fails prints its error on stderr and leaves
+its zone out of the file, so that zone gets no `dns-routing`.
 
 The load balancer lists read only the HTTP and HTTPS target proxies, the frontends of an Application
 Load Balancer; a TCP, SSL or gRPC proxy is not listed, so a load balancer behind one gets no `ipv6`.
@@ -1078,12 +1206,23 @@ The `rawType` is the resource's Cloud Asset Inventory asset type.
 | `managedkafka.googleapis.com/Cluster` (Managed Service for Apache Kafka) | `messaging.kafka` |
 | `managedkafka.googleapis.com/ConnectCluster` (Kafka Connect) | `unclassified` |
 | `memcache.googleapis.com/Instance` (Memorystore for Memcached) | `unclassified` |
+| `dns.googleapis.com/ManagedZone`, a public zone (`visibility` `public`) | `network.dns`, with no region |
+| `dns.googleapis.com/ManagedZone`, a private zone (`visibility` `private`, forwarding and peering zones included), or not in `dns managed-zones list` | `unclassified` |
+| `dns.googleapis.com/Policy`, `dns.googleapis.com/ResponsePolicy` (Cloud DNS server and response policies) | `unclassified` |
 | any other asset type | `unclassified` |
 
 A Pub/Sub topic (where publishers write, and every subscription gets its own copy of each message) and
 a subscription (where consumers read) are both listed, as both have to move. Memcached speaks another
 protocol than Redis, so it stays `unclassified`. A Kafka Connect cluster is an integration runtime
 around a Kafka cluster, not a cluster to move, so it stays `unclassified` too.
+
+Cloud DNS public zones are classified; everything else of Cloud DNS still shows up as `unclassified`,
+so the report shows what has no place to go: private zones, which answer only inside the VPC networks
+they are attached to and move with the network design, and server and response policies, which
+resolve inside a network rather than host a zone. A zone's ID in the inventory is its managed zone's
+name (`shop-zone`), not its DNS name, when the asset row joins an entry of `dns-managed-zones.json`; a
+zone that joins none keeps the number the asset row names it by (`4567890123456789012`) and stays
+`unclassified`.
 
 A load balancer is one URL map (an Application Load Balancer), one backend service no URL map names (a
 passthrough Network Load Balancer, or a proxy Network Load Balancer) or one target pool. These come
@@ -1143,6 +1282,8 @@ which belong to their instance.
 | `storage.file` | `snapshots` | a Filestore snapshot of the instance is in the asset listing |
 | `messaging.kafka` | `encryption-at-rest` | always: Google Cloud encrypts all data at rest |
 | `messaging.kafka` | `node-high-availability`, `zone-high-availability` | always: Google runs every cluster's brokers in three zones of its region, with the replicas spread across them |
+| `network.dns` (public managed zone) | `dnssec` | `dnssecConfig.state` is `on` or `transfer` (Google's API reference says DNSSEC is enabled in both, `transfer` being "a \"transfer\" mode"; `off` is "the zone is not signed") |
+| `network.dns` (public managed zone) | `dns-routing` | it holds a record set with a `routingPolicy` (weighted round robin, geolocation or failover, any of them with health checks) (optional call: see [GCP permissions](#gcp-permissions)) |
 
 A Kafka cluster's high availability holds only for topics with a replication factor of 2 or more, which
 no read-only call gives: remove `node-high-availability` and `zone-high-availability` by hand when your
@@ -1599,6 +1740,14 @@ even trimmed to the fields the programs read, it holds full ARNs and resource ID
 project or subscription, and it can hold IP addresses, tag keys, labels and settings, and, if you
 drop a `--query` or `--format` projection, secrets such as function environment variables or startup
 scripts.
+
+DNS zones are named after your domains: a hosted zone's name is a domain you run, public or private,
+and it is both the zone's ID in the inventory and a value in the collected directory. A Cloud DNS
+managed zone's name is chosen by you and often spells the domain (`example-com`); it too is the zone's
+ID and a value in the collected directory. Rename it in the inventory if the domain should not leave
+your organisation. The record-set output is a count per zone
+only, and the DNSSEC output a zone's signed state only: neither file holds a record, a record's name or
+value, or a DNSSEC key.
 
 - Share only the reviewed inventory file, never the collected directory.
 - Delete the collected directory right after the build (`rm -r inventories/<source>`).

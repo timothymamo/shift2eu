@@ -10,7 +10,7 @@
         "name": "OVHcloud",
         "snapshot": {
           "source": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
-          "retrieved": "2026-11-25"
+          "retrieved": "2026-11-27"
         }
       },
       "summary": {
@@ -86,7 +86,7 @@
       "estimate": {
         "region": "GRA",
         "regionChosen": false,
-        "priceDate": "2026-11-25",
+        "priceDate": "2026-11-27",
         "currency": "EUR",
         "excluded": [
           "VAT",
@@ -111,7 +111,7 @@
         "name": "Scaleway",
         "snapshot": {
           "source": "https://www.scaleway.com/en/pricing/",
-          "retrieved": "2026-11-26"
+          "retrieved": "2026-11-27"
         }
       },
       "summary": {
@@ -187,7 +187,7 @@
       "estimate": {
         "region": "fr-par",
         "regionChosen": false,
-        "priceDate": "2026-11-26",
+        "priceDate": "2026-11-27",
         "currency": "EUR",
         "excluded": [
           "VAT",
@@ -212,7 +212,7 @@
         "name": "UpCloud",
         "snapshot": {
           "source": "https://upcloud.com/pricing/",
-          "retrieved": "2026-11-13"
+          "retrieved": "2026-11-27"
         }
       },
       "summary": {
@@ -289,7 +289,7 @@
       "estimate": {
         "region": "de-fra1",
         "regionChosen": false,
-        "priceDate": "2026-11-13",
+        "priceDate": "2026-11-27",
         "currency": "EUR",
         "excluded": [
           "VAT",

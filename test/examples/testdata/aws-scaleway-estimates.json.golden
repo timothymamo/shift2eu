@@ -7,14 +7,14 @@
     "name": "Scaleway",
     "snapshot": {
       "source": "https://www.scaleway.com/en/pricing/",
-      "retrieved": "2026-11-26"
+      "retrieved": "2026-11-27"
     }
   },
   "summary": {
     "direct": 6,
-    "partial": 9,
-    "none": 3,
-    "total": 18
+    "partial": 11,
+    "none": 2,
+    "total": 19
   },
   "resources": [
     {
@@ -281,6 +281,53 @@
       }
     },
     {
+      "id": "shop-log-search",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "region": "eu-central-1",
+      "fit": "partial",
+      "bestOffering": "Cloud Essentials for OpenSearch High Availability",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer encryption-at-rest",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "encryption-at-rest"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer snapshots",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "snapshots"
+        }
+      ],
+      "requiredChanges": [
+        "encryption-at-rest",
+        "snapshots"
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "SEARCHDB-SHARED-2C-8G",
+        "vcpus": 2,
+        "memoryGiB": "8",
+        "includedStorageGiB": 0,
+        "price": "72.27"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "246.60",
+        "countAssumed": false,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "216.81",
+          "storage": "29.79",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
       "id": "shop-order-events",
       "rawType": "AWS::SNS::Topic",
       "category": "messaging.topic",
@@ -373,23 +420,53 @@
       "rawType": "AWS::OpenSearchService::Domain",
       "category": "search.opensearch",
       "region": "eu-central-1",
-      "fit": "none",
-      "bestOffering": "",
+      "fit": "partial",
+      "bestOffering": "Cloud Essentials for OpenSearch High Availability",
       "ties": [],
       "reasons": [
         {
-          "code": "no-offering",
-          "text": "no offering in the Scaleway catalog for search.opensearch",
-          "target": "Scaleway",
-          "category": "search.opensearch"
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer encryption-at-rest",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "encryption-at-rest"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer snapshots",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "snapshots"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer zone-high-availability",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "zone-high-availability"
         }
       ],
-      "requiredChanges": [],
+      "requiredChanges": [
+        "encryption-at-rest",
+        "snapshots",
+        "zone-high-availability"
+      ],
       "relations": [],
       "affectedBy": [],
+      "plan": {
+        "name": "SEARCHDB-SHARED-4C-16G",
+        "vcpus": 4,
+        "memoryGiB": "16",
+        "includedStorageGiB": 0,
+        "price": "144.54"
+      },
       "estimate": {
-        "estimated": false,
-        "reason": "no-fit"
+        "estimated": true,
+        "amount": "463.41",
+        "countAssumed": false,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "433.62",
+          "storage": "29.79",
+          "fixedFee": "0.00"
+        }
       }
     },
     {
@@ -663,15 +740,6 @@
       }
     },
     {
-      "resourceId": "shop-product-search",
-      "reason": {
-        "code": "no-offering",
-        "text": "no offering in the Scaleway catalog for search.opensearch",
-        "target": "Scaleway",
-        "category": "search.opensearch"
-      }
-    },
-    {
       "resourceId": "shop.example.com",
       "reason": {
         "code": "not-classified",
@@ -713,23 +781,14 @@
     {
       "name": "shop",
       "noWorkload": false,
-      "resources": 14,
+      "resources": 15,
       "summary": {
         "direct": 4,
-        "partial": 8,
-        "none": 2,
-        "total": 14
+        "partial": 10,
+        "none": 1,
+        "total": 15
       },
       "blockers": [
-        {
-          "resourceId": "shop-product-search",
-          "reason": {
-            "code": "no-offering",
-            "text": "no offering in the Scaleway catalog for search.opensearch",
-            "target": "Scaleway",
-            "category": "search.opensearch"
-          }
-        },
         {
           "resourceId": "shop.example.com",
           "reason": {
@@ -739,14 +798,14 @@
         }
       ],
       "estimate": {
-        "amount": "1627.68",
-        "estimated": 8,
-        "resources": 14,
+        "amount": "2337.69",
+        "estimated": 10,
+        "resources": 15,
         "storageNotIncluded": 5
       },
       "sourceCost": {
         "covered": 4,
-        "resources": 14,
+        "resources": 15,
         "currencies": [
           {
             "currency": "USD",
@@ -782,7 +841,7 @@
   "estimate": {
     "region": "fr-par",
     "regionChosen": false,
-    "priceDate": "2026-11-26",
+    "priceDate": "2026-11-27",
     "currency": "EUR",
     "excluded": [
       "VAT",
@@ -790,15 +849,15 @@
     ],
     "hoursBasis": 730,
     "total": {
-      "amount": "1698.10",
-      "estimated": 10,
-      "resources": 18,
+      "amount": "2408.11",
+      "estimated": 12,
+      "resources": 19,
       "storageNotIncluded": 5
     }
   },
   "sourceCost": {
     "covered": 4,
-    "resources": 18,
+    "resources": 19,
     "currencies": [
       {
         "currency": "USD",

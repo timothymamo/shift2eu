@@ -7,7 +7,7 @@
     "name": "Scaleway",
     "snapshot": {
       "source": "https://www.scaleway.com/en/pricing/",
-      "retrieved": "2026-11-26"
+      "retrieved": "2026-11-27"
     }
   },
   "summary": {
@@ -211,7 +211,7 @@
   "estimate": {
     "region": "fr-par",
     "regionChosen": false,
-    "priceDate": "2026-11-26",
+    "priceDate": "2026-11-27",
     "currency": "EUR",
     "excluded": [
       "VAT",

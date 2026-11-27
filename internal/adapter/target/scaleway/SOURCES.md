@@ -5,13 +5,14 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 
 ## How it was compiled
 
-- **Retrieved on:** 2026-11-26, the date every plan and price was last read (PRD #552 milestone 6,
-  below; first read on 2026-11-13 for PRD #190 milestone 4, ADR 0024). The snapshot's `retrievedOn` and
-  `sourceURL` name the prices, the facts most likely to change. The regions and capabilities were
-  compiled and verified on 2026-11-10 and re-verified on 2026-11-11 for PRD #14 (below); the prices
-  changed no offering, capability or region. *Kubernetes Kapsule Dedicated*'s regions, and its plans'
-  price regions, were re-checked on 2026-11-19 for issue #211 (below), which added `it-mil`, and again on
-  2026-11-26. The availability page was last read in full on 2026-11-26.
+- **Retrieved on:** 2026-11-27, the date every plan and price was last read (PRD #571 milestone 7,
+  below; before it 2026-11-26 for PRD #552 milestone 6, and first read on 2026-11-13 for PRD #190
+  milestone 4, ADR 0024). The snapshot's `retrievedOn` and `sourceURL` name the prices, the facts most
+  likely to change. The regions and capabilities were compiled and verified on 2026-11-10 and
+  re-verified on 2026-11-11 for PRD #14 (below); the prices changed no offering, capability or region.
+  *Kubernetes Kapsule Dedicated*'s regions, and its plans' price regions, were re-checked on 2026-11-19
+  for issue #211 (below), which added `it-mil`, and again on 2026-11-26. The availability page was last
+  read in full on 2026-11-26.
 - **Compiled, then verified against the live pages.** The snapshot was first compiled from Scaleway's
   documentation source and Go SDK at the commits below, because `www.scaleway.com` then answered HTTP 403.
   On the same date every region and capability was checked against the live public pages cited below
@@ -126,6 +127,35 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   snapshot moved for PRD #552 milestone 5). The *Instances*, *Elastic Metal* and *Containers* pages
   themselves were not saved this time; their prices were read from the catalogue the two saved pages
   embed, not from those pages' visible tables.
+- **Four offerings added on 2026-11-27 for PRD #571 milestone 7.** *Cloud Essentials for OpenSearch*,
+  *Cloud Essentials for OpenSearch High Availability*, *Clusters for Apache Kafka* and *Clusters for
+  Apache Kafka Multi-AZ*, for the categories `search.opensearch` and `messaging.kafka`; each has its own
+  section below. Both products' general availability: the maintainer, 2026-11-27, issue #571 (decided
+  question 2 of PRD #571), both GA since June 2026. The sources read that day:
+  - pages the maintainer saved from a logged-out browser, read as data from a scratch directory outside
+    the repository and never committed: the saved copy of
+    <https://www.scaleway.com/en/pricing/managed-databases/> (saved 2026-11-26), the saved copy of
+    <https://www.scaleway.com/en/product-availability-by-region/> (saved 2026-11-26) and its Download CSV
+    (saved 2026-11-27), the saved copy of <https://www.scaleway.com/en/betas/> (2026-11-27), and the
+    saved copies of the OpenSearch and Kafka documentation pages each section cites (2026-11-27). The
+    price page's visible tables show Paris only; its embedded data (`__NEXT_DATA__`) holds every zone or
+    region and each node type's status, so the prices and regions were read from the data and checked
+    against the visible Paris tables, which agree in every row;
+  - `scaleway/docs-content`, branch `main` at commit `839dd366846140226cd50a0b9d10aea20959e514`
+    (committed 2026-11-27), read anonymously, for the OpenSearch create page, which no saved page holds,
+    and for every file under `pages/opensearch/` and `pages/clusters-for-kafka/` and the products'
+    changelog entries;
+  - `scaleway/scaleway-sdk-go`, branch `main` at commit `d5b724367ac9d6a0e9b39f91a9aabf0b55216360`
+    (2026-11-26, still its head on 2026-11-27), for the two products' regions (*API reference and SDK*).
+
+  **What was re-read.** The saved price page's embedded catalogue was read again for every existing
+  plan price: *Managed Database for PostgreSQL and MySQL* and its High Availability variant (12 node
+  types, each in fr-par, nl-ams and pl-waw, and the Block Storage 5K database storage), both Redis
+  offerings (7 node types in the first zone of each region), both MongoDB offerings (12 node types),
+  *Instances*, *Kubernetes Kapsule* and *Kubernetes Kapsule Dedicated* (18 worker plans), *Elastic Metal*
+  (8 servers), and the *Block Storage* 5K and *Object Storage* Standard Multi-AZ storage prices. **None
+  changed**, so no existing amount in `catalog.json` changed. Because the new prices were read and every
+  existing one re-read that day, **`retrievedOn` is 2026-11-27** (ADR 0007).
 - **Availability page:** <https://www.scaleway.com/en/product-availability-by-region/>, where every
   offering's regions come from, subject to the API check under *Rules applied*. It has one column per
   region (Paris, Amsterdam, Warsaw, Milan). For a zonal product it gives one mark per zone, and for a
@@ -198,6 +228,13 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   - `api/file/v1alpha1/file_sdk.go` (`bd5114c353`, 2026-11-03), File Storage, not in the snapshot
     (*Left out on purpose*): `Regions()` is fr-par.
   - `api/rdb/v1/rdb_sdk.go` at the same commit still declares fr-par, nl-ams and pl-waw only.
+
+  **Read on 2026-11-27 (PRD #571 milestone 7)** at the same commit
+  `d5b724367ac9d6a0e9b39f91a9aabf0b55216360`, still the head of `main` that day:
+  - `api/searchdb/v1alpha1/searchdb_sdk.go` (`98f831386b`, 2026-10-27), both OpenSearch offerings:
+    `Regions()` is fr-par.
+  - `api/kafka/v1alpha1/kafka_sdk.go` (`c3617e177d`, 2026-11-24), both Kafka offerings: `Regions()` is
+    fr-par, so no Milan, although the availability page marks the product available there.
 - **`sourceURL`** is Scaleway's pricing page, <https://www.scaleway.com/en/pricing/>, the index of the
   per-product price pages every plan and storage price comes from (*Prices*). Until the prices were added
   it was the documentation root, <https://www.scaleway.com/en/docs/>, where the capabilities still come
@@ -223,7 +260,10 @@ The Redis and MongoDB plans and the MongoDB storage price (PRD #552 milestone 6)
 2026-11-26 from the maintainer's saved copy of the *Managed Databases* page. The same day every
 existing price was re-read, unchanged, from the full price catalogue that page and the saved *Storage*
 page embed (*How it was compiled*), so the 2026-11-13 readings below still hold as amounts; the hourly
-× 730 rule below applies to the new prices unchanged.
+× 730 rule below applies to the new prices unchanged. The OpenSearch and Kafka node types and their
+storage price (PRD #571 milestone 7) were read on 2026-11-27 from the same saved page, and every existing
+price re-read from its catalogue that day, unchanged (*How it was compiled*). They are priced per node,
+and their storage per GiB and node (ADR 0047).
 
 - **How the pages were read.** `www.scaleway.com` has answered HTTP 403 to plain clients before (*How it
   was compiled*). On 2026-11-13 the pages answered HTTP 200 to a plain HTTPS client (curl, with no
@@ -314,7 +354,8 @@ page embed (*How it was compiled*), so the 2026-11-13 readings below still hold 
 - **Documentation and changelog** (`www.scaleway.com/en/docs/`): built from `scaleway/docs-content`, which
   is licensed CC BY-NC-SA 4.0 (Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International),
   as its `LICENSE.md` states at the commit above, and still states at commit
-  `13ef235ee5926d0a675e9b87cc421df5105762b1`, read for PRD #552 milestone 6 on 2026-11-26. GitHub's
+  `13ef235ee5926d0a675e9b87cc421df5105762b1`, read for PRD #552 milestone 6 on 2026-11-26, and at commit
+  `839dd366846140226cd50a0b9d10aea20959e514`, read for PRD #571 milestone 7 on 2026-11-27. GitHub's
   licence detection reports it only as "Other".
   The site's footer reads "© 2023-2026 – Scaleway".
 - **Availability page and API reference** (`www.scaleway.com/en/product-availability-by-region/`,
@@ -361,7 +402,10 @@ page embed (*How it was compiled*), so the 2026-11-13 readings below still hold 
   either. The variants are *Managed Database for PostgreSQL and MySQL High Availability* and
   *Kubernetes Kapsule Dedicated*. Since PRD #552 milestone 6 the same reading gives Standalone (Managed
   Database for Redis) and the 1-node replica set (Managed MongoDB) as base tiers, and the variants
-  *Managed Database for Redis Cluster* and *Managed MongoDB Replica Set*. A **Needs:** line names the tier its offering is named after, or the
+  *Managed Database for Redis Cluster* and *Managed MongoDB Replica Set*. Since PRD #571 milestone 7
+  it gives Standalone (Cloud Essentials for OpenSearch) and Single-AZ (Clusters for Apache Kafka) as
+  base tiers, and the variants *Cloud Essentials for OpenSearch High Availability* and *Clusters for
+  Apache Kafka Multi-AZ*. A **Needs:** line names the tier its offering is named after, or the
   base tier.
 - **Tier-variant regions:** a tier variant lists only the regions where a source states that tier, or
   where the tier's general availability predates the region's opening; the product's availability row
@@ -415,7 +459,8 @@ Poland).
 `fr-par` (Paris, France) is the snapshot's `defaultRegion`: the region a cost estimate uses when the user names
 none (PRD #190, ADR 0024). Chosen provisionally in milestone 2, it was **confirmed in milestone 4**, when the
 prices were added, because it hosts the most offerings: all 10 of the snapshot. Since PRD #552 milestone 6
-it hosts all 18. `nl-ams` hosts 16 (not the two MongoDB offerings), `pl-waw` 14 (no Queues, Topics and
+it hosts all 18, and since PRD #571 milestone 7 all 22 (the two OpenSearch and the two Kafka offerings are
+in Paris alone). `nl-ams` hosts 16 (not the two MongoDB offerings), `pl-waw` 14 (no Queues, Topics and
 Events or MongoDB) and `it-mil` 6 (Block Storage, Instances, Kubernetes Kapsule, Kubernetes Kapsule
 Dedicated, since issue #211, Object Storage and, since milestone 6, Serverless Containers).
 `fr-par` and `nl-ams` tie on prices for every offering both host: each plan and storage price they share
@@ -446,6 +491,216 @@ Category `storage.block`. Pages: <https://www.scaleway.com/en/docs/block-storage
   Block Storage 15K (€0.000177, × 730 = 0.12921, would be 0.1292); an offering has one storage price per
   region, and 5K, the lower-performance class, is the one recorded. The data's hourly figure for 5K is
   0.000129999, which × 730 = 0.09489927 also rounds half up to `0.0949`.
+
+### Cloud Essentials for OpenSearch
+
+Category `search.opensearch` (PRD #571 milestone 7, read 2026-11-27). Pages: the saved copies of
+<https://www.scaleway.com/en/docs/opensearch/>, <https://www.scaleway.com/en/docs/opensearch/quickstart/>,
+<https://www.scaleway.com/en/docs/opensearch/concepts/> and <https://www.scaleway.com/en/docs/opensearch/how-to/>,
+read 2026-11-27, and, because no saved page shows the deployment configurations,
+<https://www.scaleway.com/en/docs/opensearch/how-to/create-opensearch-deployment/>, read from its source
+`pages/opensearch/how-to/create-opensearch-deployment.mdx` in `scaleway/docs-content` at commit
+`839dd366846140226cd50a0b9d10aea20959e514` (committed 2026-11-27; the file last changed in `c4fc31c692`,
+2026-09-23, validated 2025-08-05). The same commit's `pages/opensearch/faq.mdx` and the changelog entries
+*Upgrade your OpenSearch deployment* (2026-07-01, scale up "without downtime") and *Expand your OpenSearch
+clusters on demand* (2026-07-22, node count and disk size) were read too.
+
+- **General availability:** the maintainer, 2026-11-27, issue #571 (decided question 2 of PRD #571):
+  the product reached general availability in June 2026. The saved pages agree: every node type on the
+  price page carries `status` `general_availability` in its embedded data, the availability page's
+  embedded row has `isBeta` false, and the saved copy of <https://www.scaleway.com/en/betas/> (read
+  2026-11-27) lists neither OpenSearch nor Kafka among its public and private betas.
+- **Tiers.** The create page offers two deployment configurations: "**High Availability**: ensures fault
+  tolerance in case of node failure, workload distribution across all nodes for improved performance,
+  service continuity during rolling updates." and "**Standalone**: General Purpose single-node deployment
+  for testing environments and non-critical, small-scale applications, without redundancy." No page names
+  a default (the quickstart picks Standalone for its walk-through), so the base offering is the lowest
+  tier, **Standalone**, which adds no capability; High Availability is the variant *Cloud Essentials for
+  OpenSearch High Availability*.
+- No capability. **Needs:** Standalone. No `encryption-at-rest` and no `snapshots`: no saved page and no
+  file under `pages/opensearch/` at the commit above mentions encryption at rest, backups or snapshots
+  (checked for "encrypt", "backup" and "snapshot"), so neither is listed (target rule). An OpenSearch
+  Service domain that lists either is `partial` on Scaleway. No `ipv6`: no page states it.
+- Regions `fr-par` only (both OpenSearch offerings): the availability page (saved copy of
+  <https://www.scaleway.com/en/product-availability-by-region/>, read 2026-11-26, embedded
+  `regionAvailability`: fr-par "available", it-mil, nl-ams and pl-waw "unavailable") and its Download CSV
+  (saved 2026-11-27: "Available across the region" in par1 to par3, "Not available across the region" in
+  every other zone) agree, SDK `api/searchdb/v1alpha1/searchdb_sdk.go` declares `Regions()` as fr-par alone
+  (*API reference and SDK*), and the price data prices `fr-par` alone.
+- **Prices** (saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, saved 2026-11-26 and
+  read 2026-11-27; the visible table "Managed OpenSearch" with Paris selected, and the embedded data
+  `catalogProducts.openSearch`, which holds every region the page offers and each node type's status;
+  the prices are read from the data, and the visible Paris table agrees with it in every row): five node
+  types, priced per region (`/storage/searchdb/<type>/fr-par`), so one price with an empty `regions` list.
+  The price is **per node**: the create page has the storage defined "for each node", "The total storage
+  size for your deployment depends on the number of nodes provisioned", and the table prices node types,
+  not deployments. The plan's price is the hourly price × 730; no price needed rounding. vCPU and memory as
+  the table gives them (memory binary in the data, recorded as GiB). The page sells the same node types
+  at the same price in both configurations, so both offerings record the same plans.
+
+| Plan | vCPU | Memory | EUR/hour | EUR/month (× 730) |
+|---|---|---|---|---|
+| `SEARCHDB-SHARED-2C-8G` | 2 | 8 GB | 0.099 | `72.27` |
+| `SEARCHDB-SHARED-4C-16G` | 4 | 16 GB | 0.198 | `144.54` |
+| `SEARCHDB-DEDICATED2-2C-8G` | 2 | 8 GB | 0.133 | `97.09` |
+| `SEARCHDB-DEDICATED2-4C-16G` | 4 | 16 GB | 0.265 | `193.45` |
+| `SEARCHDB-DEDICATED2-8C-32G` | 8 | 32 GB | 0.522 | `381.06` |
+
+- **Storage price:** the table's "Block Storage 5K: €0.000136/GB/hour." (data: volume type
+  `SEARCHDB-STORAGE-5K`, `/storage/searchdb/storage-sbs-5k/fr-par`, the only volume type of every node
+  type), × 730 = 0.09928, rounded half up to `0.0993` per GiB a month, the MongoDB offerings' value. The
+  storage is per node, so an estimate multiplies it by the node count (ADR 0047). No plan includes
+  storage. The data gives a volume of 5 GB to 10 TB (`minSize` 5000000000, `maxSize` 10000000000000).
+- **Estimate effect:** none from the tie. A search cluster without `node-high-availability` fits both
+  OpenSearch offerings `direct`, and both sell the same node types at the same price.
+
+### Cloud Essentials for OpenSearch High Availability
+
+Category `search.opensearch`. A variant of *Cloud Essentials for OpenSearch* (tier-variant rule): a
+deployment created with the **High Availability** configuration. Pages:
+<https://www.scaleway.com/en/docs/opensearch/how-to/create-opensearch-deployment/> (from its source, as
+for the base offering), the saved copy of <https://www.scaleway.com/en/pricing/managed-databases/>, and
+the base offering's other pages.
+
+- `node-high-availability`. **Needs:** High Availability. The create page: "**High Availability**:
+  ensures fault tolerance in case of node failure, workload distribution across all nodes for improved
+  performance, service continuity during rolling updates." **Scope: node level only**: no OpenSearch page
+  mentions availability zones, so `zone-high-availability` is not claimed.
+- No `encryption-at-rest`, no `snapshots`, no `ipv6`: as the base offering.
+- Regions `fr-par` only: the base offering's single region (tier-variant regions rule: the create page
+  offers the configuration in the product, whose only region is Paris).
+- **Prices** (the base offering's page, table and data): the page has no separate price for the
+  configuration, so the five node types at the base offering's per-node prices, hourly × 730. No page
+  states how many nodes a High Availability deployment has; an estimate takes the resource's count.
+
+| Plan | vCPU | Memory | EUR/hour | EUR/month (× 730) |
+|---|---|---|---|---|
+| `SEARCHDB-SHARED-2C-8G` | 2 | 8 GB | 0.099 | `72.27` |
+| `SEARCHDB-SHARED-4C-16G` | 4 | 16 GB | 0.198 | `144.54` |
+| `SEARCHDB-DEDICATED2-2C-8G` | 2 | 8 GB | 0.133 | `97.09` |
+| `SEARCHDB-DEDICATED2-4C-16G` | 4 | 16 GB | 0.265 | `193.45` |
+| `SEARCHDB-DEDICATED2-8C-32G` | 8 | 32 GB | 0.522 | `381.06` |
+
+- **Storage price:** `0.0993` per GiB a month and node, as for the base offering.
+
+### Clusters for Apache Kafka
+
+Category `messaging.kafka` (PRD #571 milestone 7, read 2026-11-27). Pages: the saved copies of
+<https://www.scaleway.com/en/docs/clusters-for-kafka/>,
+<https://www.scaleway.com/en/docs/clusters-for-kafka/quickstart/>,
+<https://www.scaleway.com/en/docs/clusters-for-kafka/concepts/>,
+<https://www.scaleway.com/en/docs/clusters-for-kafka/faq/> and
+<https://www.scaleway.com/en/docs/clusters-for-kafka/how-to/create-cluster/>, read 2026-11-27 (the
+four subpages "Reviewed on June 19, 2026"; the index page carries no review date), and the same files
+under `pages/clusters-for-kafka/` in `scaleway/docs-content` at commit
+`839dd366846140226cd50a0b9d10aea20959e514`, with the changelog entries *Multi-AZ clusters are now
+available* (2026-07-01) and *Support for resizing Kafka cluster storage* (2026-10-28).
+
+- **General availability:** the maintainer, 2026-11-27, issue #571 (decided question 2 of PRD #571):
+  the product reached general availability in June 2026. As for OpenSearch, every node type on the price
+  page is `general_availability` in its data, the availability row has `isBeta` false, and the betas page
+  does not list it.
+- **Tiers.** The create page offers two Availability Zone configurations: "**Multi-AZ**: Select this
+  configuration to create a highly available Apache Kafka® cluster. Data can be partitioned and
+  replicated across three nodes (brokers) for maximum fault tolerance and availability. Currently, the
+  multi-AZ offers replicate three nodes over two Availability Zones." and "**Single-AZ**: Select this
+  configuration to provision an Apache Kafka® cluster in a single AZ without compromising on
+  fault-tolerance and replication." No page names a default, and the price page prices Single-AZ in its
+  "Price (€/hour)" column and Multi-AZ in a "Multi-AZ option" column, so the base offering is
+  **Single-AZ**, and Multi-AZ is the variant *Clusters for Apache Kafka Multi-AZ*.
+- No capability. **Needs:** Single-AZ. A Single-AZ cluster may be a single node: "Allowed number of
+  nodes: 1 - 30, in multiples of 3 (except for a single‑node option)", "For testing and development: 1
+  node is sufficient", and only Multi-AZ excludes it ("A single‑node cluster is not compatible with a
+  multi‑AZ configuration."). So `node-high-availability` holds on some Single-AZ clusters only (three
+  nodes or more) and is not listed on this tier (tier-variant rule); see **Estimate effect**.
+- No `encryption-at-rest`: the concepts page's *TLS certificate* is a credential that "encrypts data in
+  transit", and no saved page or file under `pages/clusters-for-kafka/` mentions encryption at rest
+  (target rule). An MSK cluster, which always encrypts at rest, is `partial` on Scaleway.
+- No `snapshots`: no page mentions backups or snapshots; the quickstart says deleting a cluster loses
+  "all data stored on its nodes".
+- No `ipv6`: "all nodes in the cluster receive a private IPv4 endpoint" (concepts page), and
+  "Connectivity to the cluster is facilitated exclusively through Private Networks" (FAQ).
+- Regions `fr-par` only (both Kafka offerings): the availability page's embedded row marks Clusters for
+  Apache Kafka® "available" in fr-par and it-mil, and the CSV (2026-11-27) "Available across the region"
+  in par1 to par3 and mil1 to mil3, but SDK `api/kafka/v1alpha1/kafka_sdk.go` declares `Regions()` as
+  fr-par alone (*API reference and SDK*), so Milan is left out (regions rule), as for Load Balancer and
+  Container Registry (*Left out on purpose*).
+- **Prices** (the same saved price page, the visible table "Apache Kafka" with Paris selected, and the
+  embedded data `catalogProducts.apacheKafka`; read from the data, and the visible Paris table agrees with
+  it in every row): per node and region (`/data/kafka/<type>/fr-par`), as the create page defines storage
+  "for each node" and the table prices node types. The plan's price is the "Price (€/hour)" × 730; no price
+  needed rounding. Four node types are priced in Paris, every one `general_availability`; the two
+  dedicated generations, `BROKERNODE-DEDICATED-2C-8G` and `BROKERNODE-DEDICATED2-2C-8G`, are both in the
+  Paris table at the same price, so both are plans.
+
+| Plan | vCPU | Memory | EUR/hour | EUR/month (× 730) |
+|---|---|---|---|---|
+| `BROKERNODE-SHARED-2C-8G` | 2 | 8 GB | 0.152 | `110.96` |
+| `BROKERNODE-SHARED-4C-16G` | 4 | 16 GB | 0.303 | `221.19` |
+| `BROKERNODE-DEDICATED-2C-8G` | 2 | 8 GB | 0.19 | `138.70` |
+| `BROKERNODE-DEDICATED2-2C-8G` | 2 | 8 GB | 0.19 | `138.70` |
+
+- **Storage price:** the table's "Block Storage 5K: €0.000136/GB/hour.", × 730 = 0.09928, rounded half
+  up to `0.0993` per GiB a month, per node (ADR 0047: "Choose the storage capacity to define how much
+  Block Storage to provision for each node"). The data's volume type `brokernode-storage-5k` carries the
+  same €0.000136 for every node type, under the SKU `/data/kafka/storage-sbs-5k/it-mil` even on the
+  Paris node types; the visible Paris table states the price for Paris, and the amounts agree, so the
+  price is recorded for `fr-par`. Volumes of 10 GB to 10 TB (`minSize` 10000000000). No plan includes
+  storage.
+- **Estimate effect: an over-estimate for a replicated Single-AZ cluster.** A Kafka resource with
+  `node-high-availability` (three or more brokers that replicate data) maps `direct` to *Clusters for
+  Apache Kafka Multi-AZ* only and is priced at the Multi-AZ per-node price, about 10 % above a
+  three-node Single-AZ cluster, which the pages say is replicated and fault tolerant too: the create page
+  offers Single-AZ "without compromising on fault-tolerance and replication" and, for the node count,
+  says "For highly‑available clusters enabling data replication: use at least 3 nodes." (the saved
+  create page, and `pages/clusters-for-kafka/how-to/create-cluster.mdx` line 36 at `839dd366`). The
+  snapshot cannot price that cluster on this tier without listing the capability for a single node as
+  well, so the Single-AZ tier lists no capability and a node-HA Kafka resource prices on Multi-AZ; this
+  reading awaits the maintainer's accept-or-follow-up.
+
+### Clusters for Apache Kafka Multi-AZ
+
+Category `messaging.kafka`. A variant of *Clusters for Apache Kafka* (tier-variant rule): a cluster
+created with the **Multi-AZ** configuration. Pages: the saved copies of
+<https://www.scaleway.com/en/docs/clusters-for-kafka/how-to/create-cluster/>,
+<https://www.scaleway.com/en/docs/clusters-for-kafka/concepts/>,
+<https://www.scaleway.com/en/docs/clusters-for-kafka/faq/> and
+<https://www.scaleway.com/en/pricing/managed-databases/>, the changelog entry *Multi-AZ clusters are now
+available* (<https://www.scaleway.com/en/docs/changelog/>, 2026-07-01), and the base offering's other
+pages.
+
+- `node-high-availability`. **Needs:** Multi-AZ. The create page: Multi-AZ creates "a highly available
+  Apache Kafka® cluster" and "Currently, the multi-AZ offers replicate three nodes over two Availability
+  Zones", and a Multi-AZ cluster is never a single node ("A single‑node cluster is not compatible with a
+  multi‑AZ configuration."). The concepts page, *Data replication*: "If a node fails, data replication
+  means Apache Kafka® can keep serving data without downtime or data loss."
+  **Scope: node level only.** The changelog entry *Multi-AZ clusters are now available* (2026-07-01)
+  says "deploy the nodes (brokers) of your clusters across 2 Availability Zones with automatic failover
+  and zero event loss", and the FAQ "the nodes (brokers) of your Apache Kafka® cluster are spread across
+  two Availability Zones (AZs) within the same region". Neither says the cluster keeps serving through the
+  loss of a zone: "automatic failover" is not tied to a zone outage, three brokers over two zones put two
+  in one of them, and no page states the replication factor or where the cluster's controllers run, so
+  continuity through the loss of the zone that holds two brokers is not stated. So
+  `zone-high-availability` is not claimed (target rule, PRD #571 milestone 7), and an MSK cluster across
+  zones is `partial` here, missing `zone-high-availability`.
+- No `encryption-at-rest`, no `snapshots`, no `ipv6`: as the base offering.
+- Regions `fr-par` only: the base offering's single region; the price data prices the Multi-AZ column in
+  Paris (tier-variant regions rule).
+- **Prices** (the same page, table and data): the table's "Multi-AZ option" column, whose label in the
+  page's data is "Multi-AZ price (€/hour)" and whose SKUs are node types of their own
+  (`/data/kafka/<type>-maz/fr-par`), so it is read as the price of a Multi-AZ node, not an amount added to
+  the Single-AZ price. The plan's price is that hourly price × 730, per node; no price needed rounding.
+  The data gives no Multi-AZ price for the Milan-only third generation. The pages give three nodes as
+  today's Multi-AZ cluster; an estimate takes the resource's count.
+
+| Plan | vCPU | Memory | Multi-AZ EUR/hour | EUR/month (× 730) |
+|---|---|---|---|---|
+| `BROKERNODE-SHARED-2C-8G` | 2 | 8 GB | 0.167 | `121.91` |
+| `BROKERNODE-SHARED-4C-16G` | 4 | 16 GB | 0.333 | `243.09` |
+| `BROKERNODE-DEDICATED-2C-8G` | 2 | 8 GB | 0.209 | `152.57` |
+| `BROKERNODE-DEDICATED2-2C-8G` | 2 | 8 GB | 0.209 | `152.57` |
+
+- **Storage price:** `0.0993` per GiB a month and node, as for the base offering.
 
 ### Container Registry
 
@@ -1355,8 +1610,19 @@ Category `messaging.topic` (PRD #552 milestone 6, read 2026-11-26). Pages:
   "immediately spawned and deployed", with its IP rerouted automatically (FAQ). That is a rebuild after
   the failure, recovery rather than continuity, as for Object Storage below (milestone 6's decision 3).
   **Load Balancer `udp`:** not supported (FAQ).
-- **Milan for Load Balancer and Container Registry:** the availability page marks both available there,
-  but their SDKs do not declare `it-mil` (regions rule; each offering's section).
+- **Milan for Load Balancer, Container Registry and Clusters for Apache Kafka® (both tiers):** the
+  availability page marks each available there, but their SDKs do not declare `it-mil` (regions rule;
+  each offering's section).
+- **`encryption-at-rest` and `snapshots` on both OpenSearch and both Kafka offerings (PRD #571
+  milestone 7):** no saved page and no file of their documentation source mentions encryption at rest,
+  backups or snapshots (Kafka names TLS in transit only). Their sections say what was checked.
+- **`zone-high-availability` on *Clusters for Apache Kafka Multi-AZ*:** the brokers are spread over two
+  zones with "automatic failover and zero event loss" (changelog, 2026-07-01), but no page says the
+  cluster keeps serving through the loss of a zone (that offering's section). No OpenSearch page
+  mentions zones at all.
+- **`node-high-availability` on *Clusters for Apache Kafka* (Single-AZ):** it holds on a Single-AZ
+  cluster of three nodes or more, but the tier also sells a single node, so it is not listed (tier-variant
+  rule; that offering's **Estimate effect**).
 - **Serverless SQL Database, removed from the snapshot (PRD #14, target rule).** It is a
   PostgreSQL-compatible database with documented differences from standard PostgreSQL: the
   known-differences page
@@ -1445,3 +1711,15 @@ Prices and plans left out (PRD #552 milestone 6, read 2026-11-26):
   database without `node-high-availability` on Replica Set pricing (2 vCPU, 8 GiB, 100 GiB, count 1:
   €97.80 against €137.75). Decided question 10 of PRD #552 accepts the under-estimate until issue #558
   (*Managed Database for Redis Cluster* and *Managed MongoDB Replica Set*, **Estimate effect**).
+
+Prices and plans left out (PRD #571 milestone 7, read 2026-11-27):
+
+- **Kafka in Milan:** the price data prices the shared node types in `it-mil` too, at the Paris prices,
+  and sells `BROKERNODE-DEDICATED3-2C-8G`, `-4C-16G` and `-8C-32G` (€0.209, €0.418 and €0.836 an hour)
+  in `it-mil` alone, with no Multi-AZ price; the Paris table shows them "Not available in this region".
+  Milan is not a region of either Kafka offering (regions rule), so none of these is recorded.
+- **Kafka's three-node Single-AZ cluster priced on Multi-AZ** when it lists `node-high-availability`
+  (*Clusters for Apache Kafka*, **Estimate effect**): an over-estimate of about 10 %, though the create
+  page's node-count step, which applies to either configuration, says "For highly‑available clusters
+  enabling data replication: use at least 3 nodes." The reading awaits the maintainer's
+  accept-or-follow-up.

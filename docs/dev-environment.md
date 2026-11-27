@@ -1049,6 +1049,7 @@ Run these from the host clone (`cd ~/src/shift2eu-host`):
 | `make deck` | Opens the deck in the VM at `WORKSPACE_REPO`; it starts no refresh |
 | `make deck-restart` | Restarts the deck's daemon service in the VM |
 | `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
+| `make vm-pi-tester` | Installs the host clone's tester wrapper and env-printing refusal, root-owned, in `/usr/local/lib/shift2eu/pi-tester` of the VM, after a merge that changes `dev/pi-tester.sh` or `.pi/deny-env-printing.*`/`.pi/extensions/deny-env-printing.ts`, without recreating it (issue #692) |
 | `make gate-check` | Checks `Protect main` and CODEOWNERS, with your own `gh` login |
 | `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM, and sets that identity as the VM user's git identity (`user.name` and `user.email` in `~/.gitconfig`) |
 | `make agents-token-refresh` | Mints now and again before each token expires, in the foreground, until stopped |
@@ -2614,7 +2615,7 @@ grep -nwE 'schedule|cron' <a scratch file>
 the report, then milestone 3's schedule. On the first run, read the report's Coverage and Limits against
 ADR 0040's two "To be checked on the first run" lists (PRs 5b and 5c): every check but `scorecard-admin`
 should read "run" or "findings", and a read the checks job's token was refused (Limits, "read refused")
-that one of its four read scopes should allow is a finding to fix before the schedule. The checks job
+that one of its five read scopes should allow is a finding to fix before the schedule. The checks job
 names each check that did not run in the Limits, never as clean (ADR 0040, review rounds I, K and L of
 PR 5c): `release-integrity results-missing` (the release download brought no `checksums.txt`, so no file
 was checksummed or attested, and no part of the image's verification ran either: check the release's
@@ -3204,14 +3205,34 @@ then fails open; a TUI pane shows "env-printing refusal loaded" when it is in pl
 started from a dispatch worktree created after the change was merged load it.
 
 The deck does not start pi directly: the tester's `command` in `.dot-agent-deck.toml` is
-`dev/pi-tester.sh` with pi's arguments, relative to the pane's working directory (the unit's folder), and
-`agent = "pi"` tells the deck which agent runs behind it (issue #662). The script:
+`/usr/local/lib/shift2eu/pi-tester/pi-tester.sh` with pi's arguments, and `agent = "pi"` tells the deck
+which agent runs behind it (issue #662). That path is a root-owned copy of `dev/pi-tester.sh` that
+`dev/lima.yaml` installs at provisioning, beside root-owned copies of the refusal's two files
+(`extensions/deny-env-printing.ts` and `deny-env-printing.json` in the same directory), outside every path
+an agent can write (issue #692, ADR 0044's amendment of 2026-11-27). The wrapper reads only those installed
+files and hands pi `--extension` with the installed extension; a copy of any of the three in the unit's
+folder that is missing or differs is not used for the checks or for `--extension`, and the pane's stderr
+shows one line naming the project and installed paths and `make vm-pi-tester`; the line is expected on a
+branch that changes one of the three files. pi still loads the project's `.pi/extensions` beside the
+installed extension (a residual, issue #702). Lima runs provisioning on every boot, so it installs the three
+files as one set, guarded on the installed wrapper, which both installers write last and which so marks a
+complete installation: with the wrapper there a boot installs nothing and keeps what `make vm-pi-tester`
+installed last; without it, provisioning installs all three from the template, over any deny file already
+there. A deny file missing behind an installed wrapper stays missing, and the wrapper then refuses to start
+the tester visibly; reinstall with `make vm-pi-tester`. After merging a change to `dev/pi-tester.sh`,
+`.pi/extensions/deny-env-printing.ts` or `.pi/deny-env-printing.json`, run `make vm-pi-tester` from the host
+clone (or rebuild the VM) so the tester starts with it; until then it starts with the copy installed before.
+Like the gh wrapper, this guards against a branch silently changing what the tester starts with; it is no
+boundary against the VM user, who has sudo. The script:
 
 - refuses to start anything, exiting 1 with a message naming `PATH`, when `PATH` has an empty entry (a
   leading, doubled or trailing `:`) or an entry that is not absolute (`.`, `bin`), since either finds
   commands in the unit's folder; the VM's `PATH` has none;
-- refuses to start pi, exiting 1 with a message naming the file, unless `.pi/extensions/deny-env-printing.ts`
-  is a non-empty file and `.pi/deny-env-printing.json` is a JSON object with a non-empty `patterns` array
+- refuses to start, exiting 1, unless it was run by its absolute path, since it finds its installed files
+  beside itself;
+- refuses to start pi, exiting 1 with a message naming the installed file, unless the installed
+  `extensions/deny-env-printing.ts` is a non-empty file and the installed `deny-env-printing.json` is a
+  JSON object with a non-empty `patterns` array
   (checked with `jq`), and unless node, found on `PATH`, imports the extension with a function as its
   default export and compiles every pattern of the list with `new RegExp` (no node refuses too). A tester
   pane that stops with `pi-tester: ... the tester is not started` has a broken or missing refusal, or no

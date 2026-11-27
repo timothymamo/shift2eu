@@ -1,10 +1,36 @@
 target: Scaleway
 sourceURL: https://www.scaleway.com/en/pricing/
-retrievedOn: 2026-11-26
+retrievedOn: 2026-11-27
 defaultRegion: fr-par
 Block Storage | storage.block | snapshots | fr-par, it-mil, nl-ams, pl-waw
   plans: -
   storage price: 0.0949 EUR @ -
+Cloud Essentials for OpenSearch | search.opensearch | - | fr-par
+  plan: SEARCHDB-DEDICATED2-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 97.09 EUR @ -
+  plan: SEARCHDB-DEDICATED2-4C-16G | 4 vcpu | 16 GiB | 0 GiB storage | 193.45 EUR @ -
+  plan: SEARCHDB-DEDICATED2-8C-32G | 8 vcpu | 32 GiB | 0 GiB storage | 381.06 EUR @ -
+  plan: SEARCHDB-SHARED-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 72.27 EUR @ -
+  plan: SEARCHDB-SHARED-4C-16G | 4 vcpu | 16 GiB | 0 GiB storage | 144.54 EUR @ -
+  storage price: 0.0993 EUR @ -
+Cloud Essentials for OpenSearch High Availability | search.opensearch | node-high-availability | fr-par
+  plan: SEARCHDB-DEDICATED2-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 97.09 EUR @ -
+  plan: SEARCHDB-DEDICATED2-4C-16G | 4 vcpu | 16 GiB | 0 GiB storage | 193.45 EUR @ -
+  plan: SEARCHDB-DEDICATED2-8C-32G | 8 vcpu | 32 GiB | 0 GiB storage | 381.06 EUR @ -
+  plan: SEARCHDB-SHARED-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 72.27 EUR @ -
+  plan: SEARCHDB-SHARED-4C-16G | 4 vcpu | 16 GiB | 0 GiB storage | 144.54 EUR @ -
+  storage price: 0.0993 EUR @ -
+Clusters for Apache Kafka | messaging.kafka | - | fr-par
+  plan: BROKERNODE-DEDICATED-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 138.70 EUR @ -
+  plan: BROKERNODE-DEDICATED2-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 138.70 EUR @ -
+  plan: BROKERNODE-SHARED-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 110.96 EUR @ -
+  plan: BROKERNODE-SHARED-4C-16G | 4 vcpu | 16 GiB | 0 GiB storage | 221.19 EUR @ -
+  storage price: 0.0993 EUR @ -
+Clusters for Apache Kafka Multi-AZ | messaging.kafka | node-high-availability | fr-par
+  plan: BROKERNODE-DEDICATED-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 152.57 EUR @ -
+  plan: BROKERNODE-DEDICATED2-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 152.57 EUR @ -
+  plan: BROKERNODE-SHARED-2C-8G | 2 vcpu | 8 GiB | 0 GiB storage | 121.91 EUR @ -
+  plan: BROKERNODE-SHARED-4C-16G | 4 vcpu | 16 GiB | 0 GiB storage | 243.09 EUR @ -
+  storage price: 0.0993 EUR @ -
 Container Registry | registry.container | - | fr-par, nl-ams, pl-waw
   plans: -
   storage prices: -

@@ -7,14 +7,14 @@
     "name": "Scaleway",
     "snapshot": {
       "source": "https://www.scaleway.com/en/pricing/",
-      "retrieved": "2026-11-26"
+      "retrieved": "2026-11-27"
     }
   },
   "summary": {
     "direct": 6,
-    "partial": 9,
-    "none": 3,
-    "total": 18
+    "partial": 11,
+    "none": 2,
+    "total": 19
   },
   "resources": [
     {
@@ -188,6 +188,35 @@
       "affectedBy": []
     },
     {
+      "id": "shop-log-search",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "region": "eu-central-1",
+      "fit": "partial",
+      "bestOffering": "Cloud Essentials for OpenSearch High Availability",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer encryption-at-rest",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "encryption-at-rest"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer snapshots",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "snapshots"
+        }
+      ],
+      "requiredChanges": [
+        "encryption-at-rest",
+        "snapshots"
+      ],
+      "relations": [],
+      "affectedBy": []
+    },
+    {
       "id": "shop-order-events",
       "rawType": "AWS::SNS::Topic",
       "category": "messaging.topic",
@@ -268,18 +297,34 @@
       "rawType": "AWS::OpenSearchService::Domain",
       "category": "search.opensearch",
       "region": "eu-central-1",
-      "fit": "none",
-      "bestOffering": "",
+      "fit": "partial",
+      "bestOffering": "Cloud Essentials for OpenSearch High Availability",
       "ties": [],
       "reasons": [
         {
-          "code": "no-offering",
-          "text": "no offering in the Scaleway catalog for search.opensearch",
-          "target": "Scaleway",
-          "category": "search.opensearch"
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer encryption-at-rest",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "encryption-at-rest"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer snapshots",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "snapshots"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Cloud Essentials for OpenSearch High Availability does not offer zone-high-availability",
+          "offering": "Cloud Essentials for OpenSearch High Availability",
+          "capability": "zone-high-availability"
         }
       ],
-      "requiredChanges": [],
+      "requiredChanges": [
+        "encryption-at-rest",
+        "snapshots",
+        "zone-high-availability"
+      ],
       "relations": [],
       "affectedBy": []
     },
@@ -460,15 +505,6 @@
       }
     },
     {
-      "resourceId": "shop-product-search",
-      "reason": {
-        "code": "no-offering",
-        "text": "no offering in the Scaleway catalog for search.opensearch",
-        "target": "Scaleway",
-        "category": "search.opensearch"
-      }
-    },
-    {
       "resourceId": "shop.example.com",
       "reason": {
         "code": "not-classified",
@@ -500,23 +536,14 @@
     {
       "name": "shop",
       "noWorkload": false,
-      "resources": 14,
+      "resources": 15,
       "summary": {
         "direct": 4,
-        "partial": 8,
-        "none": 2,
-        "total": 14
+        "partial": 10,
+        "none": 1,
+        "total": 15
       },
       "blockers": [
-        {
-          "resourceId": "shop-product-search",
-          "reason": {
-            "code": "no-offering",
-            "text": "no offering in the Scaleway catalog for search.opensearch",
-            "target": "Scaleway",
-            "category": "search.opensearch"
-          }
-        },
         {
           "resourceId": "shop.example.com",
           "reason": {

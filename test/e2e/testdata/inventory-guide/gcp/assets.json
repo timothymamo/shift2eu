@@ -120,7 +120,22 @@
     "location": "global"
   },
   {
-    "name": "//dns.googleapis.com/projects/example-project/managedZones/shop-zone",
+    "name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789",
+    "assetType": "dns.googleapis.com/ManagedZone",
+    "location": "global"
+  },
+  {
+    "name": "//dns.googleapis.com/projects/example-project/managedZones/2345678901234567890",
+    "assetType": "dns.googleapis.com/ManagedZone",
+    "location": "global"
+  },
+  {
+    "name": "//dns.googleapis.com/projects/example-project/managedZones/3456789012345678901",
+    "assetType": "dns.googleapis.com/ManagedZone",
+    "location": "global"
+  },
+  {
+    "name": "//dns.googleapis.com/projects/example-project/managedZones/4567890123456789012",
     "assetType": "dns.googleapis.com/ManagedZone",
     "location": "global"
   },

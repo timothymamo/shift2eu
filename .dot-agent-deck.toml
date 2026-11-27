@@ -91,13 +91,16 @@ the user and never message another worker; you report only to the orchestrator.
 
 [[orchestrations.roles]]
 name = "tester"
-# pi on DeepSeek V4.1 Flash, started through dev/pi-tester.sh (issue #662, ADR 0044): the wrapper refuses
-# to start pi unless the env-printing refusal's two files are in place, and hands pi only an allow list of
+# pi on DeepSeek V4.1 Flash, started through the root-owned copy of dev/pi-tester.sh that dev/lima.yaml
+# installs in /usr/local/lib/shift2eu/pi-tester (issue #662, issue #692, ADR 0044), never the unit folder's
+# copy, which a branch can change: the wrapper refuses to start pi unless the installed env-printing refusal's
+# two files are in place, loads that installed extension into pi, and hands pi only an allow list of
 # variables (its DeepSeek key, the basics, the deck's pane variables), no GitHub token or other agent's key.
-# The path is relative to the pane's working directory, the unit's folder. agent = "pi", because the deck
+# make vm-pi-tester updates the installed copy after a merge that changes it. agent = "pi", because the deck
 # cannot see the agent behind a launcher. --approve trusts the project: .pi/settings.json loads the skills
-# from .claude/skills, and .pi/extensions/deny-env-printing.ts refuses env-printing commands.
-command = "dev/pi-tester.sh --provider deepseek --model deepseek-flash --thinking high --approve"
+# from .claude/skills, and pi also loads the project's .pi/extensions/deny-env-printing.ts (a residual: issue
+# #702 starts pi with --no-extensions and explicit extension paths).
+command = "/usr/local/lib/shift2eu/pi-tester/pi-tester.sh --provider deepseek --model deepseek-flash --thinking high --approve"
 agent = "pi"
 description = "Writes failing tests first (unit, contract, golden, e2e) and confirms they pass after the coder implements"
 prompt_template = """

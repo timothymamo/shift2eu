@@ -104,6 +104,11 @@ type resourceFact struct {
 	// the sources whose calls disagree pin it here rather than in the golden
 	// file, which a careless -update could accept away.
 	region string
+	// noRegion says the inventory has to give the resource no region at all: a
+	// global resource is served from nowhere the user picks, so a region on it
+	// would claim the move keeps the resource where it is (PRD #581). A golden
+	// file would show the absence too, but an -update could accept one away.
+	noRegion bool
 	// capabilities is the exact capability set the inventory has to give the
 	// resource, sorted or not. A nil slice does not check it; an empty, non-nil
 	// slice says the resource has none, so a capability the program over-claims
@@ -464,6 +469,77 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-events-connect", rawType: "AWS::KafkaConnect::Connector", category: "unclassified",
 					capabilities: []string{},
 				},
+				// Route 53 public hosted zones are public authoritative DNS zones:
+				// one resource per zone, network.dns, with no region, since Route 53
+				// serves a zone from its own name servers, not from a region the user
+				// picks (PRD #581, milestone 2). A zone whose name no other zone of
+				// the account has keeps that name as its ID, which the AWS Config row
+				// of the same zone gave it before this milestone: the report's
+				// resource keeps its ID when it gains its category.
+				//
+				// A public and a private zone of the same name, the usual
+				// split-horizon setup, would collide: Route 53 lets both exist, one
+				// answering the internet and one the VPCs it is attached to. So two
+				// zones of one name get their own zone ID appended, as two resources
+				// of another name get their type and region, and neither keeps the
+				// bare name: shop.example.com. (Z0123456789ABCDEFGHIJ) answers the
+				// internet and shop.example.com. (Z0000000000000000PRIV) the VPCs
+				// (PRD #581, the ID of a zone).
+				{
+					id: "shop.example.com. (Z0123456789ABCDEFGHIJ)", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
+				// A zone Route 53 signs with DNSSEC: ServeSignature is SIGNING. It has
+				// no routed record set, so it carries dnssec alone.
+				{
+					id: "example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{"dnssec"},
+				},
+				// A zone whose routed record sets (weighted, failover, geolocation,
+				// multivalue answer or health-checked) number above 0 answers by
+				// client or by health, which is dns-routing. It is not signed, so it
+				// carries dns-routing alone.
+				{
+					id: "shop-api.example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{"dns-routing"},
+				},
+				// A public zone the per-zone calls gave no answer for is a zone all the
+				// same: list-hosted-zones lists it, so it reaches the inventory as
+				// network.dns, with no region and no capability, rather than
+				// disappearing because the calls that say whether it is signed and
+				// routes by client or health failed for it (review finding S2).
+				{
+					id: "blog.example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
+				// A private zone answers only inside the VPCs it is attached to and
+				// moves with the network design, so it stays unclassified with its
+				// rawType (PRD #581, *What does not, and why*). It is written from
+				// list-hosted-zones, which lists private zones too, as its Config row
+				// is dropped with the public zones'.
+				{
+					id: "internal.example.com.", rawType: "AWS::Route53::HostedZone", category: "unclassified",
+					capabilities: []string{},
+				},
+				// The private half of the split-horizon pair above: the same name as a
+				// public zone, told apart by its zone ID, and unclassified as every
+				// private zone is.
+				{
+					id: "shop.example.com. (Z0000000000000000PRIV)", rawType: "AWS::Route53::HostedZone", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A health check and a Resolver endpoint are no zone: the first is what
+				// a record set's routing depends on, the second is resolution inside a
+				// network, and no target sells either (PRD #581, *What does not, and
+				// why*). Both stay unclassified, as AWS Config records them.
+				{
+					id: "shop-api-health", rawType: "AWS::Route53::HealthCheck", category: "unclassified",
+					noRegion: true, capabilities: []string{},
+				},
+				{
+					id: "rslvr-in-0123456789abcdef0", rawType: "AWS::Route53Resolver::ResolverEndpoint",
+					category: "unclassified", region: "eu-central-1", capabilities: []string{},
+				},
 			},
 			// The storage of an Aurora instance belongs to its cluster, so
 			// rds describe-db-instances gives every Aurora instance
@@ -497,6 +573,12 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop-events-kafka-serverless",
 				// A Kafka Connect connector is no cluster, so no call sizes it.
 				"shop-events-connect",
+				// network.dns takes no size field: a zone is billed by the zone, not
+				// by a node or a GiB, and no recorded call gives one (PRD #581).
+				"shop.example.com. (Z0123456789ABCDEFGHIJ)",
+				"example.com.",
+				"shop-api.example.com.",
+				"blog.example.com.",
 			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
@@ -664,6 +746,12 @@ func inventoryGuides() []inventoryGuideCase {
 				// collection (PRD #571, *Left out on the source side*).
 				"AWS::MSK::Configuration",
 				"AWS::OpenSearchServerless::SecurityPolicy",
+				// AWS Config records a hosted zone's DNSSEC configuration as a type of
+				// its own. get-dnssec already reads a zone's signed state into dnssec,
+				// so the config row is no second resource and is dropped (PRD #581,
+				// milestone 2). The zone itself keeps its Config type: a private zone
+				// stays unclassified with rawType AWS::Route53::HostedZone.
+				"AWS::Route53::DNSSEC",
 			},
 		},
 		{
@@ -914,6 +1002,50 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-events-connect", rawType: "managedkafka.googleapis.com/ConnectCluster", category: "unclassified",
 					capabilities: []string{},
 				},
+				// Cloud DNS public zones are public authoritative DNS zones: one
+				// resource per zone, network.dns, with no region, since Google serves a
+				// zone from name servers it picks, not from a region the user chooses
+				// (PRD #581, milestone 3). The resource is the asset search's
+				// dns.googleapis.com/ManagedZone row, as every GCP resource is, and the
+				// managed-zones list joins it on the project and the zone's number, the
+				// `id` the asset row names the zone by: that list adds the visibility,
+				// the signed state and the zone's name, which is the ID the inventory
+				// gives it, and the record-set count below adds dns-routing.
+				//
+				// A zone Google signs with DNSSEC: dnssecConfig.state is on. It also has
+				// routed record sets (3 above 0), so it carries dns-routing beside
+				// dnssec.
+				{
+					id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{"dns-routing", "dnssec"},
+				},
+				// A public zone whose DNSSEC state is off and whose routed record sets
+				// number 0: network.dns with no capability at all. A program that read
+				// the state as "not off" or the count as "not 0" gives it a capability
+				// the zone does not have.
+				{
+					id: "blog-zone", rawType: "dns.googleapis.com/ManagedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
+				// A private zone answers only inside the VPC networks it is attached to
+				// and moves with the network design, so it stays unclassified with its
+				// rawType (PRD #581, *What does not, and why*). It is written from the
+				// asset row, as every zone is.
+				{
+					id: "internal-zone", rawType: "dns.googleapis.com/ManagedZone", category: "unclassified",
+					capabilities: []string{},
+				},
+				// A zone the asset listing holds and the managed-zones list does not
+				// (a failed list, a missing role, or a project collected from its
+				// assets alone) is a zone all the same: no call gives its visibility
+				// or its signed state, so it stays unclassified rather than
+				// disappearing or being presumed public (PRD #581, milestone 3). Its
+				// ID is the number the asset row names it by, the only name the
+				// calls gave it: a zone the list joins gets its managed zone's name.
+				{
+					id: "4567890123456789012", rawType: "dns.googleapis.com/ManagedZone", category: "unclassified",
+					capabilities: []string{},
+				},
 			},
 			sized: []sizeFact{
 				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
@@ -988,7 +1120,12 @@ func inventoryGuides() []inventoryGuideCase {
 			// gives its vCPU or memory, so the program writes no size rather than
 			// one from a default, and the report says "not estimated: size
 			// unknown" for it (PRD #571, *Estimates*).
-			unsized: []string{"shop-reports-sqlserver", "valkey-archive", "shop-legacy-events"},
+			unsized: []string{
+				"shop-reports-sqlserver", "valkey-archive", "shop-legacy-events",
+				// network.dns takes no size field: a zone is billed by the zone, not by
+				// a node or a GiB, and no recorded call gives one (PRD #581).
+				"shop-zone", "blog-zone", "internal-zone", "4567890123456789012",
+			},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
@@ -1357,6 +1494,9 @@ func taxonomyCategories(source string) []string {
 			// and the Kafka cluster its fixtures record.
 			"search.opensearch",
 			"messaging.kafka",
+			// PRD #581's AWS classification: the public hosted zones its
+			// fixtures record, which Route 53 serves from no region.
+			"network.dns",
 		}
 	case "gcp":
 		return []string{
@@ -1372,6 +1512,9 @@ func taxonomyCategories(source string) []string {
 			"messaging.queue",
 			"messaging.topic",
 			"network.loadbalancer",
+			// PRD #581's GCP classification: the public Cloud DNS zones its
+			// fixtures record, which Google serves from no region.
+			"network.dns",
 			"registry.container",
 			"serverless.container",
 			"serverless.function",
@@ -1512,6 +1655,18 @@ func TestInventoryGuidePrograms(t *testing.T) {
 				t.Fatalf("the inventory holds no resource; the program classified nothing\n%s", stdout)
 			}
 
+			// A resource's ID comes from what the program reads, not from the order
+			// in which the guide's `"$out"/*.json` glob hands the recorded output
+			// over, which a reader's shell may order differently: both runs have to
+			// write the same inventory (PRD #581, the ID of a zone).
+			reversed := slices.Clone(inputs)
+			slices.Reverse(reversed)
+
+			if again := runJQ(t, jq, tc.source, reversed); !bytes.Equal(again, stdout) {
+				t.Errorf("%s: the program writes another inventory when the recorded CLI output arrives in the reverse order, want the same one: no resource's ID may depend on the order of the input files (PRD #581)\n%s",
+					tc.source, cmp.Diff(doc.Resources, decodeInventory(t, again).Resources))
+			}
+
 			assertCategories(t, tc.source, doc)
 			assertBareMetal(t, tc.source, doc, tc.bareMetal)
 			assertPresent(t, tc.source, doc, tc.present)
@@ -1522,10 +1677,401 @@ func TestInventoryGuidePrograms(t *testing.T) {
 			assertNoRawTypes(t, tc.source, doc, tc.absentRawTypes)
 			assertUnclassifiedKeepsRawType(t, tc.source, doc)
 			assertShortIDs(t, tc.source, doc)
+			assertUniqueIDs(t, tc.source, doc)
 
 			assertAssessAccepts(t, tc, stdout)
 		})
 	}
+}
+
+// TestInventoryGuideAWSRoute53PrivateZoneKeepsNoCapability pins the gate the
+// recorded fixtures cannot (PRD #581, *What does not, and why*): the guide's
+// per-zone loops ask about public zones only (`select(.PrivateZone == false)`),
+// so no recorded fixture names a private zone in get-dnssec's or the record-set
+// call's output, and a program that dropped its own `if $public` gate would give
+// a private zone dnssec or dns-routing while every fixture-driven assertion still
+// passed. The inputs below are built here rather than recorded: they stand for a
+// collect run that named a private zone anyway (a merged or hand-edited file, or
+// a guide whose loop lost its filter), which the program has to survive with the
+// zone unclassified and bare.
+func TestInventoryGuideAWSRoute53PrivateZoneKeepsNoCapability(t *testing.T) {
+	t.Parallel()
+
+	// One private and one public zone, both signed and both holding routed record
+	// sets, so the public gate is the only thing that can tell them apart: the
+	// public zone gains both capabilities, the private one neither.
+	inputs := map[string]string{
+		"route53-hosted-zones.json": `[
+  {"Id": "/hostedzone/Z0000000000000000PRIV", "Name": "corp.example.com.", "PrivateZone": true},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "Name": "example.com.", "PrivateZone": false}
+]`,
+		"route53-dnssec.json": `[
+  {"Id": "/hostedzone/Z0000000000000000PRIV", "ServeSignature": "SIGNING"},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "ServeSignature": "SIGNING"}
+]`,
+		"route53-routed-record-sets.json": `[
+  {"Id": "/hostedzone/Z0000000000000000PRIV", "RoutedRecordSets": 3},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "RoutedRecordSets": 3}
+]`,
+	}
+
+	dir := t.TempDir()
+
+	var recorded []string
+
+	for _, name := range slices.Sorted(maps.Keys(inputs)) {
+		path := filepath.Join(dir, name)
+
+		if err := os.WriteFile(path, []byte(inputs[name]), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+
+		recorded = append(recorded, path)
+	}
+
+	doc := decodeInventory(t, runJQ(t, jqPath(t), "aws", recorded))
+
+	// The public zone is the control: the capabilities of the inputs are read, so a
+	// private zone that holds none holds none because of the gate and not because
+	// the program read no signed state and no count at all.
+	assertPresent(t, "aws", doc, []resourceFact{
+		{
+			id: "corp.example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "unclassified", capabilities: []string{},
+		},
+		{
+			id: "example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "network.dns", capabilities: []string{"dnssec", "dns-routing"},
+		},
+	})
+}
+
+// TestInventoryGuideAWSRoute53UnprojectedHostedZones pins the promise the AWS
+// program's header makes about every call the guide makes with a --query
+// projection: the full, unprojected output of a call is read the same way
+// (review finding S1). A reader who drops the projection from `route53
+// list-hosted-zones` records the whole response, `{"HostedZones": [...],
+// "IsTruncated": ..., "MaxItems": ...}`, and every zone of it has to reach the
+// inventory as the projected array's zones do, with the zone's Config holding
+// its visibility.
+//
+// The fixtures cannot show it: they record the projected form the guide's
+// command writes, and the program has to go on reading that one. So the inputs
+// are built here, in a directory of their own per form, and the two runs have to
+// write the same zones. The full response also carries a CallerReference and a
+// Config comment of its own, neither of which is part of the zone: the
+// inventory has to hold neither.
+func TestInventoryGuideAWSRoute53UnprojectedHostedZones(t *testing.T) {
+	t.Parallel()
+
+	// The per-zone calls the guide makes are the same beside either form: their
+	// output is what a reader records next to the zone list, and what says a zone
+	// is signed or routes by client or health.
+	dnssec := `[
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "ServeSignature": "SIGNING"},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIL", "ServeSignature": "NOT_SIGNING"}
+]`
+	routed := `[
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "RoutedRecordSets": 0},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIL", "RoutedRecordSets": 3}
+]`
+
+	// The guide's own projection: one array of zones, each with the three fields
+	// the program reads.
+	projected := `[
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "Name": "example.com.", "PrivateZone": false},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIL", "Name": "shop-api.example.com.", "PrivateZone": false},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIM", "Name": "internal.example.com.", "PrivateZone": true}
+]`
+
+	// The full response list-hosted-zones writes without the projection: the
+	// zones sit under HostedZones, with their own ID, their name, the caller's
+	// reference, a Config holding the visibility and a comment, and the count of
+	// every record set the zone holds.
+	unprojected := `{
+  "HostedZones": [
+    {
+      "Id": "/hostedzone/Z0123456789ABCDEFGHIK",
+      "Name": "example.com.",
+      "CallerReference": "caller-reference-must-not-reach-the-inventory",
+      "Config": {"PrivateZone": false, "Comment": "comment-must-not-reach-the-inventory"},
+      "ResourceRecordSetCount": 3
+    },
+    {
+      "Id": "/hostedzone/Z0123456789ABCDEFGHIL",
+      "Name": "shop-api.example.com.",
+      "CallerReference": "caller-reference-must-not-reach-the-inventory",
+      "Config": {"PrivateZone": false, "Comment": "comment-must-not-reach-the-inventory"},
+      "ResourceRecordSetCount": 7
+    },
+    {
+      "Id": "/hostedzone/Z0123456789ABCDEFGHIM",
+      "Name": "internal.example.com.",
+      "CallerReference": "caller-reference-must-not-reach-the-inventory",
+      "Config": {"PrivateZone": true, "Comment": "comment-must-not-reach-the-inventory"},
+      "ResourceRecordSetCount": 1
+    }
+  ],
+  "IsTruncated": false,
+  "MaxItems": "100"
+}`
+
+	projectedOutput := runInventoryGuideRoute53(t, projected, dnssec, routed)
+	unprojectedOutput := runInventoryGuideRoute53(t, unprojected, dnssec, routed)
+
+	// The projected form is the control: without it a program that read neither
+	// form would write two empty inventories and pass for the same reason.
+	assertPresent(t, "aws", decodeInventory(t, projectedOutput), []resourceFact{
+		{
+			id: "example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "network.dns", noRegion: true, capabilities: []string{"dnssec"},
+		},
+		{
+			id: "shop-api.example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "network.dns", noRegion: true, capabilities: []string{"dns-routing"},
+		},
+		{
+			id: "internal.example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "unclassified", capabilities: []string{},
+		},
+	})
+
+	// A zone's CallerReference is the caller's own token and its Config comment is
+	// text someone wrote, neither of which describes infrastructure to move.
+	for _, marker := range []string{
+		"caller-reference-must-not-reach-the-inventory",
+		"comment-must-not-reach-the-inventory",
+	} {
+		if bytes.Contains(unprojectedOutput, []byte(marker)) {
+			t.Errorf("the program's output holds %q, want a zone's ID, name, category and capabilities only: a zone's CallerReference and its comment are no infrastructure to move\n%s",
+				marker, unprojectedOutput)
+		}
+	}
+
+	projectedZones := decodeInventory(t, projectedOutput).Resources
+	unprojectedZones := decodeInventory(t, unprojectedOutput).Resources
+
+	if diff := cmp.Diff(projectedZones, unprojectedZones); diff != "" {
+		t.Errorf("the unprojected list-hosted-zones response and the guide's projection write different inventories (-projected +unprojected), want the same zones: the program reads the full output of a call as it reads the projected one (docs/guide/inventory/aws.jq)\n%s",
+			diff)
+	}
+}
+
+// runInventoryGuideOnBuiltInputs runs one source's program on inputs a test
+// builds, written into a directory of their own, and returns what the program
+// wrote. The files are written rather than recorded: the guide's fixtures hold
+// the form the guide's own commands write, and a test that pins what the
+// program has to survive needs an input no recorded call produces.
+func runInventoryGuideOnBuiltInputs(t *testing.T, source string, inputs map[string]string) []byte {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	var recorded []string
+
+	for _, name := range slices.Sorted(maps.Keys(inputs)) {
+		path := filepath.Join(dir, name)
+
+		if err := os.WriteFile(path, []byte(inputs[name]), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+
+		recorded = append(recorded, path)
+	}
+
+	return runJQ(t, jqPath(t), source, recorded)
+}
+
+// runInventoryGuideRoute53 runs the AWS program on one form of the
+// list-hosted-zones output and the per-zone calls' recorded output, written to a
+// directory of their own, and returns what the program wrote. The files are
+// written here rather than recorded: the guide's fixtures hold the projected
+// form, which a reader's own run must keep matching, and the program's promise
+// about the full form needs an input the fixtures do not hold.
+func runInventoryGuideRoute53(t *testing.T, zones, dnssec, routed string) []byte {
+	t.Helper()
+
+	return runInventoryGuideOnBuiltInputs(t, "aws", map[string]string{
+		"route53-hosted-zones.json":       zones,
+		"route53-dnssec.json":             dnssec,
+		"route53-routed-record-sets.json": routed,
+	})
+}
+
+// TestInventoryGuideGCPCloudDNSClassifiesTheJoinedZone pins what the recorded
+// fixtures cannot about the GCP half of PRD #581's milestone 3, with inputs
+// built here:
+//
+//   - the visibility gate (PRD #581, *What does not, and why*): the guide's
+//     per-zone loop asks about public zones only, so no recorded fixture names a
+//     private zone in the record-set call's output, and a program that dropped
+//     its own gate would give a private zone dnssec or dns-routing while every
+//     fixture-driven assertion still passed;
+//   - dnssecConfig.state `transfer`: a zone whose DNSSEC signing Google is
+//     transferring is signed too, and no recorded zone carries that state;
+//   - both halves of the join, the project and the zone's number, which is the
+//     `id` the asset row names the zone by and the managed-zones list repeats
+//     (review finding S2): an entry under another project, or without one, is no
+//     entry for that row, and the zone stays unclassified under its number;
+//   - an empty managed-zones file, which the guide writes when its list call
+//     fails: the program reads it as no zone at all rather than failing.
+//
+// The inputs stand for a collect run that wrote any of these (a merged or
+// hand-edited file, a loop that lost its filter, a call that failed), which the
+// program has to survive with each zone classified by what it read.
+func TestInventoryGuideGCPCloudDNSClassifiesTheJoinedZone(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a private zone keeps no capability", func(t *testing.T) {
+		t.Parallel()
+
+		// One private and one public zone of one project, both with DNSSEC on and
+		// both holding routed record sets, so the visibility gate is the only thing
+		// that can tell them apart: the public zone gains both capabilities, the
+		// private one neither. The asset search is the list of resources, so both
+		// zones are written from their dns.googleapis.com/ManagedZone row, which
+		// names each of them by its number.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"},
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/3456789012345678901", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}, "project": "example-project"},
+  {"kind": "dns#managedZone", "id": "3456789012345678901", "name": "internal-zone", "visibility": "private", "dnssecConfig": {"state": "on"}, "project": "example-project"}
+]`,
+			"dns-routed-record-sets.json": `[
+  {"project": "example-project", "id": "1234567890123456789", "routedRecordSets": 3},
+  {"project": "example-project", "id": "3456789012345678901", "routedRecordSets": 3}
+]`,
+		}))
+
+		// The public zone is the control: the capabilities of the inputs are read, so
+		// a private zone that holds none holds none because of the gate and not
+		// because the program read no signed state and no count at all.
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "internal-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+			{
+				id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "network.dns", capabilities: []string{"dnssec", "dns-routing"},
+			},
+		})
+	})
+
+	t.Run("a transferred zone is signed", func(t *testing.T) {
+		t.Parallel()
+
+		// DNSSEC signing Google is transferring to another provider is signing all
+		// the same: dnssecConfig.state `transfer` is signed, and a program that read
+		// only `on` loses dnssec. The zone holds no routed record set, so dns-routing
+		// stays off and a program that wrote it from the state fails too.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "transfer"}, "project": "example-project"}
+]`,
+			"dns-routed-record-sets.json": `[]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "network.dns", capabilities: []string{"dnssec"},
+			},
+		})
+	})
+
+	t.Run("another project's entry joins nothing", func(t *testing.T) {
+		t.Parallel()
+
+		// The list's entries are one project's zones, and the project is added to
+		// each of them for the join: another project's zone holds a number of its
+		// own, and a number Google happens to assign twice would be another zone.
+		// The other project's entry comes last, where a program that joined on the
+		// number alone would take it and read its private visibility and different
+		// name for this project's zone.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}, "project": "example-project"},
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "other-zone", "visibility": "private", "dnssecConfig": {"state": "off"}, "project": "other-project"}
+]`,
+			"dns-routed-record-sets.json": `[
+  {"project": "example-project", "id": "1234567890123456789", "routedRecordSets": 3}
+]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "shop-zone", rawType: "dns.googleapis.com/ManagedZone",
+				category: "network.dns", capabilities: []string{"dns-routing", "dnssec"},
+			},
+		})
+		assertAbsent(t, "gcp", doc, []string{"other-zone"})
+	})
+
+	t.Run("an entry without a project joins nothing", func(t *testing.T) {
+		t.Parallel()
+
+		// The list output carries no project of its own; the guide's jq filter adds
+		// it. An entry that lost it names no zone of any project, so it joins no
+		// asset row: the zone keeps the number the asset row names it by and stays
+		// unclassified rather than taking a name and a visibility from a project
+		// nobody read.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json": `[
+  {"kind": "dns#managedZone", "id": "1234567890123456789", "name": "shop-zone", "visibility": "public", "dnssecConfig": {"state": "on"}}
+]`,
+			"dns-routed-record-sets.json": `[]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "1234567890123456789", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+		})
+		assertAbsent(t, "gcp", doc, []string{"shop-zone"})
+	})
+
+	t.Run("an empty zone list leaves every zone unclassified", func(t *testing.T) {
+		t.Parallel()
+
+		// The guide writes an empty list when its managed-zones call fails, and a
+		// zero-byte file is no JSON value at all: the program has to read it as no
+		// zone rather than fail on it, and every asset row then stays unclassified
+		// under its number, as a zone no call described does.
+		doc := decodeInventory(t, runInventoryGuideOnBuiltInputs(t, "gcp", map[string]string{
+			"assets.json": `[
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/1234567890123456789", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"},
+  {"name": "//dns.googleapis.com/projects/example-project/managedZones/2345678901234567890", "assetType": "dns.googleapis.com/ManagedZone", "location": "global"}
+]`,
+			"dns-managed-zones.json":      ``,
+			"dns-routed-record-sets.json": `[]`,
+		}))
+
+		assertPresent(t, "gcp", doc, []resourceFact{
+			{
+				id: "1234567890123456789", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+			{
+				id: "2345678901234567890", rawType: "dns.googleapis.com/ManagedZone",
+				category: "unclassified", capabilities: []string{},
+			},
+		})
+		assertAbsent(t, "gcp", doc, []string{"shop-zone", "blog-zone"})
+	})
 }
 
 // TestInventoryGuideDomainNamesListEveryDomainOnRecord pins what the guide's two
@@ -1914,6 +2460,11 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 				source, want.id, resource.Region, want.region)
 		}
 
+		if want.noRegion && resource.Region != "" {
+			t.Errorf("%s: resource %q has region %q, want none: a global resource is served from no region the user picks (PRD #581)",
+				source, want.id, resource.Region)
+		}
+
 		if want.capabilities == nil {
 			continue
 		}
@@ -2215,6 +2766,25 @@ func assertShortIDs(t *testing.T, source string, doc inventoryDoc) {
 					source, resource.ID, marker)
 			}
 		}
+	}
+}
+
+// assertUniqueIDs fails when two resources of the inventory share an ID. A
+// program gives a colliding ID what tells the two resources apart, their type
+// and region or, for two hosted zones of one name, their own zone ID, so every
+// resource is listed once under an ID of its own (PRD #581, the ID of a zone).
+func assertUniqueIDs(t *testing.T, source string, doc inventoryDoc) {
+	t.Helper()
+
+	seen := make(map[string]bool, len(doc.Resources))
+
+	for _, resource := range doc.Resources {
+		if seen[resource.ID] {
+			t.Errorf("%s: the inventory holds %q more than once, want every resource under an ID of its own: a resource whose name another resource has gets what tells them apart appended (PRD #581)",
+				source, resource.ID)
+		}
+
+		seen[resource.ID] = true
 	}
 }
 

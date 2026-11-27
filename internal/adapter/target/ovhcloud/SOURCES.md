@@ -5,10 +5,12 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
 
 ## How it was compiled
 
-- **Retrieved on:** 2026-11-25, the date the offerings of PRD #552 milestone 5 were read and every
-  existing plan and storage price, fixed fee and regions-page tick was re-checked against the prices page
-  and the regions page (below). The existing plans and prices were first read on 2026-11-13 (PRD #190
-  milestone 3, ADR 0024) and 2026-11-14 (issue #219); none changed on 2026-11-25. The snapshot's
+- **Retrieved on:** 2026-11-27, the date the offerings of PRD #571 milestone 5 were read and every
+  existing plan and storage price and fixed fee was re-checked against the prices page (below). Before
+  it, 2026-11-25, the date the offerings of PRD #552 milestone 5 were read and every existing plan and
+  storage price, fixed fee and regions-page tick was re-checked against the prices page and the regions
+  page (below). The existing plans and prices were first read on 2026-11-13 (PRD #190 milestone 3, ADR
+  0024) and 2026-11-14 (issue #219); none changed on 2026-11-25 or 2026-11-27. The snapshot's
   `retrievedOn` and `sourceURL` name the prices, the facts most likely to change (one date per snapshot,
   ADR 0007). The regions of the existing offerings were read on 2026-11-10 and their capabilities last
   re-verified on 2026-11-11 (below). Every page cited below was fetched on one of those dates, without
@@ -81,8 +83,29 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
   plan's vCPU and memory, every storage price and the Managed Kubernetes fixed fees, each as the page's
   hourly price × 730, and the regions page's ticks of every existing product. Nothing changed: no
   existing offering, plan, price, capability, region or default region differs from before, and the
-  regions page carried no beta mark in any EMEA cell. `retrievedOn` in `catalog.json` is this date,
-  2026-11-25.
+  regions page carried no beta mark in any EMEA cell. `retrievedOn` in `catalog.json` was this date,
+  2026-11-25, until PRD #571 milestone 5.
+- **Read on 2026-11-27 for PRD #571 milestone 5 (OpenSearch and Kafka).** The prices page, the regions
+  page, the OpenSearch and Kafka product pages (Ireland edition), the OpenSearch and Kafka capabilities
+  pages, the Analytics family's capabilities, deployment modes, security, backups and pricing pages, and
+  the docs indexes (`/en/llms.txt` and the Analytics ones) were read live, with an anonymous client:
+  every page answered in full, the prices page's price data included, so no page had to be saved by
+  hand. `ovh/ovhcloud-docs` `develop` was then at
+  [`561c08cc567d2b999730e851c4cf466fc522647c`](https://github.com/ovh/ovhcloud-docs/tree/561c08cc567d2b999730e851c4cf466fc522647c)
+  (2026-11-26) and was not read: every documentation fact comes from the published page. OpenSearch and
+  Kafka are now filed under **Analytics**, not Databases, and the Analytics pages are cited for them (*Analytics for
+  Kafka*, *Analytics for OpenSearch*). Five offerings were added: *Analytics for OpenSearch*, its
+  *Multi-node* and *Multi-node 3-AZ* forms (`search.opensearch`), and *Analytics for Kafka* and its *3-AZ*
+  form (`messaging.kafka`); the Advanced/Enterprise tiers get none (*Left out on purpose*). The same read
+  re-checked the **whole existing snapshot** against the prices page's data, by plan name and region:
+  all 232 plans' prices in every region each covers (the per-node price for databases, the Linux price
+  for instances and Kubernetes nodes, hourly × 730), every plan's vCPU and memory, the included storage
+  of the MySQL, PostgreSQL and MongoDB plans, every storage price and the Managed Kubernetes fixed fees.
+  **Nothing changed:** no existing offering, plan, price, included storage, storage price or fixed fee
+  differs from before, and the regions page still listed the same eight EMEA locations. Only the
+  regions page's "Analytics with" table was re-read cell by cell (no beta mark); the other products'
+  ticks were not re-read. Because it added new facts, `retrievedOn` in `catalog.json` is this date,
+  2026-11-27.
 
 ## Prices
 
@@ -148,6 +171,23 @@ read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The 
   a Valkey plan records the page's vCPUs and memory, no included storage, and its offering no storage
   price (a cache is matched on memory alone, ADR 0046). The MongoDB tables give a "Usable storage" range
   and a "Price per GB of additional storage" per node, priced as above at the tier's 3 nodes.
+- **Analytics (OpenSearch and Kafka)** (read on 2026-11-27, PRD #571 milestone 5). A plan is one node, as
+  for the databases: vCPU and memory are the page's columns under "Information per node", and the price
+  is the page's "Price(excl. VAT/hour/node)" × 730, the data's `per-node` price, so an estimate
+  multiplies it by the resource's count, its nodes or brokers. Each tier runs a fixed number of nodes
+  ("Dedicated node(s)"): OpenSearch Essential/Discovery 1, Business/Production 3, Enterprise/Advanced 6;
+  Kafka Business/Production 3, Enterprise/Advanced 6. The Analytics pricing guide
+  (<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/pricing>) gives the same
+  rule as the databases': "The hourly price is the reference value used to calculate costs" and
+  "Monthly price = Hourly price × 730 hours". **Storage differs from the databases.** An inventory's
+  `storageGiB` for these categories is per node, and the estimate prices storage above a plan's
+  included storage per node × `count` (PRD #571, *Estimates*; ADR 0047), so a plan's included storage is
+  per node, and the storage price is the page's "Price per GB of additional storage" (per GiB per node
+  and hour) × 730 **only**, never multiplied by the tier's node count as a database's is. The page gives
+  one storage price per tier, the same in every region and for Gen 2 and Gen 3. Where the page's
+  "Usable storage" lower bound is the cluster's total (Gen 2) the per-node figure is derived, and where no
+  page says the figure is per node (OpenSearch Gen 3) none is recorded: each offering's section says
+  which.
 - **Not priced.** Load Balancer and Managed Private Registry are sold by size or plan (S, M, L, XL;
   Small, Medium, Large), which no inventory field records, so their offerings carry no plan, storage
   price or fixed fee, and an estimate reports them "not priced" (PRD #552, decided question 6). The
@@ -220,7 +260,11 @@ read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The 
   volume class. Since PRD #552 milestone 5 the Valkey base tier is the Discovery/Essential plan (*Databases
   for Valkey*), with *Databases for Valkey Multi-node* (Production/Business) and its *3-AZ* form; the
   MongoDB base tier is the Production plan (*Managed MongoDB*), with *Managed MongoDB Advanced*, which adds
-  point-in-time restore, and the *3-AZ* form of each. A **Needs:** line names the tier its offering is named after,
+  point-in-time restore, and the *3-AZ* form of each. Since PRD #571 milestone 5 the OpenSearch base tier
+  is the Essential/Discovery plan (*Analytics for OpenSearch*), with *Analytics for OpenSearch
+  Multi-node* (Business/Production) and its *3-AZ* form; the Kafka base tier is the Business/Production
+  plan (*Analytics for Kafka*), the only tier below Advanced, with its *3-AZ* form. Neither engine's
+  Enterprise/Advanced tier adds a capability, so neither gets an offering. A **Needs:** line names the tier its offering is named after,
   or the product's default tier. **Naming order:** a variant is `<base offering> <tier>`, and a
   region-group suffix such as `3-AZ` comes after the tier (*Managed PostgreSQL Multi-node 3-AZ*). The
   1-AZ variant's name is then a prefix of the 3-AZ one, so it wins ties by name, and a resource that
@@ -283,7 +327,9 @@ Load Balancer uses the compute (OpenStack) names (the prices page's availability
 EU-SOUTH-MIL, EU-WEST-PAR, GRA1 to GRA11, RBX-A, SBG5, SBG7, WAW1); Valkey and MongoDB use the database
 names; Managed Private Registry uses DE, GRA, EU-WEST-PAR and EU-SOUTH-MIL (its FAQ's region table). Each
 maps to its code as in the table above. On 2026-11-25 the regions page still listed the same eight EMEA
-locations.
+locations. OpenSearch and Kafka (2026-11-27) use the database names too (the prices page's region groups
+`DE`, `GRA`, `RBX`, `SBG`, `WAW`, `EU-WEST-PAR`, `EU-SOUTH-MIL`); on that date the regions page still
+listed the same eight EMEA locations.
 
 ## Default region
 
@@ -307,10 +353,301 @@ database offerings, *Load Balancer 3-AZ* and *Managed Private Registry*). `GRA` 
 both price every plan of their offerings (the Gen 2 Valkey and MongoDB flavours are priced in both, not
 in `RBX`), so `GRA` stays the default for the same reason as before.
 
+**Re-checked on 2026-11-27 (PRD #571 milestone 5)** with the five new offerings, of 35 in all: `GRA` and
+`LIM` host 21 each (the 18 above, *Analytics for OpenSearch*, *Analytics for OpenSearch Multi-node* and
+*Analytics for Kafka*); `SBG` hosts 20, `RBX` and `WAW` 19, and `PAR` and `MIL` 16 each (the 14 above,
+*Analytics for OpenSearch Multi-node 3-AZ* and *Analytics for Kafka 3-AZ*). Both `GRA` and `LIM` price
+every plan of the new offerings (the Gen 2 OpenSearch and Kafka flavours are priced in both, not in
+`RBX`), so `GRA` stays the default.
+
 The choice says nothing about which region is cheapest or best. Prices are the same in every 1-AZ region
 where a plan is offered; the 3-AZ regions charge more for databases (*Prices*).
 
 ## Offerings
+
+### Analytics for Kafka
+
+Category `messaging.kafka`: Public Cloud Analytics for Kafka (Kafka 3.9, 4.2 and 4.3: "The Public Cloud
+Analytics offer supports the following Kafka versions", Kafka capabilities page) on the
+Production/Business plan, 3 nodes (brokers), in the 1-AZ regions. This is the base offering
+(tier-variant rule): Kafka has no 1-node plan, and its Advanced/Enterprise plan adds no capability (*Left
+out on purpose*); the *3-AZ* form is *Analytics for Kafka 3-AZ*. The name follows the docs ("Public Cloud
+Analytics for Kafka offer", Kafka capabilities page) and the prices page's tables ("…Plan - Analytics with
+Kafka"). Kafka is an **Analytics** service, no longer a Database one: the docs index lists
+"Analytics: Kafka, ClickHouse, Lakehouse, OpenSearch, Managed Dashboards"
+(<https://docs.ovhcloud.com/en/llms.txt>), and the Analytics family has its own capabilities, deployment
+modes, security, backups and pricing pages, which are cited here instead of the Databases ones (PRD #571,
+milestone 5). Pages, read 2026-11-27:
+<https://www.ovhcloud.com/en-ie/public-cloud/apache-kafka/> (the Kafka product page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/kafka-capabilities> (the Kafka capabilities
+page), <https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities> (the
+Analytics capabilities page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/analytics-regions-comparison>
+(the Analytics deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/concepts-security-overview>
+(the Analytics security page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/backups> (the Analytics
+backups page), <https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/pricing> (the
+Analytics pricing guide), the regions page and the prices page.
+
+- `encryption-at-rest`: "For all the Analytics engines such as Kafka, OpenSearch and so on, at-rest data
+  encryption covers both active service instances as well as service backups in cloud object storage:
+  Nodes: service instances and the underlying VMs use full volume encryption using LUKS with a randomly
+  generated ephemeral key for each instance and each volume." (Analytics security page). No plan is
+  excluded. **Needs:** nothing beyond the default Production/Business plan. (The Databases security
+  page's encryption section names "MySQL, PostgreSQL, Valkey and so on", not Kafka: the Analytics page is
+  the one that covers it.)
+- `node-high-availability`. **Needs:** nothing beyond the default Production/Business plan: "Two plans are
+  available for each node generation (Gen 3 and Gen 2): | Production | Business | 3 |" (Kafka
+  capabilities page), so every Kafka service is multi-node. **Scope: node-level only**, by the node-level
+  bar (*Rules applied*): "When a multi-node Analytics service is deployed, this single AZ setup offers
+  resilience against node and disk failures", and "Host antiaffinity: The nodes of a multi-node Analytics
+  service are deployed in different physical hosts offering resilience to host outage" (Analytics
+  deployment modes page); "You can choose a "Business/Production" or "Enterprise/Advanced" offer to
+  benefit from a high availability service as your data will be replicated across multiple nodes"
+  (Analytics security page); the product page's Production card has "Automatic failover". But "the
+  Analytics service nodes may be deployed within a single data center" (Analytics deployment modes page,
+  *Limitations*), so `zone-high-availability` is not claimed. As on the source side (PRD #571, capability
+  table), a topic keeps serving through a broker's loss only at a replication factor of 2 or more, which
+  the user sets per topic ("For each topic you can specify: … The replication factor; … The minimum
+  in-sync replication", Kafka capabilities page). The node-level sentences are the Analytics family's
+  generic ones, which name Kafka through "multi-node Analytics service"; the Databases FAQ's "whatever the
+  DBMS is", which *Databases for Valkey Multi-node* cites, names no Analytics engine and is not used.
+- No `snapshots`: "Kafka is a streaming tool. We don't backup Kafka data." (Kafka capabilities page); the
+  Analytics backups page's table has "| Kafka | N/A | N/A | N/A | N/A | N/A |". The product page's
+  "14-day backups" on the Production card contradicts both and is not used (*Left out on purpose*).
+- No `point-in-time-restore` and no `read-replicas`: no Kafka page states either; see *Left out on
+  purpose*.
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: the regions page's "Analytics with" table ticks Kafka in each
+  (and in "3-AZ Paris", "3-AZ Milan" and London), with no beta mark; the Kafka capabilities page says
+  "The Public Cloud Analytics offer is available in all Public Cloud 1-AZ and 3-AZ regions." The 3-AZ
+  regions are *Analytics for Kafka 3-AZ*'s.
+- **Fixed node count** (PRD #571; decided question 10 of PRD #552, issue #558): the plan runs exactly 3
+  brokers ("Dedicated node(s)" 3 in every row). A 1-broker or 6-broker cluster pointed here is priced at
+  its own count, which this plan does not sell.
+- **Minimum billed size:** none beyond a plan's included storage, the lower bound of the page's "Usable
+  storage" range (below); billing is "on a per-second basis" (Analytics pricing guide), with no minimum
+  term.
+
+- **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with Kafka", read 2026-11-27, each price read per region from the page's embedded data, never from the table's default "All regions" view, which can show an Asia-Pacific price). Plans: the Gen 2 Business flavours (DB1), priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Production flavours (B3), in all five 1-AZ regions at one price; the table says "Gen 2 instances will still be available under our Essential/Business/Enterprise plans". vCPU ("vCore") and memory are per node, under the page's "Information per node". The plan's price is the page's "Price(excl. VAT/hour/node)" × 730 (the data's `per-node` price), so an estimate multiplies it by the resource's count, its brokers (ADR 0025); the tier runs 3 nodes, and the page's total is the per-node price × 3 in every row. No price needed rounding. Kafka sells no B3-64 or larger flavour.
+- **Included storage, per node** (PRD #571 milestone 5, decision D2): Gen 3 is the lower bound of the page's "Usable storage" range, which is **per node**: the Analytics pricing guide's example "| Kafka | Production | B3-8 | 320 GB | 180 GB |" (base and additional storage) bills the additional storage as "180 GB × 30 days × 24 hours × 3 nodes", and the same B3 flavour has the same range on the 3- and 6-node plans. Gen 2 is **derived**: the page's lower bound is the cluster's total (DB1-7: 960 GiB at 3 nodes, 1.875 TiB = 1920 GiB at 6 nodes, both 320 GiB × nodes), so the snapshot records the lower bound ÷ 3. No page states the Gen 2 figure per node; the division rests on that pattern alone. TiB × 1024.
+
+| Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/hour total (3 nodes) | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|---|---|
+| `Business DB1-4` | 2 | 4 GB per node × 3 nodes | From 480 GiB to 1.40625 TiB | 160 (480 ÷ 3, derived) | 0.1612 | 0.4836 | `117.676` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-7` | 2 | 7 GB per node × 3 nodes | From 960 GiB to 2.8125 TiB | 320 (derived) | 0.3195 | 0.9585 | `233.235` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-15` | 4 | 15 GB per node × 3 nodes | From 1.875 TiB to 5.625 TiB | 640 (derived) | 0.6073 | 1.8219 | `443.329` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-30` | 8 | 30 GB per node × 3 nodes | From 3.75 TiB to 11.25 TiB | 1280 (derived) | 1.1753 | 3.5259 | `857.969` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-60` | 16 | 60 GB per node × 3 nodes | From 7.5 TiB to 22.5 TiB | 2560 (derived) | 2.3522 | 7.0566 | `1717.106` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production B3-8` | 2 | 8 GB per node × 3 nodes | From 320 GiB to 1.5625 TiB | 320 | 0.2782 | 0.8346 | `203.086` | all |
+| `Production B3-16` | 4 | 16 GB per node × 3 nodes | From 640 GiB to 3.125 TiB | 640 | 0.5565 | 1.6695 | `406.245` | all |
+| `Production B3-32` | 8 | 32 GB per node × 3 nodes | From 1.25 TiB to 6.25 TiB | 1280 | 1.113 | 3.339 | `812.49` | all |
+
+- **Storage price:** the table's "Price per GB of additional storage:€0.0005/hour/node" (the data's `kafka-business-additionnal-storage-gb`, one price in every region) × 730 = `0.365` per GiB **per node** a month. Unlike the managed databases (*Prices*), it is **not** multiplied by the tier's node count: an inventory's `storageGiB` for a `messaging.kafka` resource is per broker, and the estimate multiplies the storage above the plan's included storage by `count` (PRD #571, *Estimates*; ADR 0047). The page's data also carries an undisplayed monthly figure that is not the hourly price × 730; it is not used.
+- **Billing change announced:** the Analytics pricing guide says that "Up until December 2026, an invoice for a given service typically includes two billing lines: The analytics service itself (covering compute, base storage and backups); Optional additional storage, if provisioned", and that invoices are being changed to three lines (compute, total storage, backups). The prices page still showed the additional-storage model on 2026-11-27; a later refresh re-checks it.
+
+### Analytics for Kafka 3-AZ
+
+Category `messaging.kafka`: Public Cloud Analytics for Kafka on the Production plan, Multi AZ, in the 3-AZ
+regions. The *3-AZ* form of *Analytics for Kafka* (*Rules applied*, *1-AZ and 3-AZ regions*). Pages, read
+2026-11-27: <https://www.ovhcloud.com/en-ie/public-cloud/apache-kafka/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/kafka-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/analytics-regions-comparison>
+(the Analytics deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/pricing>, the regions page and
+the prices page.
+
+- `encryption-at-rest`: as for *Analytics for Kafka*; the Analytics security page states it per engine,
+  not per region.
+- `zone-high-availability`. **Needs:** the Production plan, Multi AZ, which every Kafka service in Paris
+  and Milan is. **Scope: zone-level.** "High Availability: Multi-node Analytics service is deployed
+  across three independent availability zones, ensuring service continuity even if one zone experiences
+  an outage." (Analytics deployment modes page, *3-AZ Region*); every Kafka plan is multi-node (3 or 6).
+  The Analytics security page gives "Production Multi AZ" a 99.95% SLA; the product page says "High
+  availability 3-AZ | Triple replication as a failover". The Analytics capabilities page's feature table
+  has an OpenSearch column only; its plan table, which ticks high availability on Production Multi AZ, is
+  generic to the Analytics services. As for *Analytics for Kafka*, a topic survives the loss of a zone's
+  broker only at a replication factor the user sets.
+- `node-high-availability`: implied by zone level (ADR 0011); the node-level sentences of *Analytics for
+  Kafka* hold for a multi-node Analytics service in any region.
+- No `snapshots`: as for *Analytics for Kafka*.
+- Regions `MIL`, `PAR`: the regions page ticks Kafka in "3-AZ Paris" and "3-AZ Milan"; the prices page
+  prices the Production flavours there (`EU-WEST-PAR`, `EU-SOUTH-MIL`, one price for both).
+- **Fixed node count:** exactly 3 brokers, as for *Analytics for Kafka*.
+
+- **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with Kafka", read per region from the embedded data for `EU-WEST-PAR` and `EU-SOUTH-MIL`, the same in both, read 2026-11-27). Plans: the Gen 3 Production flavours; the page prices no Business (Gen 2) flavour there. vCPU and memory per node; the plan's price is the page's price per node × 730 (ADR 0025); the tier runs 3 nodes. Included storage per node as for *Analytics for Kafka* (stated for Gen 3). No price needed rounding.
+
+| Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/hour total (3 nodes) | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|---|---|
+| `Production B3-8` | 2 | 8 GB per node × 3 nodes | From 320 GiB to 1.5625 TiB | 320 | 0.2922 | 0.8766 | `213.306` | all |
+| `Production B3-16` | 4 | 16 GB per node × 3 nodes | From 640 GiB to 3.125 TiB | 640 | 0.5843 | 1.7529 | `426.539` | all |
+| `Production B3-32` | 8 | 32 GB per node × 3 nodes | From 1.25 TiB to 6.25 TiB | 1280 | 1.1686 | 3.5058 | `853.078` | all |
+
+- **Storage price:** as for *Analytics for Kafka*, `0.365` per GiB per node a month (the same additional-storage price in every region, Paris and Milan included).
+
+### Analytics for OpenSearch
+
+Category `search.opensearch`: Public Cloud Analytics for OpenSearch (OpenSearch 2.19 and 3.3: "The Public
+Cloud Databases offer supports the following OpenSearch versions", OpenSearch capabilities page) on the
+Essential/Discovery plan, one node, in the 1-AZ regions. This is the base offering (tier-variant rule):
+the 3-node plan adds a capability and is *Analytics for OpenSearch Multi-node*, with its *3-AZ* form; the
+6-node Advanced/Enterprise plan adds none (*Left out on purpose*). The name follows the prices page's
+tables ("…Plan - Analytics with OpenSearch") and the docs index, which files OpenSearch under Analytics
+("a managed OpenSearch service (Analytics)",
+<https://docs.ovhcloud.com/en/llms/public-cloud-data-analytics-opensearch/llms.txt>); the OpenSearch
+capabilities page itself still says "Public Cloud Databases for OpenSearch" and sits under `/databases/`.
+The Databases capabilities page the PRD cited no longer names OpenSearch ("We currently offer seven
+database engines:" lists MySQL, PostgreSQL, MongoDB and Valkey only), so the Analytics pages are cited
+(PRD #571, milestone 5). Pages, read 2026-11-27:
+<https://www.ovhcloud.com/en-ie/public-cloud/opensearch/> (the OpenSearch product page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/opensearch-capabilities> (the OpenSearch
+capabilities page), <https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities>
+(the Analytics capabilities page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/analytics-regions-comparison>
+(the Analytics deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/concepts-security-overview>
+(the Analytics security page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/backups> (the Analytics
+backups page), <https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/pricing> (the
+Analytics pricing guide), the regions page and the prices page.
+
+- `encryption-at-rest`: "For all the Analytics engines such as Kafka, OpenSearch and so on, at-rest data
+  encryption covers both active service instances as well as service backups in cloud object storage"
+  (Analytics security page, as quoted in full under *Analytics for Kafka*); the Analytics backups page's
+  table gives OpenSearch "Encrypted: Yes". No plan is excluded. **Needs:** nothing beyond the default
+  Essential/Discovery plan.
+- `snapshots` (a data set's point-in-time copy, ADR 0046): "Essential/Discovery plan clusters are
+  automatically backed up hourly and daily. Backup retention is 24 hours for hourly backups and 3 days
+  for daily backups." and "Backups can be restored by duplicating them to a new service." (OpenSearch
+  capabilities page); the Analytics backups page: "| OpenSearch | Incremental backup on object storage |
+  On-Site, Off-Site | Hourly | 1h | Yes |". **Needs:** nothing beyond the default Essential/Discovery
+  plan.
+- No `node-high-availability` and no `zone-high-availability`: the plan runs one node ("Essential/Discovery:
+  1 node", OpenSearch capabilities page), and the Analytics capabilities page's plan table leaves "High
+  availability" empty for Essential/Discovery.
+- No `point-in-time-restore` and no `read-replicas`: "Point In Time Recovery (PITR) is not available for
+  OpenSearch." (OpenSearch capabilities page); the Analytics capabilities page's feature table leaves
+  "Point in Time Recovery" and "Read-only nodes" empty for OpenSearch.
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: the regions page's "Analytics with" table ticks OpenSearch in
+  each, with no beta mark; the OpenSearch capabilities page says "The Public Cloud Databases offer is
+  available in all Public Cloud 1-AZ and 3-AZ regions." As for *Databases for Valkey* and *Managed MySQL*,
+  the one-node plan lists the 1-AZ regions only (*Left out on purpose*).
+- **Fixed node count** (PRD #571; decided question 10 of PRD #552, issue #558): the plan runs exactly 1
+  node. A 3-node domain pointed here is priced at 3 nodes, which this plan does not sell.
+- **Minimum billed size:** none beyond a plan's included storage (below), where recorded; billing is per
+  second (Analytics pricing guide), with no minimum term.
+
+- **Prices** (prices page, *Analytics*, table "Essential/Discovery Plan - Analytics with OpenSearch", read 2026-11-27, each price read per region from the page's embedded data: the table's default "All regions" view shows "€0.074788" for `Discovery B3-4`, the Asia-Pacific price, against the EU 0.0903). Plans: the Gen 2 Essential flavours (DB1), priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Discovery flavours (B3), in all five 1-AZ regions at one price. vCPU ("vCore") and memory per node; the plan's price is the page's "Price(excl. VAT/hour/node)" × 730 (ADR 0025); the tier runs 1 node, and the total equals the per-node price. No price needed rounding.
+- **Included storage, per node** (PRD #571 milestone 5, decision D2): the lower bound of the page's "Usable storage" range, for both generations. At 1 node the cluster's total and the node's are the same figure, so whether the lower bound is per node or per cluster does not matter here. For Gen 2 the 3- and 6-node tiers show that the lower bound is the cluster total (DB1-7 is 80, 240 and 480 GiB at 1, 3 and 6 nodes). For Gen 3 (Discovery) the same argument holds at one node, and the product page's Discovery card says "1 node included … 40 GB storage", `Discovery B3-4`'s lower bound. The 3-node Gen 3 plans (*Analytics for OpenSearch Multi-node* and its *3-AZ* form) are another matter: there the per-node reading of the same range is an inference no OpenSearch page states, so they record none (*Left out on purpose*).
+
+| Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|---|
+| `Essential DB1-4` | 2 | 4 GB × 1 node | From 40 GiB to 120 GiB | 40 | 0.0814 | `59.422` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Essential DB1-7` | 2 | 7 GB × 1 node | From 80 GiB to 240 GiB | 80 | 0.1642 | `119.866` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Essential DB1-15` | 4 | 15 GB × 1 node | From 160 GiB to 480 GiB | 160 | 0.33 | `240.90` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Discovery B3-4` | 1 | 4 GB × 1 node | From 40 GiB to 200 GiB | 40 | 0.0903 | `65.919` | all |
+| `Discovery B3-8` | 2 | 8 GB × 1 node | From 80 GiB to 400 GiB | 80 | 0.1716 | `125.268` | all |
+| `Discovery B3-16` | 4 | 16 GB × 1 node | From 160 GiB to 800 GiB | 160 | 0.3431 | `250.463` | all |
+| `Discovery B3-32` | 8 | 32 GB × 1 node | From 320 GiB to 1.5625 TiB | 320 | 0.6861 | `500.853` | all |
+| `Discovery B3-64` | 16 | 64 GB × 1 node | From 640 GiB to 3.125 TiB | 640 | 1.3721 | `1001.633` | all |
+
+- **Storage price:** the table's "Price per GB of additional storage:€0.0004/hour/node" (the data's `opensearch-essential-additionnal-storage-gb`, one price in every region) × 730 = `0.292` per GiB per node a month, not multiplied by the tier's node count (as for *Analytics for Kafka*: storage per node × `count`, PRD #571 *Estimates*). The undisplayed monthly figure in the page's data is not used.
+- **Billing change announced:** as for *Analytics for Kafka*.
+
+### Analytics for OpenSearch Multi-node
+
+Category `search.opensearch`: Public Cloud Analytics for OpenSearch on the Business/Production plan (3
+nodes) in the 1-AZ regions. A tier variant of *Analytics for OpenSearch* (tier-variant rule). Pages, read
+2026-11-27: <https://www.ovhcloud.com/en-ie/public-cloud/opensearch/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/opensearch-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/analytics-regions-comparison>
+(the Analytics deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/pricing>, the regions page and
+the prices page.
+
+- `encryption-at-rest`: as for *Analytics for OpenSearch*.
+- `snapshots`: as for *Analytics for OpenSearch*; "Business/Production plan clusters are automatically
+  backed up hourly and daily. Backup retention is 24 hours for hourly backups and 14 days for daily
+  backups." (OpenSearch capabilities page).
+- `node-high-availability`. **Needs:** the Business/Production plan, the plan this offering is named after
+  ("Business/Production: 3 nodes", OpenSearch capabilities page; the Analytics capabilities page's plan
+  table ticks "High availability" for "Business/Production Single AZ"). **Scope: node-level only**, by the
+  node-level bar (*Rules applied*): "When a multi-node Analytics service is deployed, this single AZ setup
+  offers resilience against node and disk failures", and "The nodes of a multi-node Analytics service are
+  deployed in different physical hosts offering resilience to host outage" (Analytics deployment modes
+  page); the product page's Production card has "Automatic failover and 14-day backups". The nodes "may
+  be deployed within a single data center" (same page, *Limitations*), so `zone-high-availability` is not
+  claimed. Whether an index survives a node's loss also depends on its replica count, which the user sets
+  (PRD #571, capability table).
+- No `point-in-time-restore` and no `read-replicas`: as for *Analytics for OpenSearch*.
+- Regions `GRA`, `LIM`, `RBX`, `SBG`, `WAW`: as for *Analytics for OpenSearch*; the 3-AZ regions are
+  *Analytics for OpenSearch Multi-node 3-AZ*'s.
+- **Fixed node count:** exactly 3 nodes ("Dedicated node(s)" 3 in every row). A 2-node domain pointed here
+  is priced at 2 nodes, below what OVHcloud bills; a 6-node one at 6, the node count of the Advanced plan
+  this snapshot does not record.
+
+- **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with OpenSearch", read 2026-11-27, per region from the embedded data). Plans: the Gen 2 Business flavours, priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Production flavours, in all five 1-AZ regions at one price. vCPU and memory per node; the plan's price is the page's price per node × 730 (ADR 0025); the tier runs 3 nodes, and the total is the per-node price × 3 in every row. No price needed rounding.
+- **Included storage, per node:** Gen 2 is **derived**, the page's lower bound (the cluster's total) ÷ 3, as for *Analytics for Kafka*'s Gen 2 flavours: no page states the per-node figure. Gen 3 records none: at 3 nodes, reading the range as per node is an inference no OpenSearch page states (*Left out on purpose*, OpenSearch Gen 3 included storage).
+
+| Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/hour total (3 nodes) | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|---|---|
+| `Business DB1-7` | 2 | 7 GB per node × 3 nodes | From 240 GiB to 720 GiB | 80 (240 ÷ 3, derived) | 0.1763 | 0.5289 | `128.699` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-15` | 4 | 15 GB per node × 3 nodes | From 480 GiB to 1.40625 TiB | 160 (derived) | 0.3526 | 1.0578 | `257.398` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-30` | 8 | 30 GB per node × 3 nodes | From 960 GiB to 2.8125 TiB | 320 (derived) | 0.7112 | 2.1336 | `519.176` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-60` | 16 | 60 GB per node × 3 nodes | From 1.875 TiB to 5.625 TiB | 640 (derived) | 1.424 | 4.272 | `1039.52` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Business DB1-120` | 32 | 120 GB per node × 3 nodes | From 3.75 TiB to 11.25 TiB | 1280 (derived) | 2.8555 | 8.5665 | `2084.515` | `GRA`, `LIM`, `SBG`, `WAW` |
+| `Production B3-8` | 2 | 8 GB per node × 3 nodes | From 80 GiB to 400 GiB | 0 (not stated per node) | 0.1801 | 0.5403 | `131.473` | all |
+| `Production B3-16` | 4 | 16 GB per node × 3 nodes | From 160 GiB to 800 GiB | 0 | 0.3603 | 1.0809 | `263.019` | all |
+| `Production B3-32` | 8 | 32 GB per node × 3 nodes | From 320 GiB to 1.5625 TiB | 0 | 0.7205 | 2.1615 | `525.965` | all |
+| `Production B3-64` | 16 | 64 GB per node × 3 nodes | From 640 GiB to 3.125 TiB | 0 | 1.4411 | 4.3233 | `1052.003` | all |
+
+- **Storage price:** the table's "Price per GB of additional storage:€0.0005/hour/node" (`opensearch-business-additionnal-storage-gb`, one price in every region) × 730 = `0.365` per GiB per node a month, not multiplied by the tier's node count (as for *Analytics for OpenSearch*).
+
+### Analytics for OpenSearch Multi-node 3-AZ
+
+Category `search.opensearch`: Public Cloud Analytics for OpenSearch on the Production plan, Multi AZ, in
+the 3-AZ regions. A tier variant of *Analytics for OpenSearch* (tier-variant rule), the *3-AZ* form of
+*Analytics for OpenSearch Multi-node*. Pages, read 2026-11-27:
+<https://www.ovhcloud.com/en-ie/public-cloud/opensearch/>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/databases/opensearch-capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/analytics-regions-comparison>
+(the Analytics deployment modes page),
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/concepts-security-overview>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/backups>,
+<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/pricing>, the regions page and
+the prices page.
+
+- `encryption-at-rest` and `snapshots`: as for *Analytics for OpenSearch Multi-node*; the pages state them
+  per engine and plan, not per region.
+- `zone-high-availability`. **Needs:** the Production plan, Multi AZ, the plan this offering is named
+  after ("In 3-AZ regions (for example EU-WEST-PAR), only the Discovery, Production and Advanced plans are
+  available.", OpenSearch capabilities page). **Scope: zone-level.** "Multi-node Analytics service is
+  deployed across three independent availability zones, ensuring service continuity even if one zone
+  experiences an outage." (Analytics deployment modes page, *3-AZ Region*); the Analytics capabilities
+  page's plan table ticks "High availability" for "Production Multi AZ", with a 99.95% SLA.
+- `node-high-availability`: implied by zone level (ADR 0011); the node-level sentences of *Analytics for
+  OpenSearch Multi-node* hold for a multi-node Analytics service in any region.
+- Regions `MIL`, `PAR`: the regions page ticks OpenSearch in "3-AZ Paris" and "3-AZ Milan"; the prices page
+  prices the Production flavours there (`EU-WEST-PAR`, `EU-SOUTH-MIL`).
+- **Fixed node count:** exactly 3 nodes, as for *Analytics for OpenSearch Multi-node*.
+
+- **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with OpenSearch", read per region from the embedded data for `EU-WEST-PAR` and `EU-SOUTH-MIL`, the same in both, read 2026-11-27). Plans: the Gen 3 Production flavours; the page prices no Business (Gen 2) flavour there. vCPU and memory per node; the plan's price is the page's price per node × 730 (ADR 0025); the tier runs 3 nodes. No included storage is recorded (as for *Analytics for OpenSearch Multi-node*'s Gen 3 flavours). No price needed rounding.
+
+| Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/hour total (3 nodes) | EUR/month per node (× 730) | Price regions |
+|---|---|---|---|---|---|---|---|---|
+| `Production B3-8` | 2 | 8 GB per node × 3 nodes | From 80 GiB to 400 GiB | 0 (not stated per node) | 0.1907 | 0.5721 | `139.211` | all |
+| `Production B3-16` | 4 | 16 GB per node × 3 nodes | From 160 GiB to 800 GiB | 0 | 0.3815 | 1.1445 | `278.495` | all |
+| `Production B3-32` | 8 | 32 GB per node × 3 nodes | From 320 GiB to 1.5625 TiB | 0 | 0.7629 | 2.2887 | `556.917` | all |
+| `Production B3-64` | 16 | 64 GB per node × 3 nodes | From 640 GiB to 3.125 TiB | 0 | 1.5259 | 4.5777 | `1113.907` | all |
+
+- **Storage price:** as for *Analytics for OpenSearch Multi-node*, `0.365` per GiB per node a month (one price in every region, Paris and Milan included).
 
 ### Block Storage
 
@@ -1788,10 +2125,54 @@ Active Archive, and Cold Archive in Paris only). Pages: <https://www.ovhcloud.co
   another region.
 - **Products not in the snapshot:** Swift Object Storage and Cloud Archive (older Swift-API storage; S3
   Object Storage already serves the category); File Storage Service (general availability not
-  confirmed, the `storage.file` entry above); ClickHouse, OpenSearch and Kafka (no matching taxonomy
-  category); Gateway and the other network services but the Load Balancer (no matching category); Local
-  Zones (PRD #11). MongoDB, Valkey, Load Balancer and Managed Private Registry are offerings since PRD
-  #552 milestone 5.
+  confirmed, the `storage.file` entry above); ClickHouse, Lakehouse, Managed Dashboards, Kafka Connect
+  and Kafka MirrorMaker (no matching taxonomy category); Gateway and the other network services but the
+  Load Balancer (no matching category); Local Zones (PRD #11). MongoDB, Valkey, Load Balancer and Managed
+  Private Registry are offerings since PRD #552 milestone 5, OpenSearch and Kafka since PRD #571
+  milestone 5.
+- **OpenSearch and Kafka Enterprise/Advanced: no offering** (PRD #571 milestone 5, decision D1,
+  under the tier-variant rule). OpenSearch's Advanced (Gen 3) and Enterprise (Gen 2) plans run 6 nodes,
+  keep daily backups 30 days and carry a higher SLA (99.95% Single AZ, 99.99% Multi AZ); Kafka's run 6
+  brokers with the same higher SLA. None of these is a capability in the vocabulary, so the tier adds no
+  capability over Business/Production, and the catalog has no node-count or retention field by which a
+  resource could prefer it: an Advanced plan would never be chosen over the Production plan with the
+  same per-node flavour. As for Roubaix's Kubernetes Standard plan, the tier is left out. Its prices
+  (Kafka Advanced's per-node prices equal Production's in every region; OpenSearch Advanced's are higher,
+  `Advanced B3-8` €0.1927 an hour per node in the 1-AZ regions against Production's €0.1801) are not
+  recorded. A 6-node domain or cluster pointed at a Multi-node offering is priced at 6 nodes of the
+  Production plan.
+- **OpenSearch (all three) and Kafka (both) `point-in-time-restore`:** "Point In Time Recovery (PITR) is
+  not available for OpenSearch." (OpenSearch capabilities page), and the Analytics capabilities page's
+  feature table leaves it empty for OpenSearch; no Kafka page states it, and Kafka keeps no backup. The
+  Analytics backups page's generic "you can restore your data to any point in time within the retention
+  period" is contradicted by the engine page and not used.
+- **Kafka (both) `snapshots`:** "Kafka is a streaming tool. We don't backup Kafka data." (Kafka
+  capabilities page; the Analytics backups page gives Kafka "N/A"). The Kafka product page's
+  "Automatic failover and 14-day backups" (Production card) contradicts the documentation, appears to
+  repeat the OpenSearch card, and is not used for backups.
+- **OpenSearch (all three) and Kafka (both) `read-replicas` and `ipv6`:** the Analytics capabilities
+  page leaves "Read-only nodes" empty for OpenSearch, and no Kafka page states read-only nodes; IPv6 is
+  not stated.
+- **OpenSearch Gen 3 included storage at 3 nodes:** the Discovery, Production and Advanced B3 flavours
+  show the same "Usable storage" range at 1, 3 and 6 nodes (B3-8: "From 80 GiB to 400 GiB"). At one node
+  (Discovery) the lower bound is the node's storage whichever way it is read, as for the Gen 2 Essential
+  plans, and the product page's "Discovery … 1 node included … 40 GB storage" matches `Discovery B3-4`'s
+  lower bound, so the Discovery plans record it. At 3 nodes, reading the range as per node is an
+  inference: no OpenSearch page says so (the Analytics pricing guide's per-node example is Kafka's). So
+  the 3-node Production B3 plans, in *Analytics for OpenSearch Multi-node* and its *3-AZ* form, include
+  0 GiB (PRD #571 milestone 5, decision D2), and an estimate prices all their storage at the storage
+  price: a resource gets an estimate above OVHcloud's price by up to the lower bound × the storage price
+  per node. A later refresh that finds a per-node statement records it.
+- **The Discovery plan of OpenSearch in Paris and Milan:** the OpenSearch capabilities page lists
+  Discovery among the plans "In 3-AZ regions", and the prices page prices it there (`Discovery B3-4`
+  €0.09562 an hour), but it is one node with no high availability, so it would add no capability to the
+  base offering, and as for Valkey, MySQL and PostgreSQL the base offering lists the 1-AZ regions only.
+  Its Paris and Milan prices are not recorded.
+- **OpenSearch Multi-node and Kafka (1-AZ) `zone-high-availability`:** "In a 1-AZ region, the Analytics
+  service nodes may be deployed within a single data center" (Analytics deployment modes page).
+- **Kafka node-level failover in a sentence naming Kafka:** the node-level sentences used for *Analytics for
+  Kafka* are the Analytics family's ("multi-node Analytics service"); no Kafka page states that a cluster
+  survives a broker's loss whatever each topic's replication factor, which the user sets.
 
 Prices and plans left out (PRD #190 milestone 3, read 2026-11-13):
 
@@ -1850,3 +2231,21 @@ Prices and plans left out, and minimum sizes (PRD #552 milestone 5, read 2026-11
   MongoDB* is below what OVHcloud bills, and a 3-node cache on the Multi-node offering above it. No new
   offering has a minimum billed storage size beyond its plans' included storage; File Storage Service's
   150 GiB minimum is in its entry above.
+
+Prices and plans left out, and minimum sizes (PRD #571 milestone 5, read 2026-11-27):
+
+- **Fixed node counts:** OpenSearch Essential/Discovery runs exactly 1 node, Business/Production exactly
+  3 (Enterprise/Advanced 6, not recorded); Kafka Business/Production exactly 3 brokers
+  (Enterprise/Advanced 6, not recorded). An estimate prices a resource at its own `count` (ADR 0025), so
+  a 2-node domain on *Analytics for OpenSearch Multi-node* is priced below what OVHcloud bills, and a
+  6-broker cluster on *Analytics for Kafka* at 6 Production brokers.
+- **Minimum billed sizes:** none beyond a plan's base storage, the lower bound of its "Usable storage"
+  range; billing is per second, with no minimum term (Analytics pricing guide). Recorded as included
+  storage only where stated or derived per node (the offerings' sections).
+- **Kafka B3-64 and larger, `Enterprise DB1-4`:** not sold (the prices page lists no such row).
+- **The undisplayed monthly storage figures** in the page's data (€0.29, €0.33, €0.44 and €0.31 a month)
+  are not the hourly price × 730 and are not used, as for the databases.
+- **Analytics backups:** included in the service price ("The analytics service itself (covering compute,
+  base storage and backups)", Analytics pricing guide), so nothing is added; the guide announces a
+  separate backup line from December 2026, which a later refresh re-checks.
+- **No existing price or plan changed** on the 2026-11-27 re-read (*How it was compiled*).

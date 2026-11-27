@@ -2,7 +2,7 @@
 
 - Inventory file: ``| a | *b* _c_ `d` #e [f](g) ~h~ !.json``
 - Source: `aws`
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-27
 - Region: `fr-par` (the target's default for estimates)
 
 ## Summary
@@ -31,7 +31,7 @@ None.
 ## Cost estimate
 
 - Total: €49.70 per month for 1 of 1 resource
-- Estimate: list prices on 2026-11-26, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-27, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: none in the inventory

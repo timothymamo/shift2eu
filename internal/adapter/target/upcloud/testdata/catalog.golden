@@ -1,6 +1,6 @@
 target: UpCloud
 sourceURL: https://upcloud.com/pricing/
-retrievedOn: 2026-11-13
+retrievedOn: 2026-11-27
 Block Storage | storage.block | snapshots | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
   plans: -
   fixed fees: -
@@ -87,6 +87,14 @@ Cloud Servers | compute.vm | ipv6, snapshots | de-fra1, dk-cph1, es-mad1, fi-hel
   plan: STARTER-4xCPU-8GB | 4 vcpu | 8 GiB | 40 GiB storage | 20.00 EUR @ -
   fixed fees: -
   storage price: 0.2231 EUR @ -
+File Storage | storage.file | - | de-fra1, dk-cph1, fi-hel1, fi-hel2, nl-ams1, se-sto1
+  plans: -
+  fixed fees: -
+  storage price: 0.1521 EUR @ -
+File Storage Encrypted | storage.file | encryption-at-rest | de-fra1, dk-cph1, fi-hel1, fi-hel2, nl-ams1, se-sto1
+  plans: -
+  fixed fees: -
+  storage price: 0.1521 EUR @ -
 Managed Kubernetes | kubernetes.managed | - | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
   plan: PREMIUM-16xCPU-32GB | 16 vcpu | 32 GiB | 300 GiB storage | 310.00 EUR @ -
   plan: PREMIUM-16xCPU-64GB | 16 vcpu | 64 GiB | 300 GiB storage | 384.00 EUR @ -
@@ -154,6 +162,14 @@ Managed Kubernetes Production | kubernetes.managed | node-high-availability | de
   plan: STARTER-4xCPU-16GB | 4 vcpu | 16 GiB | 50 GiB storage | 28.00 EUR @ -
   plan: STARTER-4xCPU-8GB | 4 vcpu | 8 GiB | 40 GiB storage | 20.00 EUR @ -
   fixed fee: 60.8333 EUR @ -
+  storage prices: -
+Managed Load Balancer | network.loadbalancer | - | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
+  plans: -
+  fixed fees: -
+  storage prices: -
+Managed Load Balancer Production | network.loadbalancer | node-high-availability | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
+  plans: -
+  fixed fees: -
   storage prices: -
 Managed MySQL | database.mysql | encryption-at-rest, point-in-time-restore | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
   plan: rdb.memory.12CPU-96GB | 12 vcpu | 96 GiB | 0 GiB storage | 895.2639 EUR @ -
@@ -247,3 +263,24 @@ Managed PostgreSQL Multi-node | database.postgresql | encryption-at-rest, node-h
   plan: rdb.standard.8CPU-32GB | 8 vcpu | 32 GiB | 0 GiB storage | 305.3327 EUR @ -
   fixed fees: -
   storage price: 0.2028 EUR @ -
+Managed Valkey | cache.redis | encryption-at-rest, snapshots | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
+  plan: 1x16xCPU-112GB | 16 vcpu | 112 GiB | 0 GiB storage | 1176.1111 EUR @ -
+  plan: 1x1xCPU-1GB | 1 vcpu | 1 GiB | 0 GiB storage | 8.1111 EUR @ -
+  plan: 1x1xCPU-2GB | 1 vcpu | 2 GiB | 0 GiB storage | 50.6944 EUR @ -
+  plan: 1x2xCPU-14GB | 2 vcpu | 14 GiB | 0 GiB storage | 162.2222 EUR @ -
+  plan: 1x2xCPU-4GB | 2 vcpu | 4 GiB | 0 GiB storage | 91.25 EUR @ -
+  plan: 1x2xCPU-8GB | 2 vcpu | 8 GiB | 0 GiB storage | 121.6667 EUR @ -
+  plan: 1x4xCPU-28GB | 4 vcpu | 28 GiB | 0 GiB storage | 304.1667 EUR @ -
+  plan: 1x8xCPU-56GB | 8 vcpu | 56 GiB | 0 GiB storage | 598.1944 EUR @ -
+  fixed fees: -
+  storage prices: -
+Managed Valkey Multi-node | cache.redis | encryption-at-rest, node-high-availability, snapshots | de-fra1, dk-cph1, es-mad1, fi-hel1, fi-hel2, nl-ams1, pl-waw1, se-sto1
+  plan: 2x16xCPU-112GB | 16 vcpu | 112 GiB | 0 GiB storage | 1176.1111 EUR @ -
+  plan: 2x1xCPU-2GB | 1 vcpu | 2 GiB | 0 GiB storage | 50.6944 EUR @ -
+  plan: 2x2xCPU-14GB | 2 vcpu | 14 GiB | 0 GiB storage | 157.1528 EUR @ -
+  plan: 2x2xCPU-4GB | 2 vcpu | 4 GiB | 0 GiB storage | 86.1806 EUR @ -
+  plan: 2x2xCPU-8GB | 2 vcpu | 8 GiB | 0 GiB storage | 116.5972 EUR @ -
+  plan: 2x4xCPU-28GB | 4 vcpu | 28 GiB | 0 GiB storage | 304.1667 EUR @ -
+  plan: 2x8xCPU-56GB | 8 vcpu | 56 GiB | 0 GiB storage | 593.125 EUR @ -
+  fixed fees: -
+  storage prices: -

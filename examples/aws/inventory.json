@@ -151,6 +151,15 @@
       "workload": "shop"
     },
     {
+      "id": "shop-log-search",
+      "rawType": "AWS::OpenSearchService::Domain",
+      "category": "search.opensearch",
+      "region": "eu-central-1",
+      "capabilities": ["node-high-availability", "encryption-at-rest", "snapshots"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 100, "count": 3 },
+      "workload": "shop"
+    },
+    {
       "id": "shop-cdn",
       "rawType": "AWS::CloudFront::Distribution",
       "category": "unclassified",

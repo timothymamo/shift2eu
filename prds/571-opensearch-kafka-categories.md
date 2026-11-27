@@ -1,7 +1,8 @@
 # PRD #571: OpenSearch and Kafka as taxonomy categories
 
-**Status:** In progress, milestones 1 to 4 done. The maintainer decided all six questions under *Decisions and
-decided questions* on 2026-11-25, as recommended. Milestone 1's ADR is
+**Status:** In progress, milestones 1 to 5 and 7 done. The maintainer decided all six questions under *Decisions and
+decided questions* on 2026-11-25, as recommended, and met decided question 2's gate on 2026-11-27 (both
+Scaleway products generally available since June 2026). Milestone 1's ADR is
 [0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md).
 **Issue:** #571
 
@@ -58,8 +59,8 @@ Each definition is what the taxonomy's doc comment will say (`internal/domain/ta
 
 | Category | Definition | OVHcloud | Scaleway | UpCloud |
 |---|---|---|---|---|
-| `search.opensearch` | A search and analytics engine the provider runs that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch up to 7.10, from which OpenSearch was forked | Public Cloud Databases for OpenSearch (GA) | Cloud Essentials for OpenSearch (general availability not confirmed: decided question 2) | Managed OpenSearch (GA) |
-| `messaging.kafka` | A cluster of brokers the provider runs that speaks the Apache Kafka protocol: a partitioned, replicated log whose consumers track their own offsets | Public Cloud Analytics for Kafka (GA) | Clusters for Apache Kafka® (general availability not confirmed: decided question 2) | none |
+| `search.opensearch` | A search and analytics engine the provider runs that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch up to 7.10, from which OpenSearch was forked | Public Cloud Databases for OpenSearch (GA) | Cloud Essentials for OpenSearch (GA since June 2026: the maintainer, 2026-11-27, issue #571) | Managed OpenSearch (GA) |
+| `messaging.kafka` | A cluster of brokers the provider runs that speaks the Apache Kafka protocol: a partitioned, replicated log whose consumers track their own offsets | Public Cloud Analytics for Kafka (GA) | Clusters for Apache Kafka® (GA since June 2026: the maintainer, 2026-11-27, issue #571) | none |
 
 **Names.** Both are named after the protocol, as `cache.redis`, `database.postgresql` and
 `database.mongodb` are (ADR 0046, *The categories*): an application's client library decides what it
@@ -130,7 +131,12 @@ UpCloud from `upcloud.com/docs/`. The catalog milestones read each page again an
     <https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>.
     Encryption at rest: "Are the nodes and the backups encrypted at rest? Yes, on every plan":
     <https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview>.
-  - **Scaleway, general availability not confirmed.** Cloud Essentials for OpenSearch exists in the
+  - **Scaleway, GA since June 2026** (the maintainer, 2026-11-27, issue #571; until then "general
+    availability not confirmed", as read on 2026-11-25 below). Milestone 7 added *Cloud Essentials for
+    OpenSearch* (Standalone) and *Cloud Essentials for OpenSearch High Availability*
+    (`node-high-availability`), five node types each at the same per-node prices, Block Storage 5K per
+    node, `fr-par` only, no encryption at rest, snapshots or zone continuity stated (Scaleway's
+    `SOURCES.md`). Cloud Essentials for OpenSearch exists in the
     documentation (published 2025-08-05, validated 2025-12-16): deployment configurations High
     Availability ("fault tolerance in case of node failure") and Standalone ("without redundancy"),
     shared and dedicated vCPU node types, storage per node; changelog entries on 2026-07-01 (scale up
@@ -162,7 +168,17 @@ UpCloud from `upcloud.com/docs/`. The catalog milestones read each page again an
     as options. <https://docs.ovhcloud.com/en/guides/public-cloud/databases/kafka-capabilities>. Whether
     the 3-AZ and encryption pages above, written for Public Cloud Databases, also cover Kafka, now under
     "Public Cloud Analytics", is to be checked (milestone 5).
-  - **Scaleway, general availability not confirmed.** Clusters for Apache Kafka® exists in the
+  - *Note (milestone 5, 2026-11-27):* OVHcloud now files both products under **Analytics**; the
+    Databases capabilities page above no longer names OpenSearch, and the catalog cites the Analytics
+    family's capabilities, deployment modes and security pages instead
+    (<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities> and its
+    siblings), which name Kafka and OpenSearch.
+  - **Scaleway, GA since June 2026** (the maintainer, 2026-11-27, issue #571; until then "general
+    availability not confirmed", as read on 2026-11-25 below). Milestone 7 added *Clusters for Apache
+    Kafka* (Single-AZ) and *Clusters for Apache Kafka Multi-AZ* (`node-high-availability` only, no
+    `zone-high-availability`: no page says it keeps serving through the loss of a zone), four Paris node
+    types each, Block Storage 5K per node, `fr-par` only (the SDK does not declare Milan), no encryption at
+    rest or snapshots stated (Scaleway's `SOURCES.md`). Clusters for Apache Kafka® exists in the
     documentation (posted 2025-09-15, validated 2026-06-19): 1 to 30 nodes, in multiples of 3 except
     one; Single-AZ and Multi-AZ ("replicate three nodes over two Availability Zones"; changelog
     2026-07-01: "Multi-AZ is now available … with automatic failover and zero event loss"); dedicated or
@@ -480,7 +496,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    Event Hubs namespaces stay `unclassified`, with the hand rule; synthetic sanitised fixtures (all-zero
    GUIDs), the test that they carry no excluded key, golden and the Azure entries of the e2e category
    list. Depends on 1 and PRD #552 milestone 4.
-5. [ ] **OVHcloud catalog.** Offerings for `search.opensearch` (Discovery, Production and Advanced, with
+5. [x] **OVHcloud catalog.** Offerings for `search.opensearch` (Discovery, Production and Advanced, with
    3-AZ variants of Production and Advanced if milestone 5's check confirms them) and `messaging.kafka`
    (Production and Advanced, Gen 3; Gen 2 Business and Enterprise only if the prices page still sells
    them; 3-AZ variants if the zone continuity sentence covers Kafka), with plans and per-node prices,
@@ -492,6 +508,43 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    maintainer into a scratch directory outside the repository, never committed (as milestones 6 and 7
    say). An existing price or plan the re-read page shows changed is updated to its current value.
    Depends on 1.
+   *Done (2026-11-27):* five offerings, *Analytics for OpenSearch* (Discovery and Gen 2 Essential),
+   *Analytics for OpenSearch Multi-node* (Production and Gen 2 Business) and its *3-AZ* form
+   (Production), *Analytics for Kafka* (Production and Gen 2 Business) and its *3-AZ* form (Production);
+   the pages answered an anonymous client, and no existing price or plan changed. **Advanced (and Gen 2
+   Enterprise) get no offering**, on either engine: they add no capability the vocabulary holds (6
+   nodes, longer backup retention, a higher SLA), and the catalog has no node-count or retention field
+   by which a resource could prefer them over the Production plan with the same per-node flavour, so the
+   tier-variant rule (ADR 0011) leaves them out (OVHcloud `SOURCES.md`, *Left out on purpose*).
+   **The Analytics pages are cited:** OVHcloud now files OpenSearch and Kafka under Analytics, and the
+   Databases capabilities page cited under *The target offerings* no longer names OpenSearch; the
+   Analytics capabilities, deployment modes, security, backups and pricing pages are the sources.
+   **A second sample search cluster:** the AWS sample's `shop-product-search` is zone-redundant, so
+   its best OVHcloud offering is the *3-AZ* form, which is not sold in `GRA`, and it gets no estimate
+   there, on purpose. `examples/aws/inventory.json` gains `shop-log-search`, a sized OpenSearch domain of
+   three nodes without `zone-high-availability`, so the sample also shows an OpenSearch estimate in `GRA` (*Analytics for OpenSearch
+   Multi-node*, `Production B3-8`, €503.92 a month); the sample's counts go from 18 to 19 resources.
+   Milestone 5's decisions, which OVHcloud's `SOURCES.md` and the adapter's tests cite as "PRD #571
+   milestone 5, decision D<n>" (they are not the numbered decided questions below):
+   - **D1. Advanced and Enterprise get no offering.** Under the tier-variant rule (ADR 0011): they add
+     only 6 nodes, longer backup retention and a higher SLA, none of which is a capability in the
+     vocabulary, and the catalog has no node-count or retention field, so an Advanced plan could never
+     be chosen over the Production plan with the same per-node flavour.
+   - **D2. Gen 2 flavours are included, and included storage is per node.** Gen 2 (Essential, Business)
+     is priced in `GRA`, `LIM`, `SBG` and `WAW` only. Where the page's "Usable storage" lower bound is
+     the cluster's total, the per-node figure is derived as the lower bound ÷ the nodes, and recorded
+     as derived. At one node (Discovery and Essential) the lower bound is the node's storage either
+     way, so it is recorded as is; the product page's Discovery card says "1 node included … 40 GB
+     storage". Kafka's Gen 3 lower bound is per node (the pricing guide's worked example). The 3-node
+     OpenSearch Gen 3 (Production) plans get no included storage: no OpenSearch page states their
+     range per node.
+   - **D3. The Analytics pages are cited**, not the Databases pages, for capabilities, deployment
+     modes, security, backups and pricing.
+   - **D4. Storage is priced per GiB per node**, the hourly price × 730, multiplied by `count` in the
+     estimate and never by the tier's node count.
+   - **D5. Five offerings**, named tier variant first, then `3-AZ`: *Analytics for OpenSearch*,
+     *Analytics for OpenSearch Multi-node*, *Analytics for OpenSearch Multi-node 3-AZ*, *Analytics
+     for Kafka* and *Analytics for Kafka 3-AZ*.
 6. [ ] **UpCloud catalog.** Offerings for `search.opensearch`: Managed OpenSearch (1 node) and a
    multi-node variant with `node-high-availability`, `encryption-at-rest` and `snapshots` (the backups
    page; to be checked that a restorable backup meets the `snapshots` definition, as for OVHcloud), in
@@ -500,7 +553,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    the repository, never committed (as milestone 7 says):** the Managed Databases tab's OpenSearch
    table. One saved page serves this milestone and PRD #552 milestone 7 (its Valkey table), so the
    maintainer saves it once, for whichever runs first. Depends on 1 and PRD #552 milestone 7.
-7. [ ] **Scaleway catalog, or its record of absence.** **Gated on decided question 2.** If the maintainer
+7. [x] **Scaleway catalog, or its record of absence.** **Gated on decided question 2.** If the maintainer
    confirms general availability: offerings for `search.opensearch` (Standalone, and High Availability
    with `node-high-availability`) and `messaging.kafka` (Single-AZ, and Multi-AZ with
    `zone-high-availability` only if a page says it keeps serving through the loss of a zone; the
@@ -579,7 +632,9 @@ text as the decision)
    maintainer as recommended):* (a), both categories now, only the Scaleway milestone gated. A category with fewer
    targets is still more precise than `unclassified`: OVHcloud's and UpCloud's offerings are GA, and
    Scaleway shows "no offering in the Scaleway catalog" until its pages confirm GA, as PRD #552 did for
-   OVHcloud File Storage. Milestone 7 then adds the offerings or records their absence.
+   OVHcloud File Storage. Milestone 7 then adds the offerings or records their absence. *Gate
+   (2026-11-27):* met. The maintainer, 2026-11-27, issue #571: both products reached general
+   availability in June 2026, so milestone 7 added their offerings.
 3. **Serverless variants unsized.** *Decision (2026-11-25, decided by the maintainer as recommended):*
    classify them and leave them unsized ("size unknown"), as under *Decisions* (*Serverless variants
    are in, unsized*). The
@@ -819,7 +874,43 @@ text as the decision)
 - Milestone 5: whether the 3-AZ continuity and encryption-at-rest pages cover Kafka under "Public Cloud
   Analytics"; whether the prices page still sells Gen 2 Kafka plans; that the OpenSearch and Kafka
   prices are per node and give vCPUs, memory and storage per node.
+  *Checked (2026-11-27):* both pages are covered by their Analytics copies, which name Kafka ("For all
+  the Analytics engines such as Kafka, OpenSearch and so on, at-rest data encryption covers…"; "Multi-node
+  Analytics service is deployed across three independent availability zones, ensuring service
+  continuity even if one zone experiences an outage"), so Kafka lists `encryption-at-rest` and has a
+  *3-AZ* form with `zone-high-availability`. Gen 2 Kafka Business (and Enterprise) is still sold, in
+  `GRA`, `LIM`, `SBG` and `WAW`, and is recorded (Business). Prices, vCPUs and memory are per node
+  ("Price(excl. VAT/hour/node)", "Information per node"). Storage: Kafka Gen 3's "Usable storage" lower
+  bound is per node (the Analytics pricing guide bills "× 3 nodes"); Gen 2's is the cluster's total, so
+  its per-node figure is derived (÷ the tier's nodes); OpenSearch Gen 3's is not stated per node and is
+  not recorded (0 included).
 - Milestone 6: UpCloud's OpenSearch prices per plan, converted per node, and whether a backup restorable
   to a new service meets `snapshots`.
 - Milestone 7: Scaleway's general availability of both products; their regions; their node types'
   vCPUs, memory and prices; whether any page states encryption at rest, backups or zone continuity.
+  Checked on 2026-11-27 (Scaleway's `SOURCES.md` gives every source):
+  - **General availability:** decided, the maintainer, 2026-11-27, issue #571: both products GA since
+    June 2026. The saved price page's data marks every node type of both `general_availability`, the
+    availability page's data has `isBeta` false for both, and the saved betas page lists neither.
+  - **Regions:** `fr-par` for both. The availability page and its CSV give OpenSearch in Paris and Kafka
+    in Paris and Milan, but SDK `api/searchdb/v1alpha1` and `api/kafka/v1alpha1` both declare `fr-par`
+    alone, so Milan is left out for Kafka (regions rule), with its Milan-only `BROKERNODE-DEDICATED3-*`
+    node types.
+  - **Node types and prices:** from the saved Managed Databases price page's embedded data, which the
+    visible Paris tables agree with, hourly × 730 per node. OpenSearch, both tiers at the same prices:
+    `SEARCHDB-SHARED-2C-8G` 2 vCPU 8 GB €72.27, `-SHARED-4C-16G` 4/16 €144.54, `-DEDICATED2-2C-8G` 2/8
+    €97.09, `-DEDICATED2-4C-16G` 4/16 €193.45, `-DEDICATED2-8C-32G` 8/32 €381.06. Kafka Single-AZ:
+    `BROKERNODE-SHARED-2C-8G` 2/8 €110.96, `-SHARED-4C-16G` 4/16 €221.19, `-DEDICATED-2C-8G` and
+    `-DEDICATED2-2C-8G` 2/8 €138.70; Multi-AZ, the page's "Multi-AZ option" column: €121.91, €243.09,
+    €152.57 and €152.57. Storage Block Storage 5K, €0.000136 per GB and hour, `0.0993` a GiB-month, per
+    node; no node type includes storage.
+  - **Encryption at rest and backups:** none stated. No saved page and no file under
+    `pages/opensearch/` or `pages/clusters-for-kafka/` of `scaleway/docs-content` (commit
+    `839dd366846140226cd50a0b9d10aea20959e514`) mentions encryption at rest, backups or snapshots; Kafka
+    names TLS in transit only. Neither capability is listed.
+  - **Zone continuity:** none stated. OpenSearch pages mention no zones; Kafka's Multi-AZ spreads three
+    brokers over two zones, with "automatic failover and zero event loss" (changelog, 2026-07-01), but no
+    page says the cluster keeps serving through the loss of a zone, so Multi-AZ lists
+    `node-high-availability` only. A three-node Single-AZ Kafka cluster is replicated too, but the tier
+    also sells one node, so it lists no capability and a replicated cluster is priced on Multi-AZ (about
+    10 % high; *Clusters for Apache Kafka*, **Estimate effect**).

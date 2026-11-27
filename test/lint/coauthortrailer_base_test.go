@@ -23,9 +23,16 @@
 // check runs with --no-replace-objects, so a replace ref (git replace), which a
 // checkout can hold uncommitted and unshared, can change neither the commit the
 // base resolves to, nor the list the base holds, nor the commits of the range.
+//
+// It pins the configuration the same three git calls run in too (issue #689):
+// they run with GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1, so a
+// developer's global git configuration and the host's system one can change
+// neither the commit the base resolves to, nor the list the base holds, nor the
+// commits and authors the range reads.
 package lint_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -323,6 +330,245 @@ func TestCoAuthorRangeFindingsIgnoreReplaceRefs(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestCoAuthorRangeFindingsIsolateTheGitConfig pins the configuration the three
+// git calls coAuthorRangeFindings makes run in (issue #689, follow-up to #672):
+// rev-parse resolves the base, show reads the base's allow list and log reads
+// the commits of the range, and each runs with GIT_CONFIG_GLOBAL=/dev/null and
+// GIT_CONFIG_NOSYSTEM=1, so neither the developer's global git configuration
+// nor the host's system one decides what the check reads. A developer whose
+// global configuration changes the encoding git log writes the messages it
+// prints out in would otherwise change what a pull request's check finds, on
+// their machine alone, while the same run on CI finds something else.
+//
+// The case plants a global configuration that would change the reading if git
+// read it: i18n.commitEncoding = ISO-8859-1. A commit that declares no encoding
+// header, as the fixture's commits declare none, holds a message git assumes to
+// be UTF-8; i18n.logOutputEncoding, which defaults to i18n.commitEncoding, is
+// the encoding git log converts that message to on output. The planted file
+// therefore makes git log write the fixture's UTF-8 message out as ISO-8859-1,
+// so the message the check reads holds different bytes than the fixture
+// committed, and the trailer it reports is a different trailer. The planted
+// configuration sits in a HOME of the case's own, and the case sets HOME and
+// XDG_CONFIG_HOME to it, the two places a git process reads a global
+// configuration from. It hands the planted file to neither GIT_CONFIG_GLOBAL nor
+// GIT_CONFIG_SYSTEM: this harness forwards no GIT_* variable to a child
+// (module_test.go's passedEnv), so a value the case set would be inert.
+//
+// The global half, GIT_CONFIG_GLOBAL=/dev/null, is what the case observes: a
+// global configuration arrives in a git process through its HOME, and this
+// harness passes HOME on. The system configuration GIT_CONFIG_NOSYSTEM=1
+// switches off is not observable from here: GIT_CONFIG_SYSTEM and
+// GIT_CONFIG_NOSYSTEM never reach a child of this harness (module_test.go's
+// passedEnv), and /etc/gitconfig is not a file a test may write, so only a
+// change to the check's own child environment would show it.
+// TestCoAuthorGitEnvSwitchesOffTheSystemConfig pins that half where it is
+// observable: over runGitEnv's extra env.
+func TestCoAuthorRangeFindingsIsolateTheGitConfig(t *testing.T) {
+	// No t.Parallel: this case sets the process's HOME for the git calls the
+	// check makes, and t.Setenv refuses a parallel test.
+	repo, env := newCoAuthorRepo(t)
+
+	base := coAuthorRepoCommit(t, env, repo, coAuthorBaseAddress, "docs: the base commit", map[string]string{
+		"README.md":           "the fixture\n",
+		coAuthorAllowListPath: coAuthorBaseAddress + "\n",
+	})
+
+	// The head widens the list with the address it commits with, as the cases
+	// above do: the base's list refuses the added address as an author and as a
+	// trailer, so a reading that changed either leaves a different result. The
+	// trailer's name carries a character outside ASCII, which git log writes out
+	// as another byte when it converts the message to another encoding.
+	widens := coAuthorRepoCommit(t, env, repo, coAuthorBaseAddress,
+		"feat: widen the allow list\n\nCo-Authored-By: Bøb <"+coAuthorAddedAddress+">\n",
+		map[string]string{coAuthorAllowListPath: coAuthorBaseAddress + "\n" + coAuthorAddedAddress + "\n"})
+
+	byAdded := coAuthorRepoCommit(t, env, repo, coAuthorAddedAddress,
+		"docs: a commit the base's list refuses", map[string]string{"README.md": "the fixture, again\n"})
+
+	spec := base + ".." + byAdded
+
+	// The reading with nothing planted by the case is the fixture's own: the
+	// added address as an author and as a trailer, in git log's order, newest
+	// first.
+	cleanCommits, cleanFindings, err := coAuthorRangeFindings(repo, spec)
+	if err != nil {
+		t.Fatalf("coAuthorRangeFindings(%s): %v", spec, err)
+	}
+
+	if len(cleanCommits) != 2 {
+		t.Fatalf("coAuthorRangeFindings(%s) read %d commits, want the range's 2", spec, len(cleanCommits))
+	}
+
+	want := []coAuthorFinding{
+		{SHA: byAdded, Trailer: "author " + coAuthorAddedAddress},
+		{SHA: widens, Trailer: "Co-Authored-By: Bøb <" + coAuthorAddedAddress + ">"},
+	}
+
+	if diff := cmp.Diff(want, cleanFindings, cmpopts.EquateEmpty(), cmpopts.IgnoreFields(coAuthorFinding{}, "Reason")); diff != "" {
+		t.Fatalf("coAuthorRangeFindings(%s) with nothing planted (-want +got):\n%s\n"+
+			"Want the fixture's own findings, so that a planted configuration that changes them is observable", spec, diff)
+	}
+
+	home, _ := coAuthorPlantedGitConfig(t)
+
+	// A developer's global configuration reaches a git process through its HOME,
+	// which the check's git calls inherit today, so the case plants it in a HOME of
+	// its own. GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM are not set here: this
+	// harness forwards no GIT_* variable to a child (module_test.go's passedEnv), so
+	// a value the case set would be inert, and reading the planted file is what
+	// GIT_CONFIG_GLOBAL=/dev/null, which the check's own git calls pass
+	// (coAuthorGitEnv), must prevent.
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+
+	// The premise: a git command of the fixture's own, with the identity and the
+	// HOME the case planted and no isolation of its own, reads the planted
+	// configuration, which makes it convert the commit's UTF-8 message to
+	// ISO-8859-1 as it prints it: the message it prints is not the bytes the
+	// fixture stored. A configuration git ignored would pin nothing.
+	committed := coAuthorRepoGit(t, env, repo, "log", "-1", "--format=%B", "--end-of-options", widens)
+	plantedLog := coAuthorRepoGit(t, coAuthorRepoGlobalEnv(home), repo, "log", "-1", "--format=%B", "--end-of-options", widens)
+
+	if plantedLog == committed {
+		t.Fatalf("git log --format=%%B %s prints the committed message with the planted encoding configuration, want the "+
+			"configuration read, so that a reading that ignored it is observable", widens)
+	}
+
+	commits, findings, err := coAuthorRangeFindings(repo, spec)
+	if err != nil {
+		t.Fatalf("coAuthorRangeFindings(%s) with a planted global git configuration: %v", spec, err)
+	}
+
+	if len(commits) != 2 {
+		t.Fatalf("coAuthorRangeFindings(%s) read %d commits with a planted global git configuration, want the range's 2",
+			spec, len(commits))
+	}
+
+	diff := cmp.Diff(cleanFindings, findings, cmpopts.EquateEmpty(), cmpopts.IgnoreFields(coAuthorFinding{}, "Reason"))
+	if diff != "" {
+		t.Errorf("coAuthorRangeFindings(%s) with a planted global git configuration (-without +with):\n%s\n"+
+			"Want the three git calls of the check to run with GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1: "+
+			"a developer's global configuration must not decide which commits, and which authors, the check reads "+
+			"(issue #689)", spec, diff)
+	}
+}
+
+// TestCoAuthorGitEnvSwitchesOffTheSystemConfig pins coAuthorGitEnv exactly (issue
+// #689, follow-up to #672): the three git calls of the check run with
+// GIT_CONFIG_GLOBAL=/dev/null and GIT_CONFIG_NOSYSTEM=1, so neither the
+// developer's global git configuration nor the host's system one decides which
+// commits, which allow list and which authors the check reads.
+//
+// The global half is observable end to end
+// (TestCoAuthorRangeFindingsIsolateTheGitConfig): a global configuration reaches
+// a git process through the HOME this harness passes on. The system half is not:
+// passedEnv forwards no GIT_* variable and /etc/gitconfig is no file a test may
+// write, so no system configuration reaches the check's own git calls. The case
+// takes the one door this harness has for one, runGitEnv's extra env: it plants a
+// system configuration and pins that coAuthorGitEnv's GIT_CONFIG_NOSYSTEM=1 wins
+// over it, so a check whose git calls read the host's system configuration does
+// not pass either. The value itself is pinned beside that, exactly: a variable
+// dropped from coAuthorGitEnv is a decision this test asks for.
+func TestCoAuthorGitEnvSwitchesOffTheSystemConfig(t *testing.T) {
+	t.Parallel()
+
+	if diff := cmp.Diff([]string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1"}, coAuthorGitEnv); diff != "" {
+		t.Errorf("coAuthorGitEnv (-want +got):\n%s\nWant the check's git calls to run with no global and no system git "+
+			"configuration (issue #689)", diff)
+	}
+
+	// The planted file the case names as the system configuration.
+	_, planted := coAuthorPlantedGitConfig(t)
+
+	root := t.TempDir()
+
+	// The premise: named as the system configuration, with nothing switching the
+	// system scope off, git reads the planted file, so a reading that did not
+	// switch it off reads it too.
+	withSystem, err := runGitEnv(t.Context(), root,
+		[]string{"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=" + planted},
+		"config", "--get", "i18n.commitEncoding")
+	if err != nil {
+		t.Fatalf("git config --get i18n.commitEncoding with %s as the system configuration: %v: the fixture plants no "+
+			"system configuration a reading could pick up", planted, err)
+	}
+
+	if got := strings.TrimSpace(string(withSystem)); got != "ISO-8859-1" {
+		t.Fatalf("git config --get i18n.commitEncoding with %s as the system configuration printed %q, want ISO-8859-1: "+
+			"the fixture plants no system configuration a reading could pick up", planted, got)
+	}
+
+	// The check's own environment, with the same file named as the system
+	// configuration: coAuthorGitEnv's GIT_CONFIG_NOSYSTEM=1 must win, so nothing is
+	// read.
+	out, err := runGitEnv(t.Context(), root, append(slices.Clone(coAuthorGitEnv), "GIT_CONFIG_SYSTEM="+planted),
+		"config", "--get", "i18n.commitEncoding")
+
+	// git config --get exits 1, and prints nothing, when no configuration sets the
+	// key it asks for. That exact failure is the one to want: any other error (git
+	// missing, a root that is no repository, a wrong argv) fails a check that
+	// accepted "some error" too.
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Errorf("git config --get i18n.commitEncoding with %s as the system configuration and coAuthorGitEnv returned %v, want "+
+			"the *exec.ExitError of git's exit 1, its answer for a key no configuration sets: GIT_CONFIG_NOSYSTEM=1 switches "+
+			"the system scope off, so the host's system git configuration cannot decide what the co-author check reads "+
+			"(issue #689)", planted, err)
+	}
+
+	if len(out) != 0 {
+		t.Errorf("git config --get i18n.commitEncoding with %s as the system configuration and coAuthorGitEnv printed %q, want "+
+			"nothing: GIT_CONFIG_NOSYSTEM=1 switches the system scope off, so the host's system git configuration cannot "+
+			"decide what the co-author check reads (issue #689)", planted, strings.TrimSpace(string(out)))
+	}
+}
+
+// coAuthorPlantedGitConfig plants, below a directory of its own, a global git
+// configuration that would change what coAuthorRangeFindings reads if git read
+// it: i18n.commitEncoding = ISO-8859-1. A commit that declares no encoding
+// header, as the fixture's commits declare none, holds its message as UTF-8,
+// which git assumes in that case; i18n.commitEncoding is what
+// i18n.logOutputEncoding defaults to, the encoding git log converts the messages
+// it prints to. The planted file therefore makes git log write a message whose
+// trailer's name carries ø, which the fixture commits as UTF-8, out as
+// ISO-8859-1, where ø is the single byte 0xf8 rather than the two bytes
+// committed. It returns the HOME the configuration sits in and ~/.gitconfig's
+// path.
+func coAuthorPlantedGitConfig(t *testing.T) (home, global string) {
+	t.Helper()
+
+	home = t.TempDir()
+	config := "[i18n]\n\tcommitEncoding = ISO-8859-1\n"
+
+	// git reads the global configuration from $XDG_CONFIG_HOME/git/config and
+	// ~/.gitconfig: plant both, so a case that sets either reads it.
+	global = filepath.Join(home, ".gitconfig")
+
+	for _, path := range []string{global, filepath.Join(home, "xdg", "git", "config")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatalf("create the directory of %s: %v", path, err)
+		}
+
+		if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+			t.Fatalf("write the planted global git configuration %s: %v", path, err)
+		}
+	}
+
+	return home, global
+}
+
+// coAuthorRepoGlobalEnv is the environment coAuthorRepoEnv builds for home, with
+// the three variables that isolate the git configuration removed: what a git
+// command of a fixture runs in when it is meant to read the global configuration
+// the case planted in home, as the check's own git calls do.
+func coAuthorRepoGlobalEnv(home string) []string {
+	return slices.DeleteFunc(coAuthorRepoEnv(home), func(v string) bool {
+		return strings.HasPrefix(v, "GIT_CONFIG_GLOBAL=") ||
+			strings.HasPrefix(v, "GIT_CONFIG_SYSTEM=") ||
+			strings.HasPrefix(v, "GIT_CONFIG_NOSYSTEM=")
+	})
 }
 
 // newCoAuthorRepo creates an empty repository below the case's temporary

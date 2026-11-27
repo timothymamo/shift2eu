@@ -1,0 +1,32 @@
+[
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIK",
+    "Name": "example.com.",
+    "PrivateZone": false
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIM",
+    "Name": "internal.example.com.",
+    "PrivateZone": true
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIL",
+    "Name": "shop-api.example.com.",
+    "PrivateZone": false
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIJ",
+    "Name": "shop.example.com.",
+    "PrivateZone": false
+  },
+  {
+    "Id": "/hostedzone/Z0000000000000000PRIV",
+    "Name": "shop.example.com.",
+    "PrivateZone": true
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIN",
+    "Name": "blog.example.com.",
+    "PrivateZone": false
+  }
+]

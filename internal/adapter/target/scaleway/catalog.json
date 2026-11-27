@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "Scaleway",
   "sourceURL": "https://www.scaleway.com/en/pricing/",
-  "retrievedOn": "2026-11-26",
+  "retrievedOn": "2026-11-27",
   "regions": ["fr-par", "it-mil", "nl-ams", "pl-waw"],
   "defaultRegion": "fr-par",
   "offerings": [
@@ -13,6 +13,60 @@
       "regions": ["fr-par", "it-mil", "nl-ams", "pl-waw"],
       "plans": [],
       "storagePrices": [{ "amount": 0.0949, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Cloud Essentials for OpenSearch",
+      "categories": ["search.opensearch"],
+      "capabilities": [],
+      "regions": ["fr-par"],
+      "plans": [
+        { "name": "SEARCHDB-SHARED-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 72.27, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-SHARED-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 144.54, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-DEDICATED2-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 97.09, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-DEDICATED2-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 193.45, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-DEDICATED2-8C-32G", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 381.06, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.0993, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Cloud Essentials for OpenSearch High Availability",
+      "categories": ["search.opensearch"],
+      "capabilities": ["node-high-availability"],
+      "regions": ["fr-par"],
+      "plans": [
+        { "name": "SEARCHDB-SHARED-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 72.27, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-SHARED-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 144.54, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-DEDICATED2-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 97.09, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-DEDICATED2-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 193.45, "currency": "EUR", "regions": [] }] },
+        { "name": "SEARCHDB-DEDICATED2-8C-32G", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 381.06, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.0993, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Clusters for Apache Kafka",
+      "categories": ["messaging.kafka"],
+      "capabilities": [],
+      "regions": ["fr-par"],
+      "plans": [
+        { "name": "BROKERNODE-SHARED-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 110.96, "currency": "EUR", "regions": [] }] },
+        { "name": "BROKERNODE-SHARED-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 221.19, "currency": "EUR", "regions": [] }] },
+        { "name": "BROKERNODE-DEDICATED-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 138.70, "currency": "EUR", "regions": [] }] },
+        { "name": "BROKERNODE-DEDICATED2-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 138.70, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.0993, "currency": "EUR", "regions": [] }]
+    },
+    {
+      "name": "Clusters for Apache Kafka Multi-AZ",
+      "categories": ["messaging.kafka"],
+      "capabilities": ["node-high-availability"],
+      "regions": ["fr-par"],
+      "plans": [
+        { "name": "BROKERNODE-SHARED-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 121.91, "currency": "EUR", "regions": [] }] },
+        { "name": "BROKERNODE-SHARED-4C-16G", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 243.09, "currency": "EUR", "regions": [] }] },
+        { "name": "BROKERNODE-DEDICATED-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 152.57, "currency": "EUR", "regions": [] }] },
+        { "name": "BROKERNODE-DEDICATED2-2C-8G", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 152.57, "currency": "EUR", "regions": [] }] }
+      ],
+      "storagePrices": [{ "amount": 0.0993, "currency": "EUR", "regions": [] }]
     },
     {
       "name": "Container Registry",

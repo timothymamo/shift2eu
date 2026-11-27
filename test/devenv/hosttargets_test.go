@@ -54,6 +54,7 @@ var hostTargets = []string{
 	"vm-env",
 	"vm-env-check",
 	"vm-gh-wrapper",
+	"vm-pi-tester",
 	"vm-init",
 	"vm-shell",
 	"vm-stop",

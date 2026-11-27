@@ -36,9 +36,9 @@ import (
 // A nil size or usage is "not given", as in the format (ADR 0025), and only a
 // field the category allows may be set (inventory's allowedFields): vcpus on
 // storage.object, say, is refused by inventory.New. Capabilities are empty for a
-// category whose offering the table can reach without one; a cache lists
-// node-level high availability because the plan the tier serves it on is the
-// interesting half of its row (PRD #552).
+// category whose offering the table can reach without one; a cache and a search
+// cluster list node-level high availability because the tier that serves them is
+// the interesting half of their row (PRD #552, PRD #571).
 type representative struct {
 	size         *inventory.Size
 	capabilities []taxonomy.Capability
@@ -62,12 +62,22 @@ type representative struct {
 //     storage, count 1, 730 hours a month;
 //   - database.mongodb: as a managed database, with 100 GiB of storage and count
 //     3, the number of nodes a MongoDB replica set runs;
+//   - search.opensearch and messaging.kafka: 2 vCPU, 8 GiB of memory and 100 GiB
+//     of storage per node, count 3, the nodes a search or a Kafka cluster runs.
+//     The search row lists node-high-availability, as the cache does: three nodes
+//     are the multi-node tier, and OVHcloud's single-node Discovery plan is no
+//     3-node cluster (PRD #571 milestone 5), so the row is priced on Production.
+//     Every Kafka plan is multi-node, so its row needs no capability. Both read
+//     the 1-AZ tier the default region serves (the 3-AZ variants are in MIL and
+//     PAR only);
 //   - cache.redis: 6 GiB of memory per node, count 2 and 730 hours a month, and
 //     node-high-availability, since a replicated cache is what the tier is for;
 //     no vCPUs, which the category does not take (a cache is matched on memory
 //     alone, ADR 0046);
 //   - storage.block: one 100 GiB volume (count 1);
 //   - storage.object: 100 GiB stored;
+//   - storage.file: one 500 GiB share, above UpCloud's 250 GiB minimum billed
+//     size, so the row prices the GiB the inventory names;
 //   - serverless.function: a function of 1 GiB of memory, the only size field
 //     the category takes;
 //   - messaging.queue, messaging.topic, serverless.container,
@@ -98,6 +108,15 @@ var representatives = map[taxonomy.Category]representative{
 		size:  &inventory.Size{VCPUs: number(2), MemoryGiB: number(8), StorageGiB: number(100), Count: count(3)},
 		usage: &inventory.Usage{HoursPerMonth: number(730)},
 	},
+	taxonomy.SearchOpenSearch: {
+		size:         &inventory.Size{VCPUs: number(2), MemoryGiB: number(8), StorageGiB: number(100), Count: count(3)},
+		capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+		usage:        &inventory.Usage{HoursPerMonth: number(730)},
+	},
+	taxonomy.MessagingKafka: {
+		size:  &inventory.Size{VCPUs: number(2), MemoryGiB: number(8), StorageGiB: number(100), Count: count(3)},
+		usage: &inventory.Usage{HoursPerMonth: number(730)},
+	},
 	taxonomy.CacheRedis: {
 		size:         &inventory.Size{MemoryGiB: number(6), Count: count(2)},
 		capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
@@ -108,6 +127,9 @@ var representatives = map[taxonomy.Category]representative{
 	},
 	taxonomy.StorageObject: {
 		size: &inventory.Size{StorageGiB: number(100)},
+	},
+	taxonomy.StorageFile: {
+		size: &inventory.Size{StorageGiB: number(500)},
 	},
 	taxonomy.ServerlessFunction: {
 		size: &inventory.Size{MemoryGiB: number(1)},
@@ -144,12 +166,16 @@ func TestEstimatePerTargetAndCategory(t *testing.T) {
 	out.WriteString("bare-metal server is 4 vCPU and 32 GiB, the smallest plan OVHcloud's and Scaleway's bare-metal\n")
 	out.WriteString("offerings cover (UpCloud offers none); Kubernetes counts 3 nodes of the virtual-machine size; a\n")
 	out.WriteString("managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB\n")
-	out.WriteString("volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue, a topic and a\n")
-	out.WriteString("serverless container take no size.\n")
+	out.WriteString("volume, object storage 100 GiB stored and a file share 500 GiB provisioned; a function is 1 GiB of\n")
+	out.WriteString("memory; a queue, a topic and a serverless container take no size.\n")
 	out.WriteString("A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a\n")
-	out.WriteString("replica set; a cache is 6 GiB of memory per node, count 2 and `node-high-availability`, so it is\n")
-	out.WriteString("priced on the multi-node tier's per-node price, where that tier serves the cache or ties with the\n")
-	out.WriteString("base offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SOURCES.md,\n")
+	out.WriteString("replica set; a search cluster and a Kafka cluster are the same size, 2 vCPU, 8 GiB of memory\n")
+	out.WriteString("and 100 GiB of storage per node at count 3, on the 1-AZ tier the default region serves; the\n")
+	out.WriteString("search cluster also lists `node-high-availability`, as a cache does, because three nodes are\n")
+	out.WriteString("the multi-node tier and OVHcloud's single-node Discovery plan is no 3-node cluster; a cache is\n")
+	out.WriteString("6 GiB of memory per node, count 2 and `node-high-availability`, so it is priced on the\n")
+	out.WriteString("multi-node tier's per-node price, where that tier serves the cache or ties with the base\n")
+	out.WriteString("offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SOURCES.md,\n")
 	out.WriteString("*Estimate effect*), and its capability is shown after its size; a load balancer and a container\n")
 	out.WriteString("registry take no size and are not priced.\n\n")
 

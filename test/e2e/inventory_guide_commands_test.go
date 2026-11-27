@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // This file runs a command docs/guide/inventory.md documents, not just reads
@@ -45,9 +47,9 @@ const listCollectionsFile = "opensearchserverless-collections.json"
 // file the pages are appended to, which the rest of the block writes through.
 const listCollectionsBlockStart = `f="$out/` + listCollectionsFile + `"`
 
-// fakeAWSCallSeparator is the line the fake aws program writes before each
-// call's arguments, so a call's words stay apart from the next call's.
-const fakeAWSCallSeparator = "--call--"
+// fakeCallSeparator is the line a fake program writes before each call's
+// arguments, so a call's words stay apart from the next call's.
+const fakeCallSeparator = "--call--"
 
 // fakeAWSResponse is the answer the fake aws program gives to one call: the
 // JSON value it prints to standard output, or the failure it reports.
@@ -108,6 +110,30 @@ var repeatingToken = []fakeAWSResponse{
 	{stdout: `{"collectionSummaries": [{"id": "fedcba9876543210fedcba9876543210", "name": "shop-thumbnails"}], "nextToken": "t2"}`},
 }
 
+// guideShell is one shell the guide's blocks are run under here.
+type guideShell struct {
+	// name is how the subtests name the shell.
+	name string
+	// shell is the shell the block runs under, by name on PATH.
+	shell string
+	// preamble is written before the block, for a shell that has to run in a
+	// stricter mode than its default.
+	preamble string
+}
+
+// guidePOSIXShells are the shells the guide says its commands are for (bash,
+// zsh), the two smaller POSIX ones a visitor may have instead (sh, dash), and a
+// bash that stops on an unset variable. The guide promises all of them, so every
+// block it documents has to run in every one, whatever words or files it uses
+// (review finding N-a).
+var guidePOSIXShells = []guideShell{
+	{name: "bash", shell: "bash"},
+	{name: "zsh", shell: "zsh"},
+	{name: "sh", shell: "sh"},
+	{name: "dash", shell: "dash"},
+	{name: "bash with set -u", shell: "bash", preamble: "set -u\n"},
+}
+
 // TestInventoryGuideListCollectionsBlock runs the guide's own list-collections
 // block, extracted from docs/guide/inventory.md, against a fake aws program
 // (review findings S-A, S-B and N-a): it pages through every page, it says the
@@ -131,22 +157,22 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 
 		if len(run.calls) != 2 {
 			t.Fatalf("the block called aws %d times, want 2: one call per page, and the first page names a token for the second\n%s",
-				len(run.calls), formatFakeAWSCalls(run.calls))
+				len(run.calls), formatFakeCalls(run.calls))
 		}
 
 		if slices.Contains(run.calls[0], "--next-token") {
 			t.Errorf("the first call passes a continuation token, want none: the loop starts at the first page\n%s",
-				formatFakeAWSCalls(run.calls))
+				formatFakeCalls(run.calls))
 		}
 
 		token, ok := passedNextToken(run.calls[1])
 		switch {
 		case !ok:
 			t.Errorf("the second call passes no --next-token argument, want --next-token and then t2, as two words, or the call returns the first page again\n%s",
-				formatFakeAWSCalls(run.calls))
+				formatFakeCalls(run.calls))
 		case token != "t2":
 			t.Errorf("the second call passes --next-token %q, want the token the first page named, t2\n%s",
-				token, formatFakeAWSCalls(run.calls))
+				token, formatFakeCalls(run.calls))
 		}
 
 		if len(run.collections) != 2 {
@@ -162,7 +188,7 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 
 		if len(run.calls) != 2 {
 			t.Fatalf("the block called aws %d times, want 2: the second page is the one that fails, so the run has to reach it before it reports anything\n%s",
-				len(run.calls), formatFakeAWSCalls(run.calls))
+				len(run.calls), formatFakeCalls(run.calls))
 		}
 
 		if !strings.Contains(run.stderr, listCollectionsFile) {
@@ -188,7 +214,7 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 
 		if len(run.calls) != 1 {
 			t.Errorf("the block called aws %d times, want 1: the first page is the one that fails, and there is no token to ask a second page with\n%s",
-				len(run.calls), formatFakeAWSCalls(run.calls))
+				len(run.calls), formatFakeCalls(run.calls))
 		}
 
 		if len(run.collections) != 0 {
@@ -214,7 +240,7 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 
 		if len(run.calls) != 2 {
 			t.Errorf("the block called aws %d times, want 2: the second page names the token the first one named, so a loop that trusts the token asks the same page for ever\n%s",
-				len(run.calls), formatFakeAWSCalls(run.calls))
+				len(run.calls), formatFakeCalls(run.calls))
 		}
 
 		if !strings.Contains(run.stderr, listCollectionsFile) {
@@ -227,21 +253,9 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 	// array, such as one holding the CLI arguments still to pass and expanded
 	// as "${next[@]}", is not POSIX: under set -u a bash before 4.4 takes its
 	// empty expansion for an unset variable and stops the whole command (review
-	// finding N-a). So the block has to run in each of these, whatever words it
-	// pages with.
-	shells := []struct {
-		name     string
-		shell    string
-		preamble string
-	}{
-		{name: "bash", shell: "bash"},
-		{name: "zsh", shell: "zsh"},
-		{name: "sh", shell: "sh"},
-		{name: "dash", shell: "dash"},
-		{name: "bash with set -u", shell: "bash", preamble: "set -u\n"},
-	}
-
-	for _, sh := range shells {
+	// finding N-a). So the block has to run in each of guidePOSIXShells,
+	// whatever words it pages with.
+	for _, sh := range guidePOSIXShells {
 		t.Run("runs under "+sh.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -258,7 +272,7 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 
 			if len(run.calls) != 2 {
 				t.Errorf("the block called aws %d times under %s, want 2\n%s",
-					len(run.calls), sh.name, formatFakeAWSCalls(run.calls))
+					len(run.calls), sh.name, formatFakeCalls(run.calls))
 			}
 
 			if len(run.collections) != 2 {
@@ -345,9 +359,68 @@ const blockRunTimeout = 20 * time.Second
 func runInventoryGuideBlock(t *testing.T, shellName, preamble, block string, pages []fakeAWSResponse) listCollectionsRun {
 	t.Helper()
 
-	shell, err := exec.LookPath(shellName)
+	run := runGuideBlock(t, guideBlockOptions{
+		shell:    shellName,
+		preamble: preamble,
+		block:    block,
+		fakes: map[string]func(callLog string) []byte{
+			"aws": func(callLog string) []byte { return fakeAWSProgram(callLog, callLog+".count", pages) },
+		},
+	})
+
+	return listCollectionsRun{
+		calls:       run.calls,
+		stderr:      run.stderr,
+		exitStatus:  run.exitStatus,
+		collections: decodePages(t, filepath.Join(run.outDir, listCollectionsFile)),
+	}
+}
+
+// guideBlockOptions describes one run of a block of the guide.
+type guideBlockOptions struct {
+	// shell is the shell the block runs under, by name on PATH.
+	shell string
+	// preamble is written before the block, for a shell that has to run in a
+	// stricter mode; empty for a plain run.
+	preamble string
+	// block is the guide's command text itself, never a copy of it.
+	block string
+	// fakes are the programs the run puts first on PATH, by the name the block
+	// calls: each is given the path of the log it records its calls in.
+	fakes map[string]func(callLog string) []byte
+	// files are the files the run writes into its $out directory before the
+	// block starts, by name: what the guide's earlier commands would have left.
+	files map[string]string
+	// env are the shell variables the block reads, as VARIABLE=value, beside the
+	// $out directory the run names itself.
+	env []string
+}
+
+// guideBlockRun is what one run of a block of the guide did.
+type guideBlockRun struct {
+	// calls holds one entry per call of the run's fake programs, in order, each
+	// the call's arguments as the separate words the shell passed.
+	calls [][]string
+	// stderr is everything the block wrote to standard error.
+	stderr string
+	// exitStatus is the status the shell exited with.
+	exitStatus int
+	// outDir is the block's $out directory, holding the files it wrote.
+	outDir string
+}
+
+// runGuideBlock runs a block of the guide under a POSIX shell, with the fake
+// programs the block calls standing where those programs do: no network, no real
+// CLI and no credentials (CLAUDE.md rules 1 and 3). The PATH it runs with names
+// the fakes' directory, jq's and the shell's and nothing else, so nothing of the
+// test process's environment goes with the run. The deadline is the run's, not
+// the test's: a block that never finishes is stopped here and reported.
+func runGuideBlock(t *testing.T, options guideBlockOptions) guideBlockRun {
+	t.Helper()
+
+	shell, err := exec.LookPath(options.shell)
 	if err != nil {
-		t.Fatalf("%s is not installed, so the guide's block cannot be run with it: %v", shellName, err)
+		t.Fatalf("%s is not installed, so the guide's block cannot be run with it: %v", options.shell, err)
 	}
 
 	jq := jqPath(t)
@@ -364,30 +437,31 @@ func runInventoryGuideBlock(t *testing.T, shellName, preamble, block string, pag
 		t.Fatalf("create %s: %v", outDir, err)
 	}
 
+	for name, content := range options.files {
+		if err := os.WriteFile(filepath.Join(outDir, name), []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s into the run's $out: %v", name, err)
+		}
+	}
+
 	callLog := filepath.Join(dir, "calls.log")
-	callCount := filepath.Join(dir, "calls.count")
 
-	writeScript(t, filepath.Join(fakeDir, "aws"), fakeAWSProgram(callLog, callCount, pages))
+	for name, program := range options.fakes {
+		writeScript(t, filepath.Join(fakeDir, name), program(callLog))
+	}
 
-	script := filepath.Join(dir, "list-collections.sh")
-	if err := os.WriteFile(script, []byte(preamble+block), 0o600); err != nil {
+	script := filepath.Join(dir, "block.sh")
+	if err := os.WriteFile(script, []byte(options.preamble+options.block), 0o600); err != nil {
 		t.Fatalf("write %s: %v", script, err)
 	}
 
-	// The block calls jq and aws by name, so the PATH it runs with names their
-	// directories and nothing of the test process's environment goes with it:
-	// there are no credentials in it to hand a visitor's command (CLAUDE.md
-	// rule 3), and the fake aws stands where a real one would. The deadline is
-	// the run's, not the test's: a block that asks the same page for ever is
-	// stopped here and reported below.
 	ctx, cancel := context.WithTimeout(t.Context(), blockRunTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, shell, script)
-	cmd.Env = []string{
+	cmd.Env = append([]string{
 		"PATH=" + fakeDir + ":" + filepath.Dir(jq) + ":" + filepath.Dir(shell),
 		"out=" + outDir,
-	}
+	}, options.env...)
 
 	var stderr bytes.Buffer
 
@@ -397,7 +471,7 @@ func runInventoryGuideBlock(t *testing.T, shellName, preamble, block string, pag
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
-			t.Fatalf("the block was still running after %s, so it never reaches its last page: %v; stderr = %q",
+			t.Fatalf("the block was still running after %s, so it never finishes: %v; stderr = %q",
 				blockRunTimeout, ctx.Err(), stderr.String())
 		}
 
@@ -409,11 +483,11 @@ func runInventoryGuideBlock(t *testing.T, shellName, preamble, block string, pag
 		exitStatus = exitErr.ExitCode()
 	}
 
-	return listCollectionsRun{
-		calls:       fakeAWSCalls(t, callLog),
-		stderr:      stderr.String(),
-		exitStatus:  exitStatus,
-		collections: decodePages(t, filepath.Join(outDir, listCollectionsFile)),
+	return guideBlockRun{
+		calls:      fakeCalls(t, callLog),
+		stderr:     stderr.String(),
+		exitStatus: exitStatus,
+		outDir:     outDir,
 	}
 }
 
@@ -428,7 +502,7 @@ func fakeAWSProgram(callLog, callCount string, pages []fakeAWSResponse) []byte {
 	program.WriteString("# A fake aws program, written by the e2e test: it records each call's\n")
 	program.WriteString("# arguments and answers with one canned page per call.\n")
 	program.WriteString("{\n")
-	program.WriteString("  printf '%s\\n' " + shellQuote(fakeAWSCallSeparator) + "\n")
+	program.WriteString("  printf '%s\\n' " + shellQuote(fakeCallSeparator) + "\n")
 	program.WriteString("  for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done\n")
 	program.WriteString("} >> " + shellQuote(callLog) + "\n")
 	program.WriteString("count=0\n")
@@ -465,9 +539,9 @@ func fakeAWSProgram(callLog, callCount string, pages []fakeAWSResponse) []byte {
 	return []byte(program.String())
 }
 
-// fakeAWSCalls returns the calls the fake aws recorded, one entry per call with
-// the call's arguments as the separate words it was given.
-func fakeAWSCalls(t *testing.T, callLog string) [][]string {
+// fakeCalls returns the calls a run's fake programs recorded, one entry per call
+// with the call's arguments as the separate words it was given.
+func fakeCalls(t *testing.T, callLog string) [][]string {
 	t.Helper()
 
 	document, err := os.ReadFile(callLog)
@@ -487,11 +561,11 @@ func fakeAWSCalls(t *testing.T, callLog string) [][]string {
 
 	for _, line := range strings.Split(strings.TrimSuffix(string(document), "\n"), "\n") {
 		switch {
-		case line == fakeAWSCallSeparator:
+		case line == fakeCallSeparator:
 			calls = append(calls, nil)
 		case len(calls) == 0:
-			t.Fatalf("%s starts with %q, not the separator %q the fake aws writes before a call",
-				callLog, line, fakeAWSCallSeparator)
+			t.Fatalf("%s starts with %q, not the separator %q the fake writes before a call",
+				callLog, line, fakeCallSeparator)
 		default:
 			calls[len(calls)-1] = append(calls[len(calls)-1], line)
 		}
@@ -500,12 +574,12 @@ func fakeAWSCalls(t *testing.T, callLog string) [][]string {
 	return calls
 }
 
-// formatFakeAWSCalls renders the calls for a failure message: one line per
-// call, its arguments quoted one by one, so a check that compares argv words
-// shows which word was where.
-func formatFakeAWSCalls(calls [][]string) string {
+// formatFakeCalls renders the calls for a failure message: one line per call,
+// its arguments quoted one by one, so a check that compares argv words shows
+// which word was where.
+func formatFakeCalls(calls [][]string) string {
 	if len(calls) == 0 {
-		return "the fake aws was never called"
+		return "the fake program was never called"
 	}
 
 	var formatted strings.Builder
@@ -581,7 +655,273 @@ func writeScript(t *testing.T, path string, program []byte) {
 }
 
 // shellQuote quotes value as one word of a POSIX shell, so a path or a page
-// holding a space or a quote reaches the fake aws as the single word it is.
+// holding a space or a quote reaches a fake program as the single word it is.
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// The files the guide's Cloud DNS commands write, the call the record-set loop
+// runs, and the first line of the block that runs it: the test below extracts
+// the block from the guide by these, never by a line number.
+const (
+	// cloudDNSManagedZonesFile is the file the managed-zones call writes: the
+	// zone list the record-set loop reads, one public zone per line.
+	cloudDNSManagedZonesFile = "dns-managed-zones.json"
+	// cloudDNSRoutedFile is the file the record-set loop writes: one count per
+	// public zone, and no record.
+	cloudDNSRoutedFile = "dns-routed-record-sets.json"
+	// cloudDNSRecordSetsCall is the call the loop runs once per public zone.
+	cloudDNSRecordSetsCall = "gcloud dns record-sets list"
+	// cloudDNSBlockStart is the first line of the block: the jq filter that
+	// selects the public zones out of the managed-zones file.
+	cloudDNSBlockStart = `jq -r '.[] | select(.visibility == "public")`
+	// cloudDNSProject is the project the guide's calls run in, which the
+	// synthetic zone list names as the guide's jq filter would have.
+	cloudDNSProject = "example-project"
+)
+
+// The two zones the synthetic zone list holds, and the one count the fake
+// gcloud answers the public one with: the types of two record sets that route by
+// a policy, never a record's values.
+const (
+	// cloudDNSPublicZoneName is the public zone's name. It holds a `t`, the
+	// character a line split on the wrong characters cuts a name at, and it is
+	// what the record-set call has to be given.
+	cloudDNSPublicZoneName = "test-zone"
+	// cloudDNSPublicZoneID is the number Google gave that zone: the key the
+	// guide writes the count under, so the program can join it to the asset row.
+	cloudDNSPublicZoneID = "1234567890123456789"
+	// cloudDNSPrivateZoneName is the private zone's name, which no call may
+	// mention: only a public zone's record sets say whether it routes by a
+	// policy.
+	cloudDNSPrivateZoneName = "shop-internal"
+	// cloudDNSRoutedTypes is what the fake gcloud prints for the public zone,
+	// one record type per line.
+	cloudDNSRoutedTypes = "A\nAAAA"
+)
+
+// cloudDNSManagedZones is the zone list the guide's managed-zones call would
+// have left: one public zone and one private one, in the shape the guide's jq
+// filter gives them, each with the project it adds.
+const cloudDNSManagedZones = `[
+  {"kind": "dns#managedZone", "project": "example-project", "id": "1234567890123456789", "name": "test-zone", "visibility": "public", "dnssecConfig": {"state": "off"}},
+  {"kind": "dns#managedZone", "project": "example-project", "id": "9876543210987654321", "name": "shop-internal", "visibility": "private", "dnssecConfig": {"state": "off"}}
+]`
+
+// TestInventoryGuideCloudDNSRecordSetsBlock runs the guide's own Cloud DNS
+// record-set block, read out of docs/guide/inventory.md, under the POSIX shells
+// the guide promises: the block reads each public zone's line of the
+// managed-zones file for the zone's number and its name, and asks gcloud how many
+// of that zone's record sets route by a policy. Under dash, `IFS=$'\t'` is the
+// three characters `$`, `\` and `t`: the line `1234567890123456789 test-zone`
+// then reads as a number with the separator still in it and a name cut at its own
+// `t`, so the call asks about a zone that does not exist, the call fails, and
+// every public zone loses dns-routing with no word about it (review finding,
+// round 2). The block runs against a fake gcloud the test writes into a temporary
+// directory: no network, no real gcloud and no credentials (CLAUDE.md rules 1
+// and 3).
+func TestInventoryGuideCloudDNSRecordSetsBlock(t *testing.T) {
+	t.Parallel()
+
+	block := inventoryGuideCloudDNSBlock(t)
+
+	// The same shells the list-collections block runs under: the guide promises
+	// bash and zsh, and a visitor may have sh or dash instead (review finding,
+	// round 3).
+	for _, sh := range guidePOSIXShells {
+		shellName := sh.name
+
+		t.Run("runs under "+sh.name, func(t *testing.T) {
+			t.Parallel()
+
+			if _, err := exec.LookPath(sh.shell); err != nil {
+				t.Skipf("%s is not installed, so this shell cannot be checked here: %v", sh.shell, err)
+			}
+
+			run := runGuideBlock(t, guideBlockOptions{
+				shell:    sh.shell,
+				preamble: sh.preamble,
+				block:    block,
+				fakes:    map[string]func(callLog string) []byte{"gcloud": fakeGCloudProgram},
+				files:    map[string]string{cloudDNSManagedZonesFile: cloudDNSManagedZones},
+				env:      []string{"project=" + cloudDNSProject},
+			})
+
+			if run.exitStatus != 0 {
+				t.Errorf("the block exited %d under %s, want 0, so the guide's commands are not the POSIX shell's it says they are; stderr = %q",
+					run.exitStatus, shellName, run.stderr)
+			}
+
+			if len(run.calls) != 1 {
+				t.Fatalf("the block called gcloud %d times under %s, want 1: the zone list holds one public zone, which the call runs for, and one private zone, which it must not\n%s",
+					len(run.calls), shellName, formatFakeCalls(run.calls))
+			}
+
+			call := run.calls[0]
+
+			for _, want := range []struct {
+				word string
+				why  string
+			}{
+				{"--zone=" + cloudDNSPublicZoneName, "the public zone's name, read out of the zone list: a line split on characters it does not hold leaves the name empty or cut in two, and the call asks about a zone that does not exist"},
+				{"--project=" + cloudDNSProject, "the project the guide runs its calls in"},
+			} {
+				if !slices.Contains(call, want.word) {
+					t.Errorf("the call passes no %q under %s, want %s\n%s",
+						want.word, shellName, want.why, formatFakeCalls(run.calls))
+				}
+			}
+
+			for _, word := range call {
+				if strings.Contains(word, cloudDNSPrivateZoneName) {
+					t.Errorf("the call names the private zone %q under %s, want no private zone called: only a public zone's record sets say whether the zone routes by a policy, and the private zone's are no part of the inventory (PRD #581)\n%s",
+						word, shellName, formatFakeCalls(run.calls))
+				}
+			}
+
+			want := []routedRecordSet{{
+				Project:          cloudDNSProject,
+				ID:               cloudDNSPublicZoneID,
+				RoutedRecordSets: 2,
+			}}
+
+			if diff := cmp.Diff(want, routedRecordSets(t, filepath.Join(run.outDir, cloudDNSRoutedFile))); diff != "" {
+				t.Errorf("%s holds the wrong entries under %s (-want +got):\n%s",
+					cloudDNSRoutedFile, shellName, diff)
+			}
+		})
+	}
+}
+
+// inventoryGuideCloudDNSBlock returns the guide's block that counts each public
+// zone's routed record sets, read from the markdown itself: the test runs the
+// command the guide gives, never a copy that could drift from it.
+func inventoryGuideCloudDNSBlock(t *testing.T) string {
+	t.Helper()
+
+	document, err := os.ReadFile(inventoryGuidePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", inventoryGuidePath, err)
+	}
+
+	lines := strings.Split(string(document), "\n")
+
+	start := -1
+
+	for i, line := range lines {
+		if strings.HasPrefix(line, cloudDNSBlockStart) {
+			start = i
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("%s no longer holds the block that counts each public zone's routed record sets: no line starts with %s",
+			inventoryGuidePath, cloudDNSBlockStart)
+	}
+
+	end := -1
+
+	for i := start; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+
+		if strings.HasPrefix(trimmed, "done") && strings.Contains(trimmed, cloudDNSRoutedFile) {
+			end = i
+
+			break
+		}
+	}
+
+	if end < 0 {
+		t.Fatalf("%s: the Cloud DNS block that starts at line %d has no line that ends its loop and writes %s, so the loop it documents cannot be read",
+			inventoryGuidePath, start+1, cloudDNSRoutedFile)
+	}
+
+	block := strings.Join(lines[start:end+1], "\n") + "\n"
+
+	// Guard the extraction itself: a block that lost the call, the zone list or
+	// the file it writes would make every check below pass over something that is
+	// not the command the guide documents.
+	for _, want := range []string{
+		cloudDNSRecordSetsCall,
+		cloudDNSManagedZonesFile,
+		cloudDNSRoutedFile,
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("%s lines %d-%d hold no %q, so they are not the Cloud DNS block this test runs:\n%s",
+				inventoryGuidePath, start+1, end+1, want, block)
+		}
+	}
+
+	return block
+}
+
+// fakeGCloudProgram returns a shell program that stands where gcloud does: it
+// records the arguments of every call, one call after another, and answers the
+// one zone the test's zone list holds with cloudDNSRoutedTypes. Any other zone
+// fails as a real call for a zone that does not exist does, so a loop that reads
+// a zone's name wrong is visible rather than silently answered.
+func fakeGCloudProgram(callLog string) []byte {
+	var program strings.Builder
+
+	program.WriteString("#!/bin/sh\n")
+	program.WriteString("# A fake gcloud program, written by the e2e test: it records each call's\n")
+	program.WriteString("# arguments and answers the one zone the test's zone list holds.\n")
+	program.WriteString("{\n")
+	program.WriteString("  printf '%s\\n' " + shellQuote(fakeCallSeparator) + "\n")
+	program.WriteString("  for argument in \"$@\"; do printf '%s\\n' \"$argument\"; done\n")
+	program.WriteString("} >> " + shellQuote(callLog) + "\n")
+	program.WriteString("zone=\n")
+	program.WriteString("for argument in \"$@\"; do\n")
+	program.WriteString("  case $argument in --zone=*) zone=${argument#--zone=} ;; esac\n")
+	program.WriteString("done\n")
+	program.WriteString("case $zone in\n")
+	program.WriteString(shellQuote(cloudDNSPublicZoneName) + ")\n")
+	program.WriteString("  printf '%s\\n' " + shellQuote(cloudDNSRoutedTypes) + "\n")
+	program.WriteString("  ;;\n")
+	program.WriteString("*)\n")
+	fmt.Fprintf(&program, "  printf 'the fake gcloud knows no zone %%s: the test records only %s\\n' \"$zone\" >&2\n",
+		cloudDNSPublicZoneName)
+	program.WriteString("  exit 1\n")
+	program.WriteString("  ;;\n")
+	program.WriteString("esac\n")
+
+	return []byte(program.String())
+}
+
+// routedRecordSet is one entry of the file the record-set loop writes: the
+// project the zone is in, the zone's number the program joins the count to the
+// asset row on, and how many of the zone's record sets route by a policy. A
+// record's own values are no part of it.
+type routedRecordSet struct {
+	Project          string `json:"project"`
+	ID               string `json:"id"`
+	RoutedRecordSets int    `json:"routedRecordSets"`
+}
+
+// routedRecordSets returns the entries of the file the record-set loop wrote,
+// failing on any entry that carries more than the three fields the guide's loop
+// writes: a record's values in that file are exactly what the milestone keeps
+// out of it. A missing file is a failure too, because the loop writes it with
+// `jq -s .` whatever the zones answered.
+func routedRecordSets(t *testing.T, path string) []routedRecordSet {
+	t.Helper()
+
+	document, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the file the record-set loop wrote, %s: %v", path, err)
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.DisallowUnknownFields()
+
+	var entries []routedRecordSet
+
+	if err := decoder.Decode(&entries); err != nil {
+		t.Fatalf("%s is not the list of {project, id, routedRecordSets} the guide's loop writes: %v; document = %q",
+			path, err, document)
+	}
+
+	return entries
 }

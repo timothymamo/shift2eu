@@ -1,0 +1,12 @@
+[
+  {
+    "project": "example-project",
+    "id": "1234567890123456789",
+    "routedRecordSets": 3
+  },
+  {
+    "project": "example-project",
+    "id": "2345678901234567890",
+    "routedRecordSets": 0
+  }
+]
