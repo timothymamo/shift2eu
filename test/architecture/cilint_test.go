@@ -510,11 +510,13 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 // request's own, so a pull request that weakens test/lint is still checked by
 // the copy the base branch holds (issue #689).
 //
-// The job is pinned step by step, in order, and each step's with:, env: and run:
-// line by line: a pin that only asks a step to mention a base copy lets through
-// an echo of the base SHA beside the worktree add, a || true on the go test, a
-// GOFLAGS that skips every test, or a cd back out of the copy, and each of those
-// leaves the pull request's own check running. The four steps are:
+// The job is pinned step by step, in order, and each step's keys are a closed
+// set, its with:, env: and run: line by line: a pin that only asks a step to
+// mention a base copy lets through an echo of the base SHA beside the worktree
+// add, a || true on the go test, a GOFLAGS that skips every test, or a cd back
+// out of the copy, and each of those leaves the pull request's own check
+// running; a step-level shell: or working-directory: beside them leaves those
+// three lines byte-identical and runs something else again. The four steps are:
 //
 //  1. the checkout, whole history and no credentials: without fetch-depth: 0 the
 //     base commit is no object of the run and neither the copy nor the allow
@@ -570,15 +572,33 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 		}
 
 		// Every value a step hands the shell reaches it through that step's env:
-		// (issue #672): an expression spliced into a run: line is a shell word of
-		// the event's author. setup-go's with: names the copy's go.mod with one,
-		// where no shell reads it.
-		if script, ok := ciRunScript(item.lines); ok {
-			for _, l := range script {
-				if strings.Contains(l.text, "${{") {
-					t.Errorf("line %d: %q splices a ${{ }} expression into a run:, want every value handed to the shell in env: (issue #672)", l.num, l.text)
-				}
+		// (issue #672): an expression anywhere else in the step, a run: line or
+		// otherwise, is spliced into the workflow's own text, where a shell or an
+		// action reads it as a word of the event's author. setup-go's with: names
+		// the copy's go.mod with one, where no shell reads it: the single named
+		// exception.
+		inEnv := make(map[int]bool, len(item.lines))
+
+		if env, ok := ciBlock(item.lines, "env"); ok {
+			for _, l := range env {
+				inEnv[l.num] = true
 			}
+		}
+
+		_, uses, _ := ciScalar(item.lines, "uses")
+
+		for _, l := range item.lines {
+			if !strings.Contains(l.text, "${{") || inEnv[l.num] {
+				continue
+			}
+
+			if strings.HasPrefix(uses, "actions/setup-go@") &&
+				l.text == "go-version-file: ${{ runner.temp }}/coauthor-base/go.mod" {
+				continue
+			}
+
+			t.Errorf("line %d: %q splices a ${{ }} expression outside an env: value, want every value handed to the shell in "+
+				"env:, setup-go's go-version-file excepted (issue #672)", l.num, l.text)
 		}
 	}
 
@@ -604,6 +624,11 @@ func checkCoAuthorTrailersJob(t *testing.T, jobs map[string][]ciLine) {
 func checkCoAuthorCheckoutStep(t *testing.T, item ciItem) {
 	t.Helper()
 
+	// A closed schema: a shell: or a working-directory: beside the uses: and the
+	// with: would leave both byte-identical and still check the wrong tree
+	// (issue #689).
+	wantKeys(t, "coauthor-trailers checkout step", item.lines, "uses", "with")
+
 	if _, uses, ok := ciScalar(item.lines, "uses"); !ok || !strings.HasPrefix(uses, "actions/checkout@") {
 		t.Fatalf("line %d: the coauthor-trailers job's first step uses %q, want actions/checkout@…: without the checkout it "+
 			"reads no commit (issue #689)", item.num, uses)
@@ -627,6 +652,11 @@ func checkCoAuthorCheckoutStep(t *testing.T, item ciItem) {
 // in for the copy.
 func checkCoAuthorBaseCopyStep(t *testing.T, item ciItem) {
 	t.Helper()
+
+	// A closed schema: a shell:, a working-directory: or a timeout-minutes: beside
+	// the name:, env: and run: would keep those byte-identical and still run no
+	// worktree add at all (issue #689).
+	wantKeys(t, "coauthor-trailers base-copy step", item.lines, "name", "env", "run")
 
 	script, ok := ciRunScript(item.lines)
 	if !ok {
@@ -662,6 +692,10 @@ func checkCoAuthorBaseCopyStep(t *testing.T, item ciItem) {
 // the base's copy, and one that lowers it would check it under another Go.
 func checkCoAuthorSetupGoStep(t *testing.T, item ciItem) {
 	t.Helper()
+
+	// A closed schema: setup-go needs its uses: and its with: and nothing else
+	// (issue #689).
+	wantKeys(t, "coauthor-trailers setup-go step", item.lines, "uses", "with")
 
 	if _, uses, ok := ciScalar(item.lines, "uses"); !ok || !strings.HasPrefix(uses, "actions/setup-go@") {
 		t.Fatalf("line %d: the coauthor-trailers job's third step uses %q, want actions/setup-go@… after the copy of the base "+
@@ -707,6 +741,12 @@ func wantExactScript(t *testing.T, what string, script []ciLine, want []string) 
 // read fails the check rather than skipping it.
 func checkCoAuthorTestStep(t *testing.T, item ciItem) {
 	t.Helper()
+
+	// A closed schema: a shell: (which would run the run: line as an expression or
+	// under another shell), a working-directory: (which would move the check out of
+	// the copy) or a timeout-minutes: beside the name:, run: and env: would leave
+	// those three byte-identical and still pass (issue #689).
+	wantKeys(t, "coauthor-trailers test step", item.lines, "name", "run", "env")
 
 	script, ok := ciRunScript(item.lines)
 	if !ok {
