@@ -502,7 +502,13 @@ Decision:
   `--no-approve` (pi keeps the last), so the wrapper removes it wherever it stands before pi starts and
   prints one line on stderr for each, in argument order. After a `--` pi reads it as message text, so there
   it could not re-trust the project; it is dropped there too only to keep the rule simple, and so is a `-a`
-  given as another option's value (`--name -a`), which the deck never passes. The line is:
+  given as another option's value (`--name -a`), which the deck never passes. Only these exact words are
+  dropped because only they set trust in pi 1.6.1: its parser matches the exact strings `--approve`/`-a`
+  and `--no-approve`/`-na` (`dist/cli/args.js:229-234`); `--approve=<value>`, like any `--x=y`, goes to its
+  unknown flags (`args.js:241-245`), which reach only extensions as their flag values (`dist/main.js:665`),
+  and neither loaded extension registers a flag; clustered short flags (`-ab`) are an "Unknown option"
+  error (`args.js:258-259`). `TestPiTesterDropsTheApproveArguments` pins `--approve=1` and `-ab` passing
+  through unchanged. The line is:
   `pi-tester: argument <arg> dropped: the tester's pi never trusts the project, because a trusted
   .pi/settings.json can run commands the env-printing refusal does not see (shellCommandPrefix, packages,
   npmCommand) (issue #702)`; pi then starts with the other arguments unchanged. `.dot-agent-deck.toml`'s

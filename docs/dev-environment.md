@@ -3303,7 +3303,10 @@ After merging issue #702's change, which changes both the wrapper and the tester
 `--approve`), the maintainer runs, from the host clone: `make vm-pi-tester`, so the installed wrapper starts
 pi with `--no-approve --no-extensions`, and `dot-agent-deck trust approve` for the changed tester command.
 Until `make vm-pi-tester` runs, the installed wrapper is the old one, which still passes on `--approve` from a
-unit cut before the merge.
+unit cut before the merge. In the window right after the merge, a unit with the new tester command (no
+`--approve`) run by the old installed wrapper (no `--no-approve`, no `--skill`) leaves pi to a saved trust
+decision or a trust prompt and loads no skills, so an unattended tester pane could stall at the prompt or
+run without skills: run `make vm-pi-tester` right after the merge.
 
 ## Containers and image verification
 
