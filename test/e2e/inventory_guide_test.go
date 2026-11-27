@@ -1175,6 +1175,16 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "kafka-shop-audit", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
 					capabilities: []string{"encryption-at-rest", "node-high-availability"},
 				},
+				// A hand-edited export: the cluster's targetInstanceCount is the string
+				// "3", which no Azure call returns, and jq compares a string greater than
+				// any number. The count is the number of worker nodes the cluster is sized
+				// and estimated from, so a count no call wrote as a number is no count: the
+				// cluster keeps its category and the encryption at rest of its managed
+				// disks, and no node redundancy and no count (review nit on PR #685).
+				{
+					id: "kafka-shop-handedit", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
+					capabilities: []string{"encryption-at-rest"},
+				},
 				// An HDInsight cluster of another kind runs no Kafka broker a target
 				// serves, so it stays unclassified under its own type.
 				{
@@ -1258,6 +1268,10 @@ func inventoryGuides() []inventoryGuideCase {
 				// Kafka cluster needs at least three worker nodes.
 				{id: "kafka-shop-streams", vcpus: 4, memoryGiB: 16, storageGiB: 2046, count: 3},
 				{id: "kafka-shop-audit", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
+				// The string count of a hand-edited export is no count, and the rest of the
+				// worker role is sized the same: a vCPU and memory number of the VM size, and
+				// the disks of one worker.
+				{id: "kafka-shop-handedit", vcpus: 2, memoryGiB: 8, storageGiB: 1023, noCount: true},
 				// A cluster being resized is sized like the same cluster at rest: its
 				// worker role is the one the recorded query packs either way.
 				{id: "kafka-shop-resizing", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},

@@ -1141,6 +1141,37 @@
       }
     },
     {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-handedit",
+      "name": "kafka-shop-handedit",
+      "type": "microsoft.hdinsight/clusters",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": {
+        "clusterDefinition": {
+          "kind": "Kafka"
+        },
+        "clusterState": "Running",
+        "computeProfile": {
+          "roles": [
+            {
+              "name": "workernode",
+              "targetInstanceCount": "3",
+              "hardwareProfile": {
+                "vmSize": "Standard_D2s_v3"
+              },
+              "dataDisksGroups": [
+                {
+                  "disksPerNode": 1,
+                  "diskSizeGB": 1023
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-old",
       "name": "kafka-shop-old",
       "type": "microsoft.hdinsight/clusters",
