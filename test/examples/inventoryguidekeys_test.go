@@ -108,12 +108,13 @@ const azureResourceGraphFixtures = "test/e2e/testdata/inventory-guide/azure/grap
 // azureHDInsightFixtureKeys are the fields the guide's Resource Graph projection
 // keeps of an HDInsight cluster (PRD #571, *Only the fields the program reads*):
 // the columns every row of the export carries, and the properties azure.jq reads
-// to recognise a cluster of kind Kafka, to count its worker nodes and to size
-// them. The query expands the computeProfile.roles array, which Resource Graph
-// cannot trim inside, and packs the worker role back alone, so the fixture holds
-// one role per cluster: its name, its targetInstanceCount, its
-// hardwareProfile.vmSize and its dataDisksGroups, and no osProfile, scriptActions
-// or virtualNetworkProfile with them.
+// to leave out a cluster being deleted or failed (its clusterState), to recognise
+// one of kind Kafka, to count its worker nodes and to size them. The query expands
+// the computeProfile.roles array, which Resource Graph cannot trim inside, and
+// packs the worker role back alone, so the fixture holds one role per cluster: its
+// name, its targetInstanceCount, its hardwareProfile.vmSize and its
+// dataDisksGroups, and no osProfile, scriptActions or virtualNetworkProfile with
+// them.
 //
 // The fields the export may hold nowhere are the records of the shared
 // excluded-key list (excludedFixtureKeysPath), which this file's check reads
@@ -124,7 +125,7 @@ const azureResourceGraphFixtures = "test/e2e/testdata/inventory-guide/azure/grap
 // checks that read it cannot drift apart.
 var azureHDInsightFixtureKeys = []string{
 	"id", "name", "type", "kind", "location", "zones", "sku", "properties",
-	"clusterDefinition",
+	"clusterDefinition", "clusterState",
 	"computeProfile", "roles",
 	"targetInstanceCount", "hardwareProfile", "vmSize",
 	"dataDisksGroups", "disksPerNode", "diskSizeGB",

@@ -1881,13 +1881,15 @@ const azureResourceGraphQueryPrefix = `query="`
 // azureHDInsightSourceFields are the fields of an HDInsight cluster the guide's
 // Resource Graph branch may name as the source of the properties it packs (PRD
 // #571, *Only the fields the program reads*): the cluster's kind, which
-// classifies it as messaging.kafka, and the worker role's name, count, size and
-// disks, which the program counts and sizes. Every other field of a cluster
-// stays out of the branch, osProfile (the admin user, its SSH key and its
-// domain-join credentials), scriptActions (the scripts and their parameters),
+// classifies it as messaging.kafka, its clusterState, which decides whether it is
+// read at all, and the worker role's name, count, size and disks, which the
+// program counts and sizes. Every other field of a cluster stays out of the
+// branch, osProfile (the admin user, its SSH key and its domain-join
+// credentials), scriptActions (the scripts and their parameters),
 // virtualNetworkProfile and connectivityEndpoints first among them.
 var azureHDInsightSourceFields = []string{
 	"properties.clusterDefinition.kind",
+	"properties.clusterState",
 	"role.name",
 	"role.targetInstanceCount",
 	"role.hardwareProfile.vmSize",
@@ -2252,7 +2254,7 @@ func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []s
 
 	for _, field := range azureHDInsightSourceFields {
 		if !named[field] {
-			problems = append(problems, fmt.Sprintf("names no %q, want it: the program reads the cluster's kind to classify it and its worker role to count and size it", field))
+			problems = append(problems, fmt.Sprintf("names no %q, want it: the program reads the cluster's kind to classify it, its clusterState to leave out a cluster being deleted or failed, and its worker role to count and size it", field))
 		}
 	}
 
@@ -2411,6 +2413,7 @@ const azureHDInsightLeg = `
 | where role.name =~ 'workernode'
 | extend properties = bag_pack(
     'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind),
+    'clusterState', properties.clusterState,
     'computeProfile', bag_pack('roles', pack_array(bag_pack(
       'name', role.name,
       'targetInstanceCount', role.targetInstanceCount,
@@ -2465,7 +2468,10 @@ func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T)
           'disksPerNode', role.dataDisksGroups[0].disksPerNode,
           'diskSizeGB', role.dataDisksGroups[0].diskSizeGB)))))`
 
-	const kind = `'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind)`
+	// kind is the part of the branch that classifies a cluster: its kind and the
+	// state the program leaves a deleting or failed cluster by.
+	const kind = `'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind),
+    'clusterState', properties.clusterState`
 
 	tests := []struct {
 		name string

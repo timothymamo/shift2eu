@@ -1251,6 +1251,11 @@ func inventoryGuides() []inventoryGuideCase {
 			// with it: the member's scale set stands for all of them. So does a
 			// FileStorage account for its shares, and a Redis Enterprise cluster for
 			// its database.
+			//
+			// An HDInsight cluster Azure is deleting is left out, as an MSK cluster
+			// whose state is DELETING or FAILED is (PRD #571, milestone 2's review
+			// finding N2): a cluster on its way out is no resource to move, and one
+			// the service gave up on keeps nothing.
 			absent: []string{
 				"aks-system-12345678-vmss",
 				"kubernetes",
@@ -1259,6 +1264,7 @@ func inventoryGuides() []inventoryGuideCase {
 				"stshopfiles",
 				"default",
 				"amr-shop-session/default",
+				"kafka-shop-old",
 			},
 		},
 	}
