@@ -159,6 +159,21 @@ func TestE2EExecExempt(t *testing.T) {
 			want: true,
 		},
 		{
+			// The stamp the e2e tier's second binary carries (issue #584): the
+			// three internal/version variables, with the import paths and the
+			// date a real link line holds.
+			name: "the -ldflags the e2e tier stamps its binary with keeps the exemption",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-trimpath", "-o", "-ldflags",
+				"-X github.com/timothymamo/shift2eu/internal/version.version=9.9.9-e2e " +
+					"-X github.com/timothymamo/shift2eu/internal/version.commit=abc123def456 " +
+					"-X github.com/timothymamo/shift2eu/internal/version.date=2026-01-01T00:00:00Z",
+			},
+			want: true,
+		},
+		{
 			// The value can name another linker, a wrapper around the toolchain or
 			// a file the build reads, which is why the flag is admitted for -X
 			// stamps alone.
@@ -186,6 +201,54 @@ func TestE2EExecExempt(t *testing.T) {
 			cmd:   "go",
 			sub:   "build",
 			flags: []string{"-ldflags", "-X example.com/pkg.version"},
+		},
+		// The go command does not split the value on whitespace alone: cmd/go
+		// splits it with cmd/internal/quoted.Split, where a quote opens a field
+		// that ends at the closing quote even mid-field, and a backslash escapes
+		// the next byte. A field the value writes as one word can therefore carry
+		// a second flag, so a value holding a quote or a backslash is no stamp set
+		// and the exemption is lost (issue #195).
+		{
+			name: "an -ldflags value with a single-quoted field that carries another flag takes the exemption away",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-ldflags",
+				"-X 'main.a=b'-linkmode=external -X 'main.c=d'-extld=/bin/false",
+			},
+		},
+		{
+			name: "an -ldflags value with a double-quoted field that carries another flag takes the exemption away",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-ldflags",
+				`-X "main.a=b"-linkmode=external -X "main.c=d"-extld=/bin/false`,
+			},
+		},
+		{
+			// A backslash escapes the next byte, so the value the linker reads is
+			// not the one the source wrote.
+			name:  "an -ldflags value with a backslash takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", `-X main.a=b\c`},
+		},
+		{
+			// A stamp is an import path and a symbol, one = and a plain value: a
+			// second = is no value the linker takes as this pair.
+			name:  "an -ldflags value whose -X names a second = takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b=c"},
+		},
+		{
+			// -X names a symbol of a package, which an import path and a name
+			// separated by a dot give; a bare name is none.
+			name:  "an -ldflags value whose -X names no dotted symbol takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X a=b"},
 		},
 		{
 			name:  "an -ldflags written with = takes the exemption away",
