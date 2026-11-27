@@ -129,7 +129,13 @@ jobs:
         run: dev/actionlint.sh
 
   # The co-author trailer check (issue #663): every Co-Authored-By trailer of the pull request's own
-  # commits that carries an address must carry one .github/co-author-addresses.txt lists. The default
+  # commits that carries an address must carry one .github/co-author-addresses.txt lists, the list as the
+  # range's base commit holds it (git show <base>:<path>, issue #672), never the checkout's: the base
+  # branch's list, main's for every pull request to main. A pull request into another branch is checked
+  # against that branch's list, and its commits again against main's when that branch is merged into main.
+  # A pull request that changes only the list is checked against the old one; the job runs the pull
+  # request's own test/lint and ci.yml, so a change to the check itself is for the maintainer's code-owner
+  # review to catch. The default
   # checkout of a pull request is its merge commit at depth 1, with no base to compare against, so every
   # other run of test/lint skips the check; this job alone fetches the whole history and names the range,
   # base..head, and on a pull request requires one, so a range it cannot read fails rather than skips.
