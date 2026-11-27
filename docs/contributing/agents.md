@@ -52,7 +52,9 @@ write contents and workflows) can push a branch `x` whose own `coauthor-trailers
 but runs `exit 0`, then open a second pull request with the same head into `x`, or retarget one; its run
 posts a passing check run of that name on the same head SHA, and the pull request into main shows no
 workflow change in its diff. A re-run of an old main run replays that run's older allow list (bounded).
-The maintainer's pre-merge check in `docs/dev-environment.md` looks at every such check run; the
+The maintainer's pre-merge check in `docs/dev-environment.md` looks at every such check run, cancelled
+ones included, at each run's event, workflow file, head SHA and base, and at every pull request with that
+head, through search and through the commit's pulls endpoint; the
 longer-term fixes are an organization required workflow or a ruleset refusing `.github/workflows/**`
 changes on every branch but main. And the job trusts the runner image, the pinned actions and the Go
 toolchain, as every job does. A fork's or a new

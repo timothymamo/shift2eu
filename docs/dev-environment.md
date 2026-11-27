@@ -2184,14 +2184,19 @@ requests opened or updated after the merge. A follow-up pull request removes the
 check is required. **Maintainer steps, once, for issue #706's pull request and its follow-up:**
 
 1. Before merging issue #706's pull request, check its trailers with `main`'s check, since its only
-   co-author check is the old job its own `ci.yml` defines. From a checkout of `main`, with `<n>` the
-   pull request's number (PASS: `ok`, and the log line `read <k> commits of origin/main..FETCH_HEAD`
-   names the pull request's commit count, `gh pr view <n> --json commits --jq '.commits | length'`;
-   FAIL: `FAIL`, or another count):
+   co-author check is the old job its own `ci.yml` defines. In a clean clone, with `<n>` the pull
+   request's number. Fetching does not move the working tree, so `git switch --detach origin/main` makes
+   the `test/lint` that runs `origin/main`'s, never a stale local `main`'s (with local changes, run the
+   same lines in `git worktree add --detach <tmp> origin/main` instead). `git rev-parse` must print the
+   same SHA twice (FAIL: two SHAs; stop). Then the test (PASS: `ok`, and the log line
+   `read <k> commits of origin/main..FETCH_HEAD` names the pull request's commit count,
+   `gh pr view <n> --json commits --jq '.commits | length'`; FAIL: `FAIL`, or another count):
 
    ```bash
    git fetch origin main
    git fetch origin "pull/<n>/head"
+   git switch --detach origin/main
+   git rev-parse HEAD origin/main
    SHIFT2EU_COAUTHOR_RANGE=origin/main..FETCH_HEAD SHIFT2EU_COAUTHOR_CHECK=require \
      go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
    ```
@@ -2203,16 +2208,19 @@ check is required. **Maintainer steps, once, for issue #706's pull request and i
    commit carrying a `Co-Authored-By:` trailer with an `example.com` address. The probe comes before the
    requirement: the check reports whether or not it is required, and its first run makes GitHub offer the
    name in the ruleset's check list, so step 3 never requires a name that has not reported (a typo there
-   would block every pull request). With `<probe head sha>` the probe's head commit and `<run id>` the
-   number after `/runs/` in the check run's `details_url` (PASS: `Co-author trailers (base)  15368
-   failure`, the log names the `example.com` trailer, and the run's event is `pull_request_target` with
-   the probe's head SHA; FAIL: the check passes, no row, another app id or another event):
+   would block every pull request). With `<probe head sha>` the probe's head commit, run the first
+   command (`filter=all` lists every run of the name, not only the latest; `--paginate` every page),
+   then the second for each row's run, `<run id>` the number after `/runs/` in its `details_url` (PASS:
+   at least one row `15368  completed  failure` whose log names the `example.com` trailer, no `success`
+   row, every row's app `15368`, and every run prints
+   `["pull_request_target",".github/workflows/coauthor-trailers.yml","<probe head sha>",["main"]]`;
+   FAIL: the check passes, no row, another app id, or another event, path, head SHA or base):
 
    ```bash
-   gh api repos/timothymamo/shift2eu/commits/<probe head sha>/check-runs \
-     --jq '.check_runs[] | select(.name=="Co-author trailers (base)")
-           | [.name,.app.id,.conclusion] | @tsv'
-   gh run view <run id> --json event,headSha
+   gh api --paginate 'repos/timothymamo/shift2eu/commits/<probe head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
+     --jq '.check_runs[] | [.id,.app.id,.status,.conclusion,.details_url] | @tsv'
+   gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
+     --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
    ```
 
 3. Settings → Rules → Rulesets → Protect main → Require status checks to pass → add **Co-author trailers
@@ -2236,18 +2244,31 @@ check is required. **Maintainer steps, once, for issue #706's pull request and i
 **Before every merge from step 3 on,** check that the passing **Co-author trailers (base)** came from
 `main`'s workflow: the required check matches only the check run's name and the GitHub Actions app,
 never the workflow file or the base branch (ADR 0050, residual risks). With `<head sha>` the pull
-request's head commit, run the first command, then the second for each row's run (the number after
-`/runs/` in its `details_url`), then the third (PASS: every row has app `15368` and conclusion
-`success`, every run has event `pull_request_target` and head SHA `<head sha>`, and every pull request
-with that head has `baseRefName` `main`; FAIL: anything else, such as a second pull request with that
-head into another branch):
+request's head commit:
+
+1. The check runs. `filter=all` lists every run of the name (the default, `latest`, hides earlier
+   ones), `--paginate` every page (a page holds 30). `cancelled` rows are legitimate:
+   `cancel-in-progress` cancels a run when a push or a title edit (`edited`) starts the next one.
+   PASS: at least one row is `success`, every row is `success` or `cancelled`, and every row's app is
+   `15368`. FAIL: no `success` row, any other conclusion, a row not yet `completed`, or another app id.
+2. For every row, cancelled ones included, its run, `<run id>` the number after `/runs/` in its
+   `details_url`. PASS:
+   `["pull_request_target",".github/workflows/coauthor-trailers.yml","<head sha>",["main"]]`. For a
+   fork's pull request the last list is `[]` (GitHub lists only the repository's own branches there);
+   the pull request lists of item 3 are then the deciding lines. FAIL: another event, path or head SHA,
+   or any base other than `main`.
+3. The pull requests with that head, once through search and once through the commit's pulls endpoint,
+   which is not search (search is eventually consistent and can miss a new pull request). PASS: every
+   pull request in both lists has base `main`. FAIL: any other base in either list, such as a second
+   pull request with that head into another branch.
 
 ```bash
-gh api repos/timothymamo/shift2eu/commits/<head sha>/check-runs \
-  --jq '.check_runs[] | select(.name=="Co-author trailers (base)")
-        | [.id,.app.id,.conclusion,.completed_at,.details_url] | @tsv'
-gh run view <run id> --json event,headBranch,headSha,workflowName
+gh api --paginate 'repos/timothymamo/shift2eu/commits/<head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
+  --jq '.check_runs[] | [.id,.app.id,.status,.conclusion,.completed_at,.details_url] | @tsv'
+gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
+  --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
 gh pr list --search <head sha> --state all --json number,baseRefName
+gh api --paginate repos/timothymamo/shift2eu/commits/<head sha>/pulls --jq '.[]|[.number,.base.ref]|@tsv'
 ```
 
 The known limits (ADR 0050): a pull request could add a job of the same name to its own `ci.yml`, an

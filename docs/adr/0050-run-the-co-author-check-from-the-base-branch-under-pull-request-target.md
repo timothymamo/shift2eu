@@ -174,12 +174,17 @@ is reviewed against a precise description of it.
 The repository side is this pull request and its follow-up. The ruleset is the maintainer's:
 
 1. **Before merging this pull request,** check its co-author trailers by hand with `main`'s copy of the
-   check, since the only co-author check on it is the old job its own `ci.yml` defines. From a checkout
-   of `main`, with `<n>` this pull request's number:
+   check, since the only co-author check on it is the old job its own `ci.yml` defines. In a clean
+   clone of the repository, with `<n>` this pull request's number. Fetching does not move the working
+   tree, so the switch makes the `test/lint` that runs `origin/main`'s, never a stale local `main`'s
+   (with local changes, run the same lines in `git worktree add --detach <tmp> origin/main` instead):
 
    ```bash
    git fetch origin main
    git fetch origin "pull/<n>/head"
+   git switch --detach origin/main
+   git rev-parse HEAD origin/main
+   # PASS: the same SHA twice; FAIL: two SHAs (stop: the check below would run another test/lint)
    SHIFT2EU_COAUTHOR_RANGE=origin/main..FETCH_HEAD SHIFT2EU_COAUTHOR_CHECK=require \
      go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
    # PASS: ok, and the log line "read <k> commits of origin/main..FETCH_HEAD" names the pull
@@ -195,19 +200,22 @@ The repository side is this pull request and its follow-up. The ruleset is the m
    allow list does not name (an `example.com` address). The probe comes before step 3 because the check
    reports whether or not it is required, and its first run makes the name `Co-author trailers (base)`
    one GitHub offers in the ruleset's check list; requiring a name that has never reported risks a typo
-   that blocks every pull request. With `<probe head sha>` the probe's head commit:
+   that blocks every pull request. With `<probe head sha>` the probe's head commit (`filter=all` lists
+   every run of the name, not only the latest, and `--paginate` every page):
 
    ```bash
-   gh api repos/timothymamo/shift2eu/commits/<probe head sha>/check-runs \
-     --jq '.check_runs[] | select(.name=="Co-author trailers (base)")
-           | [.name,.app.id,.conclusion] | @tsv'
-   # PASS: Co-author trailers (base)  15368  failure   (and the log names the example.com trailer)
-   gh run view <run id> --json event,headSha
-   # PASS: "event":"pull_request_target" and headSha the probe's head commit
-   # FAIL: the check passes, no row, another app id, or another event
+   gh api --paginate 'repos/timothymamo/shift2eu/commits/<probe head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
+     --jq '.check_runs[] | [.id,.app.id,.status,.conclusion,.details_url] | @tsv'
+   # PASS: at least one row  <id>  15368  completed  failure  ...  (and its log names the example.com
+   #       trailer); no success row; every row's app 15368
+   # for each row, <run id> from its details_url (the number after /runs/):
+   gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
+     --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
+   # PASS: ["pull_request_target",".github/workflows/coauthor-trailers.yml","<probe head sha>",["main"]]
+   # FAIL: the check passes, no row, another app id, another event, path, head SHA or base
    ```
 
-   `<run id>` is the number in the check run's `details_url` after `/runs/`. Then close the probe
+   Then close the probe
    unmerged. Between the merge and step 3 the check runs but is not required; only the maintainer
    merges, so nothing lands in that window unless the maintainer merges it.
 3. **Require it.** Edit `Protect main` → Require status checks to pass → add **`Co-author trailers
@@ -230,18 +238,30 @@ The repository side is this pull request and its follow-up. The ruleset is the m
    request checked by `main`'s definition alone.
 6. **Before every merge from step 3 on,** check that the passing `Co-author trailers (base)` came from
    `main`'s workflow (the residual risk below: the required check matches the name and the app only).
-   With `<head sha>` the pull request's head commit:
+   With `<head sha>` the pull request's head commit. The query lists every run of the name
+   (`filter=all`; the default, `latest`, hides earlier ones) on every page (`--paginate`; a page holds
+   30). `cancelled` rows are legitimate: `cancel-in-progress` cancels a run when a push or a title edit
+   (`edited`) starts the next one.
 
    ```bash
-   gh api repos/timothymamo/shift2eu/commits/<head sha>/check-runs \
-     --jq '.check_runs[] | select(.name=="Co-author trailers (base)")
-           | [.id,.app.id,.conclusion,.completed_at,.details_url] | @tsv'
-   # for each row, <run id> from its details_url (the number after /runs/):
-   gh run view <run id> --json event,headBranch,headSha,workflowName
+   gh api --paginate 'repos/timothymamo/shift2eu/commits/<head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
+     --jq '.check_runs[] | [.id,.app.id,.status,.conclusion,.completed_at,.details_url] | @tsv'
+   # PASS: at least one row is success, every row is success or cancelled, every row's app is 15368
+   # FAIL: no success row, any other conclusion (failure, skipped, neutral, ...), a row not yet
+   #       completed, or another app id
+   # for each row, cancelled ones included, <run id> from its details_url (the number after /runs/):
+   gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
+     --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
+   # PASS: ["pull_request_target",".github/workflows/coauthor-trailers.yml","<head sha>",["main"]]
+   #       for a fork's pull request the last list is [] (GitHub lists only the repository's own
+   #       branches there): the two lists below are then the deciding lines
+   # FAIL: another event, path or head SHA, or any base other than main
    gh pr list --search <head sha> --state all --json number,baseRefName
-   # PASS: every row has app 15368 and conclusion success; every run has event pull_request_target
-   #       and headSha <head sha>; and every pull request with that head has baseRefName main
-   # FAIL: anything else, for example a second pull request with that head into another branch
+   gh api --paginate repos/timothymamo/shift2eu/commits/<head sha>/pulls --jq '.[]|[.number,.base.ref]|@tsv'
+   # PASS: every pull request in both lists has base main (the second is not search, which is
+   #       eventually consistent and can miss a new pull request)
+   # FAIL: any base other than main in either list, for example a second pull request with that head
+   #       into another branch
    ```
 
 `docs/contributing/agents.md` changes with this pull request: the gap it names is closed, and it names
