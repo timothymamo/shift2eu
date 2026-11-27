@@ -1527,7 +1527,9 @@ public, the API's default), never its name servers, its record set counts or its
 the zone resource carries. Resource Graph does not list a zone's DNSSEC configuration, hence the
 DNSSEC loop: it runs only for the public zones of the Resource Graph pages, as only a public zone can
 be signed, reads each zone's resource group (from its resource ID) and name from one line, separated
-by a tab (neither holds one), and asks for that zone's configuration. It passes both values in the
+by a tab (neither holds one), and asks for that zone's configuration. Its calls run in the
+subscription the Resource Graph query read, the one the CLI is set to, so none needs `--subscription`.
+It passes both values in the
 attached form (`--resource-group="$rg"`), as a resource group's name may start with `-`, which the CLI
 would read as an option if it came as a separate word. The `--query` keeps its ID, its
 type and its `provisioningState` (the program reads `Succeeded` as signed), never a key or the
