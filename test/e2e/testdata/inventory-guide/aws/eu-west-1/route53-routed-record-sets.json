@@ -1,0 +1,14 @@
+[
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIK",
+    "RoutedRecordSets": 0
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIL",
+    "RoutedRecordSets": 3
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIJ",
+    "RoutedRecordSets": 0
+  }
+]
