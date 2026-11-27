@@ -23,5 +23,10 @@
     "Id": "/hostedzone/Z0000000000000000PRIV",
     "Name": "shop.example.com.",
     "PrivateZone": true
+  },
+  {
+    "Id": "/hostedzone/Z0123456789ABCDEFGHIN",
+    "Name": "blog.example.com.",
+    "PrivateZone": false
   }
 ]

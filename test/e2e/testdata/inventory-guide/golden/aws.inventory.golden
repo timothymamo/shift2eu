@@ -8,6 +8,11 @@
       "category": "unclassified"
     },
     {
+      "id": "blog.example.com.",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "network.dns"
+    },
+    {
       "id": "example.com.",
       "rawType": "AWS::Route53::HostedZone",
       "category": "network.dns",

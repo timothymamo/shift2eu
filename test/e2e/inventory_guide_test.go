@@ -503,6 +503,15 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "shop-api.example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
 					noRegion: true, capabilities: []string{"dns-routing"},
 				},
+				// A public zone the per-zone calls gave no answer for is a zone all the
+				// same: list-hosted-zones lists it, so it reaches the inventory as
+				// network.dns, with no region and no capability, rather than
+				// disappearing because the calls that say whether it is signed and
+				// routes by client or health failed for it (review finding S2).
+				{
+					id: "blog.example.com.", rawType: "AWS::Route53::HostedZone", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
 				// A private zone answers only inside the VPCs it is attached to and
 				// moves with the network design, so it stays unclassified with its
 				// rawType (PRD #581, *What does not, and why*). It is written from
@@ -569,6 +578,7 @@ func inventoryGuides() []inventoryGuideCase {
 				"shop.example.com. (Z0123456789ABCDEFGHIJ)",
 				"example.com.",
 				"shop-api.example.com.",
+				"blog.example.com.",
 			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
