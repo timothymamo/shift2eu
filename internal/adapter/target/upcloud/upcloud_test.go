@@ -11,7 +11,8 @@
 // that holds only on some plans lives on a tier variant named after that plan,
 // with the base offering not listing it (ADR 0011). Since PRD #552 milestone 7 the
 // snapshot also serves cache.redis (Valkey, on a 1-node offering and a per-node
-// 2-node tier), network.loadbalancer (unpriced, with neither udp nor ipv6) and
+// 2-node tier), network.loadbalancer (unpriced, with neither udp nor ipv6, and a
+// Production tier that adds node-high-availability) and
 // storage.file (an NFS share and its encrypted variant, priced the GiB-month), and
 // it serves no MongoDB, topic, serverless container or registry. The snapshot document format
 // itself, its strictness, its errors and the SOURCES.md rule are pinned once, in
@@ -495,11 +496,12 @@ func TestCatalogFixedFees(t *testing.T) {
 // The new offerings' names, as the snapshot writes them, shared by the tests
 // PRD #552 milestone 7 adds.
 const (
-	managedValkeyName   = "Managed Valkey"
-	valkeyMultiNodeName = "Managed Valkey Multi-node"
-	loadBalancerName    = "Managed Load Balancer"
-	fileStorageName     = "File Storage"
-	fileEncryptedName   = "File Storage Encrypted"
+	managedValkeyName          = "Managed Valkey"
+	valkeyMultiNodeName        = "Managed Valkey Multi-node"
+	loadBalancerName           = "Managed Load Balancer"
+	loadBalancerProductionName = "Managed Load Balancer Production"
+	fileStorageName            = "File Storage"
+	fileEncryptedName          = "File Storage Encrypted"
 )
 
 // fileStorageZones are the zones the availability page marks File Storage
@@ -520,8 +522,11 @@ func fileStorageZones() []string {
 // the page price ÷ 2 × 730 / 720 gives, rounded once (decision D1). File Storage
 // is sold per GiB, at the page's €0.15 a GiB a month converted to 0.1521, the
 // same for both of its variants since encryption at rest is free (decision D3).
-// The Managed Load Balancer is not sold by plan and carries no price (decision
-// D4), so its estimate is "not priced" rather than zero.
+// Neither load balancer offering is sold by plan and neither carries a price:
+// the maintainer's 2026-11-27 reversal of decision D4, which the plans page's
+// high-availability cluster and its rolling updates justify, gives the product a
+// Production tier variant and leaves D4's pricing half alone, so the estimate of
+// a load balancer stays "not priced" rather than zero.
 func TestNewCategoryOfferingPrices(t *testing.T) {
 	t.Parallel()
 
@@ -530,9 +535,10 @@ func TestNewCategoryOfferingPrices(t *testing.T) {
 	t.Run("regions", func(t *testing.T) {
 		t.Parallel()
 
-		// Both Valkey tiers and the load balancer are available in every declared
-		// EU zone; File Storage is not in Madrid or Warsaw yet (its availability
-		// page marks those two unavailable).
+		// Both Valkey tiers and both load balancer offerings are available in every
+		// declared EU zone, the Production variant included: a tier adds nodes, not
+		// data centres; File Storage is not in Madrid or Warsaw yet (its
+		// availability page marks those two unavailable).
 		tests := []struct {
 			offering string
 			want     []string
@@ -540,6 +546,7 @@ func TestNewCategoryOfferingPrices(t *testing.T) {
 			{offering: managedValkeyName, want: wantRegions()},
 			{offering: valkeyMultiNodeName, want: wantRegions()},
 			{offering: loadBalancerName, want: wantRegions()},
+			{offering: loadBalancerProductionName, want: wantRegions()},
 			{offering: fileStorageName, want: fileStorageZones()},
 			{offering: fileEncryptedName, want: fileStorageZones()},
 		}
@@ -699,32 +706,41 @@ func TestNewCategoryOfferingPrices(t *testing.T) {
 		}
 	})
 
-	t.Run("no price on the load balancer", func(t *testing.T) {
+	t.Run("no price on the load balancers", func(t *testing.T) {
 		t.Parallel()
 
-		// Decision D4: UpCloud sells the load balancer by an Essentials,
-		// Development or Production plan whose price depends on a size an
-		// inventory never records, so the snapshot records no plan and no price,
-		// and the estimate says "not priced" rather than zero.
-		o := offeringNamed(t, cat, loadBalancerName)
+		// Decision D4's pricing half: UpCloud sells the load balancer by an
+		// Essentials, Development or Production plan whose price depends on a size
+		// an inventory never records, so the snapshot records no plan and no price
+		// on either offering, and the estimate says "not priced" rather than zero.
+		// The maintainer's 2026-11-27 reversal of D4, for failover, adds the
+		// Production variant and changes nothing about the pricing: a tier adds
+		// nodes, not a published price the snapshot could record.
+		for _, name := range []string{loadBalancerName, loadBalancerProductionName} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
 
-		if !slices.Contains(o.Categories, taxonomy.NetworkLoadBalancer) {
-			t.Errorf("offering %s categories = %v, want them to include %s",
-				text.Quote(o.Name), o.Categories, text.Quote(string(taxonomy.NetworkLoadBalancer)))
-		}
+				o := offeringNamed(t, cat, name)
 
-		if len(o.Plans) != 0 {
-			t.Errorf("offering %s lists plans %v, want none: the snapshot prices no load balancer plan",
-				text.Quote(o.Name), planNames(o.Plans))
-		}
+				if !slices.Contains(o.Categories, taxonomy.NetworkLoadBalancer) {
+					t.Errorf("offering %s categories = %v, want them to include %s",
+						text.Quote(o.Name), o.Categories, text.Quote(string(taxonomy.NetworkLoadBalancer)))
+				}
 
-		if len(o.StoragePrices) != 0 {
-			t.Errorf("offering %s lists %d storage prices, want none", text.Quote(o.Name), len(o.StoragePrices))
-		}
+				if len(o.Plans) != 0 {
+					t.Errorf("offering %s lists plans %v, want none: the snapshot prices no load balancer plan",
+						text.Quote(o.Name), planNames(o.Plans))
+				}
 
-		if len(o.FixedFees) != 0 {
-			t.Errorf("offering %s lists fixed fees %v, want none: UpCloud charges no fee on top of a load balancer plan",
-				text.Quote(o.Name), o.FixedFees)
+				if len(o.StoragePrices) != 0 {
+					t.Errorf("offering %s lists %d storage prices, want none", text.Quote(o.Name), len(o.StoragePrices))
+				}
+
+				if len(o.FixedFees) != 0 {
+					t.Errorf("offering %s lists fixed fees %v, want none: UpCloud charges no fee on top of a load balancer plan",
+						text.Quote(o.Name), o.FixedFees)
+				}
+			})
 		}
 	})
 
@@ -734,15 +750,20 @@ func TestNewCategoryOfferingPrices(t *testing.T) {
 		// ADR 0011's tier-variant rule read off the new categories: an offering
 		// lists the capabilities every tier of its product provides, and a tier
 		// variant lists those and the one it adds. No page read documents a
-		// capability for UpCloud's load balancer -- its frontend network is IPv4
-		// only and it forwards tcp or http, never udp (decision D4) -- and it has
-		// no tier that could add one, so its list is exactly empty, which is why
-		// a load balancer needing udp or ipv6 is partial on it alone.
+		// forwarding capability for UpCloud's load balancer -- its frontend network
+		// is IPv4 only and it forwards tcp or http, never udp (decision D4) -- so
+		// the base offering's list is exactly empty and neither offering claims
+		// udp or ipv6, which is why a load balancer needing either is partial on
+		// both. The one capability a tier adds is failover: the Production plan
+		// runs a high-availability cluster of several nodes and updates it as
+		// rolling updates, so node-high-availability lives on the Production
+		// variant alone (decision D4, reversed by the maintainer on 2026-11-27).
 		tests := []struct {
 			offering string
 			want     []taxonomy.Capability
 		}{
 			{offering: loadBalancerName, want: nil},
+			{offering: loadBalancerProductionName, want: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
 			{offering: managedValkeyName, want: []taxonomy.Capability{taxonomy.EncryptionAtRest, taxonomy.Snapshots}},
 			{offering: valkeyMultiNodeName, want: []taxonomy.Capability{taxonomy.EncryptionAtRest, taxonomy.NodeHighAvailability, taxonomy.Snapshots}},
 			{offering: fileStorageName, want: nil},
@@ -805,21 +826,22 @@ func TestCatalogPlanBillingCapHours(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]int64{
-		"Cloud Servers":                 672,
-		"Managed Kubernetes":            672,
-		"Managed Kubernetes Production": 672,
-		"Block Storage":                 0,
-		"Block Storage Encrypted":       0,
-		"Managed Object Storage":        0,
-		"Managed PostgreSQL":            0,
-		"Managed PostgreSQL Multi-node": 0,
-		"Managed MySQL":                 0,
-		"Managed MySQL Multi-node":      0,
-		"Managed Valkey":                0,
-		"Managed Valkey Multi-node":     0,
-		"Managed Load Balancer":         0,
-		"File Storage":                  0,
-		"File Storage Encrypted":        0,
+		"Cloud Servers":                    672,
+		"Managed Kubernetes":               672,
+		"Managed Kubernetes Production":    672,
+		"Block Storage":                    0,
+		"Block Storage Encrypted":          0,
+		"Managed Object Storage":           0,
+		"Managed PostgreSQL":               0,
+		"Managed PostgreSQL Multi-node":    0,
+		"Managed MySQL":                    0,
+		"Managed MySQL Multi-node":         0,
+		"Managed Valkey":                   0,
+		"Managed Valkey Multi-node":        0,
+		"Managed Load Balancer":            0,
+		"Managed Load Balancer Production": 0,
+		"File Storage":                     0,
+		"File Storage Encrypted":           0,
 	}
 
 	offerings := catalogOf(t).Offerings()
@@ -988,7 +1010,8 @@ func TestValkeyTierTieUnderEstimateThroughEmbeddedCatalog(t *testing.T) {
 	}{
 		{
 			// Decision D6's own example: one node priced at the per-node price of
-			// the 2-node service, 5.5% below the 1-node plan.
+			// the 2-node service, 5.6% below the 1-node plan (86.1806 against
+			// 91.25, which SOURCES.md rounds up to "up to 5.6%").
 			name:       "count 1 takes the multi-node per-node price, not the 1-node plan's 91.25",
 			count:      1,
 			wantAmount: perNodeAmount,
@@ -1637,8 +1660,10 @@ func checkMapping(t *testing.T, got mapping.Result, wantFit mapping.Fit, want []
 // milestone 7 the rule is pinned for the cache, the load balancer and the file
 // share as well: *Managed Valkey Multi-node* adds node-high-availability on the 2-
 // and 3-node plans (decision D1), *File Storage Encrypted* adds encryption at rest
-// (decision D3), and neither Valkey tier lists sharding nor the load balancer udp
-// or ipv6, which UpCloud documents nowhere (decision D4).
+// (decision D3), and *Managed Load Balancer Production* adds node-high-availability
+// on the Production plan's high-availability cluster (decision D4, reversed by the
+// maintainer on 2026-11-27). Neither Valkey tier lists sharding, and neither load
+// balancer offering lists udp or ipv6, which UpCloud documents nowhere.
 func TestTierVariantIsBestOffering(t *testing.T) {
 	t.Parallel()
 
@@ -1855,28 +1880,49 @@ func TestTierVariantIsBestOffering(t *testing.T) {
 			name:     "load balancer needs nothing",
 			category: taxonomy.NetworkLoadBalancer,
 			wantFit:  mapping.Direct,
-			want:     []candidateExpectation{{Name: loadBalancerName, Fit: mapping.Direct}},
+			want: []candidateExpectation{
+				{Name: loadBalancerName, Fit: mapping.Direct},
+				{Name: loadBalancerProductionName, Fit: mapping.Direct},
+			},
+		},
+		{
+			// The Production plan runs several load-balancing nodes as a
+			// high-availability cluster and rolls its updates out with zero downtime,
+			// so it keeps serving through the loss of a node; the Essentials and
+			// Development plans run one node (decision D4, reversed by the maintainer
+			// on 2026-11-27 for failover).
+			name:         "load balancer needs node-level high availability",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: loadBalancerProductionName, Fit: mapping.Direct},
+				{Name: loadBalancerName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+			},
 		},
 		{
 			// A frontend forwards tcp or http only, so a load balancer that needs
-			// to forward UDP is partial (decision D4).
+			// to forward UDP is partial on both offerings, whichever plan it runs
+			// (decision D4).
 			name:         "load balancer needs udp",
 			category:     taxonomy.NetworkLoadBalancer,
 			capabilities: []taxonomy.Capability{taxonomy.UDP},
 			wantFit:      mapping.Partial,
 			want: []candidateExpectation{
 				{Name: loadBalancerName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.UDP}},
+				{Name: loadBalancerProductionName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.UDP}},
 			},
 		},
 		{
 			// Its frontend network is IPv4 only, so neither direction of ipv6 is
-			// met (decision D4).
+			// met, on either offering (decision D4).
 			name:         "load balancer needs ipv6",
 			category:     taxonomy.NetworkLoadBalancer,
 			capabilities: []taxonomy.Capability{taxonomy.IPv6},
 			wantFit:      mapping.Partial,
 			want: []candidateExpectation{
 				{Name: loadBalancerName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.IPv6}},
+				{Name: loadBalancerProductionName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.IPv6}},
 			},
 		},
 		{
@@ -1953,6 +1999,10 @@ func TestBaseOfferingsOmitVariantCapabilities(t *testing.T) {
 		},
 		{
 			offering:     managedValkeyName,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+		},
+		{
+			offering:     loadBalancerName,
 			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
 		},
 		{
