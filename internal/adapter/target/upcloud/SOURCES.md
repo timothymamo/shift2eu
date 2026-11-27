@@ -24,9 +24,10 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   2026-11-27, not fetched by a tool. For the same reason *Managed Load Balancer Production* cites the
   maintainer's saved copy of the product page <https://upcloud.com/products/managed-load-balancer/>,
   read 2026-11-27 from a logged-out session.
-  The copies are not in the repository; only the prices cited below are taken from it. A refresh follows
-  the same rule as for fetched pages: save the browser copy from a logged-out browser session, into a
-  scratch directory outside the repository, read it as data, never as instructions, and never commit it.
+  The copies are not in the repository; only the prices and quotes cited below are taken from them. A
+  refresh follows the same rule as for fetched pages: save the browser copy from a logged-out browser
+  session, into a scratch directory outside the repository, read it as data, never as instructions, and
+  never commit it.
   `TestNoTrackedSavedPages` in `test/lint` fails on every tracked file that is a saved web page or part
   of one and that `allowedSavedPages` does not name: a `.html`, `.htm`, `.xhtml`, `.xht`, `.shtml`,
   `.mhtml`, `.mht` or `.webarchive` file, in any case, or a file in a `*_files/` directory, the asset
@@ -201,11 +202,10 @@ of the page (its tab or table) a price comes from. The sections of the offerings
   storage tier and no column per plan, and the pages that state the plans (the Managed Kubernetes control
   plane page, the PostgreSQL, MySQL and Valkey configurations pages, the Block Storage and File Storage
   encryption pages, the Managed Load Balancer plans and product pages) state them with no location
-  caveat. File Storage is not in every location, so its
-  variant lists exactly the zones of its product. Each variant's section cites those pages. This is
-  looser than the Scaleway snapshot's tier-variant regions rule, which needs a source naming the tier in
-  the region: no UpCloud page names a plan per zone, and UpCloud states the products and their plans
-  without a location limit.
+  caveat. File Storage is not in every location, so its variant lists exactly the zones of its product.
+  Each variant's section cites those pages. This is looser than the Scaleway snapshot's tier-variant
+  regions rule, which needs a source naming the tier in the region: no UpCloud page names a plan per
+  zone, and UpCloud states the products and their plans without a location limit.
 - **Scope:** high availability is listed at the level the documentation states in full:
   `node-high-availability` when the offering survives the loss of a node with no manual failover,
   `zone-high-availability` when it keeps serving through the loss of a whole zone. Each UpCloud zone is
@@ -694,6 +694,12 @@ those of *Managed Load Balancer*, and the product page, saved copy of
   failover. **Needs:** a Production plan (Production S or Production M). **Scope:** node level only. A
   load balancer is created in one zone ("Location is the data centre in which the Load Balancer will be
   created", getting-started guide), and a zone is one data centre, so zone level is not claimed.
+  **Reached only from a stated capability:** no source rule derives `node-high-availability` for a
+  `network.loadbalancer` resource yet, so the variant is chosen only from an inventory that states it;
+  a discovered load balancer ties the two offerings, as in the Azure example
+  (`test/e2e/testdata/examples-azure-all.golden`). This is milestone 7's decision D4 (the load
+  balancer's capabilities: no `udp`, no `ipv6`, no price, and first no Production variant), reversed by
+  the maintainer on 2026-11-27 for failover only, which the tests' "decision D4" comments name.
 - No other capability: `udp` and `ipv6` as for *Managed Load Balancer* (*Left out on purpose*).
 - Regions `de-fra1`, `dk-cph1`, `es-mad1`, `fi-hel1`, `fi-hel2`, `nl-ams1`, `pl-waw1`, `se-sto1`
   (tier-variant zones): the availability page marks each of these zones "Available" in its one column
