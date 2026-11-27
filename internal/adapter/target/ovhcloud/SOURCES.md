@@ -490,7 +490,7 @@ the prices page.
 
 ### Analytics for OpenSearch
 
-Category `search.opensearch`: Public Cloud Databases for OpenSearch (OpenSearch 2.19 and 3.3: "The Public
+Category `search.opensearch`: Public Cloud Analytics for OpenSearch (OpenSearch 2.19 and 3.3: "The Public
 Cloud Databases offer supports the following OpenSearch versions", OpenSearch capabilities page) on the
 Essential/Discovery plan, one node, in the 1-AZ regions. This is the base offering (tier-variant rule):
 the 3-node plan adds a capability and is *Analytics for OpenSearch Multi-node*, with its *3-AZ* form; the
@@ -559,7 +559,7 @@ Analytics pricing guide), the regions page and the prices page.
 
 ### Analytics for OpenSearch Multi-node
 
-Category `search.opensearch`: Public Cloud Databases for OpenSearch on the Business/Production plan (3
+Category `search.opensearch`: Public Cloud Analytics for OpenSearch on the Business/Production plan (3
 nodes) in the 1-AZ regions. A tier variant of *Analytics for OpenSearch* (tier-variant rule). Pages, read
 2026-11-27: <https://www.ovhcloud.com/en-ie/public-cloud/opensearch/>,
 <https://docs.ovhcloud.com/en/guides/public-cloud/databases/opensearch-capabilities>,
@@ -611,7 +611,7 @@ the prices page.
 
 ### Analytics for OpenSearch Multi-node 3-AZ
 
-Category `search.opensearch`: Public Cloud Databases for OpenSearch on the Production plan, Multi AZ, in
+Category `search.opensearch`: Public Cloud Analytics for OpenSearch on the Production plan, Multi AZ, in
 the 3-AZ regions. A tier variant of *Analytics for OpenSearch* (tier-variant rule), the *3-AZ* form of
 *Analytics for OpenSearch Multi-node*. Pages, read 2026-11-27:
 <https://www.ovhcloud.com/en-ie/public-cloud/opensearch/>,
