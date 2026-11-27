@@ -4354,6 +4354,12 @@ const azureDNSSECFile = "dns-dnssec.json"
 // before the output reaches the file.
 var azureDNSSECQuery = regexp.MustCompile(`--query(?:\s+|=)["']([^"']*)["']`)
 
+// azureDNSSECSeparateFlag matches one of the DNSSEC call's two loop-variable
+// flags written with its value as a separate word, `--resource-group "$rg"`: the
+// form in which the CLI reads a value that starts with `-` as an option of its
+// own, never as the flag's value.
+var azureDNSSECSeparateFlag = regexp.MustCompile(`--(?:resource-group|zone-name)\s`)
+
 // azureDNSSECQueryFields are the fields the guide's `--query` keeps of a zone's
 // DNSSEC configuration (PRD #581, *How the sources classify*): the configuration's
 // ID, which the program joins to its zone case-insensitively, its type, and the
@@ -4449,10 +4455,11 @@ func TestInventoryGuideAzureDNSZonesKeepOnlyTheZoneType(t *testing.T) {
 // TestInventoryGuideAzureDNSSECCommandsKeepOnlyTheFieldsTheyRead pins PRD #581's
 // milestone 4 on the guide's Azure command text: `az network dns dnssec-config
 // show` runs once per public zone the Resource Graph pages hold, takes the zone's
-// resource group and name quoted, and keeps of the configuration only its ID, its
-// type and its provisioning state. A `--query` that named the signing keys would
-// leave the zone's signing material in the raw output the guide tells the reader
-// to delete.
+// resource group and name quoted and attached to their flags, and keeps of the
+// configuration only its ID, its type and its provisioning state. A `--query` that
+// named the signing keys would leave the zone's signing material in the raw output
+// the guide tells the reader to delete; a flag whose value is a word of its own
+// would let a resource group name that starts with `-` reach the CLI as an option.
 func TestInventoryGuideAzureDNSSECCommandsKeepOnlyTheFieldsTheyRead(t *testing.T) {
 	t.Parallel()
 
@@ -4497,6 +4504,27 @@ func TestInventoryGuideAzureDNSSECCommandsKeepOnlyTheFieldsTheyRead(t *testing.T
 			t.Errorf("%s's `%s` command holds no %q, want %s (PRD #581, milestone 4)\n%s",
 				guidePath, azureDNSSECCall, want.name, want.why, command)
 		}
+	}
+
+	// A resource group's name may start with `-` (audit finding on PRD #581's
+	// milestone 4). With the flag and its value as two words the CLI parses
+	// `-legacy` as an option, not as the flag's value, so the call fails; the
+	// loop's `|| :` hides that, and a signed zone loses dnssec. The attached form
+	// leaves the CLI no word of the value to parse as an option.
+	for _, want := range []string{`--resource-group="$rg"`, `--zone-name="$zone"`} {
+		if !strings.Contains(code, want) {
+			t.Errorf("%s's `%s` command passes no %s, want the flag and its value attached: a resource group name may start with `-`, which the CLI reads as an option when the flag and its value are two words, so the call fails, the loop's `|| :` hides it, and a signed zone loses dnssec (audit finding, PRD #581, milestone 4)\n%s",
+				guidePath, azureDNSSECCall, want, command)
+		}
+	}
+
+	if separate := azureDNSSECSeparateFlag.FindAllString(code, -1); len(separate) > 0 {
+		for i, flag := range separate {
+			separate[i] = strings.TrimSpace(flag)
+		}
+
+		t.Errorf("%s's `%s` command passes %s with its value as a separate word, want the attached form: a resource group name may start with `-`, which the CLI then reads as an option, so the call fails, the loop's `|| :` hides it, and a signed zone loses dnssec (audit finding, PRD #581, milestone 4)\n%s",
+			guidePath, azureDNSSECCall, strings.Join(separate, ", "), command)
 	}
 
 	if !strings.Contains(code, "--output json") && !strings.Contains(code, "--output=json") {

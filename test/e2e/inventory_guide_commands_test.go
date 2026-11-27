@@ -958,7 +958,33 @@ const (
 	// the signed zone: the configuration's own ID, which the program joins to the
 	// zone by its case-insensitive resource ID, not by its casing.
 	azureDNSSECSignedConfigID = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnszones/shop.example.com/dnssecConfigs/default"
+	// azureDNSSECDashResourceGroup is a resource group whose name starts with a
+	// `-`, which Azure allows: a call that passes the name as a word of its own
+	// has the CLI read `-rg-legacy` as an option instead of the flag's value, fail,
+	// and the loop's `|| :` hides the failure (audit finding on PRD #581's
+	// milestone 4).
+	azureDNSSECDashResourceGroup = "-rg-legacy"
+	// azureDNSSECDashZone is the public zone Azure signs in that group.
+	azureDNSSECDashZone = "dash.example.com"
 )
+
+// azureDNSSECSignedConfig is the configuration the fake az prints for the signed
+// zone of the page the guide's other Azure blocks use.
+var azureDNSSECSignedConfig = dnssecConfiguration{
+	ID:                azureDNSSECSignedConfigID,
+	Type:              "Microsoft.Network/dnszones/dnssecConfigs",
+	ProvisioningState: "Succeeded",
+}
+
+// azureDNSSECDashConfig is the configuration the fake az prints for the signed
+// zone of the page whose group name starts with a `-`: an ID the fake builds out
+// of the group and the zone it received, so a call that did not deliver the group
+// as the flag's value writes no such configuration at all.
+var azureDNSSECDashConfig = dnssecConfiguration{
+	ID:                "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/" + azureDNSSECDashResourceGroup + "/providers/Microsoft.Network/dnszones/" + azureDNSSECDashZone + "/dnssecConfigs/default",
+	Type:              "Microsoft.Network/dnszones/dnssecConfigs",
+	ProvisioningState: "Succeeded",
+}
 
 // azureDNSSECGraphPage is the Resource Graph page the loop reads: the public
 // zones, one of them signed, and the private zones no call may ask about. The
@@ -997,32 +1023,79 @@ const azureDNSSECGraphPageUnsignedLast = `{
   "total_records": 5
 }`
 
+// azureDNSSECGraphPageDashGroup is a page of its own, local to this test, whose
+// one public signed zone sits in a resource group whose name starts with a `-`:
+// a group name may start with a dash, and a call that passes it as a separate
+// word has the CLI read it as an option, fail, and the loop's `|| :` hide the
+// failure, so the signed zone loses dnssec (audit finding on PRD #581's milestone
+// 4). The page the other Azure blocks use stays unchanged, so no fixture, golden
+// or other block sees this group.
+const azureDNSSECGraphPageDashGroup = `{
+  "count": 1,
+  "data": [
+    {"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/-rg-legacy/providers/Microsoft.Network/dnsZones/dash.example.com", "name": "dash.example.com", "type": "microsoft.network/dnszones", "kind": "", "location": "global", "zones": null, "properties": {"zoneType": "Public"}}
+  ],
+  "skip_token": null,
+  "total_records": 1
+}`
+
+// azureDNSSECZone is one public zone the loop has to ask az about: its name and
+// the resource group the page records it in, both as the page holds them.
+type azureDNSSECZone struct {
+	zone  string
+	group string
+}
+
 // azureDNSSECScenario is one Resource Graph page the guide's DNSSEC loop reads,
-// and the public zones it has to ask az about, in the page's order.
+// the public zones it has to ask az about, in the page's order, and the
+// configurations its file has to end up holding.
 type azureDNSSECScenario struct {
 	// name is how the subtest names the case.
 	name string
 	// page is the Resource Graph page the run writes into its $out.
 	page string
-	// wantZones are the page's public zones, in its order, and nothing else.
-	wantZones []string
+	// wantZones are the page's public zones with their groups, in its order, and
+	// nothing else.
+	wantZones []azureDNSSECZone
+	// wantConfigs are the configurations the loop's file has to hold: one per
+	// signed zone, and none for an unsigned one.
+	wantConfigs []dnssecConfiguration
 }
 
 // azureDNSSECScenarios are the pages the DNSSEC loop is run against: the one the
-// test's other blocks use, whose signed zone comes last, and one whose last
-// public zone is unsigned. The order is what a shell exits with, so the second
-// case is the one that catches a loop whose call is not ended with `|| :` (PRD
-// #581, milestone 4).
+// test's other blocks use, whose signed zone comes last, one whose last public
+// zone is unsigned, and one whose signed zone sits in a resource group whose name
+// starts with a `-`. The order is what a shell exits with, so the second case is
+// the one that catches a loop whose call is not ended with `|| :` (PRD #581,
+// milestone 4).
 var azureDNSSECScenarios = []azureDNSSECScenario{
 	{
-		name:      "the last public zone is signed",
-		page:      azureDNSSECGraphPage,
-		wantZones: []string{azureDNSSECUnsignedZone, azureDNSSECLegacyZone, azureDNSSECSignedZone},
+		name: "the last public zone is signed",
+		page: azureDNSSECGraphPage,
+		wantZones: []azureDNSSECZone{
+			{zone: azureDNSSECUnsignedZone, group: azureDNSSECResourceGroup},
+			{zone: azureDNSSECLegacyZone, group: azureDNSSECResourceGroup},
+			{zone: azureDNSSECSignedZone, group: azureDNSSECResourceGroup},
+		},
+		wantConfigs: []dnssecConfiguration{azureDNSSECSignedConfig},
 	},
 	{
-		name:      "the last public zone is unsigned",
-		page:      azureDNSSECGraphPageUnsignedLast,
-		wantZones: []string{azureDNSSECSignedZone, azureDNSSECUnsignedZone, azureDNSSECLegacyZone},
+		name: "the last public zone is unsigned",
+		page: azureDNSSECGraphPageUnsignedLast,
+		wantZones: []azureDNSSECZone{
+			{zone: azureDNSSECSignedZone, group: azureDNSSECResourceGroup},
+			{zone: azureDNSSECUnsignedZone, group: azureDNSSECResourceGroup},
+			{zone: azureDNSSECLegacyZone, group: azureDNSSECResourceGroup},
+		},
+		wantConfigs: []dnssecConfiguration{azureDNSSECSignedConfig},
+	},
+	{
+		name: "the signed zone's resource group starts with a dash",
+		page: azureDNSSECGraphPageDashGroup,
+		wantZones: []azureDNSSECZone{
+			{zone: azureDNSSECDashZone, group: azureDNSSECDashResourceGroup},
+		},
+		wantConfigs: []dnssecConfiguration{azureDNSSECDashConfig},
 	},
 }
 
@@ -1078,7 +1151,7 @@ func TestInventoryGuideAzureDNSSECBlock(t *testing.T) {
 						files:    map[string]string{"graph-1.json": scenario.page},
 					})
 
-					assertAzureDNSSECRun(t, shellName, run, scenario.wantZones)
+					assertAzureDNSSECRun(t, shellName, run, scenario)
 				})
 			}
 		})
@@ -1088,10 +1161,16 @@ func TestInventoryGuideAzureDNSSECBlock(t *testing.T) {
 // assertAzureDNSSECRun checks one run of the guide's DNSSEC loop: it exited 0
 // whatever its last zone answered, it asked az about each of the page's public
 // zones in the page's order and about no private one, each call kept only the
-// three fields the program reads, and the file holds the signed zone's
-// configuration alone.
-func assertAzureDNSSECRun(t *testing.T, shellName string, run guideBlockRun, wantZones []string) {
+// three fields the program reads, and the file holds the signed zones'
+// configurations alone. The group each call passes is the one the page records
+// for the zone: a group whose name starts with a `-` reaches the fake az only as
+// the flag's value, and the configuration the fake builds out of it is then in
+// the file, so a call that passed it as a word of its own leaves the signed zone
+// without dnssec.
+func assertAzureDNSSECRun(t *testing.T, shellName string, run guideBlockRun, scenario azureDNSSECScenario) {
 	t.Helper()
+
+	wantZones := scenario.wantZones
 
 	if run.exitStatus != 0 {
 		t.Errorf("the block exited %d under %s, want 0: an unsigned public zone answers (NotFound), which the guide says is expected, so the loop goes on to the zones after it, and the shell exits with the status of the loop's last command, whatever that zone answered; stderr = %q",
@@ -1099,10 +1178,9 @@ func assertAzureDNSSECRun(t *testing.T, shellName string, run guideBlockRun, wan
 	}
 
 	// One call per public zone, in the page's order, and none for a private one:
-	// the unsigned zone, the zone whose zoneType the page leaves out, and the
-	// signed one, in whatever order the page puts them.
+	// the public zones of the page, which each get one call.
 	if len(run.calls) != len(wantZones) {
-		t.Fatalf("the block called az %d times under %s, want %d: the page holds one private dnszones zone, which no call may name, and three public ones, which each get one call\n%s",
+		t.Fatalf("the block called az %d times under %s, want %d: the loop asks about each public zone of the page once, and about no private one\n%s",
 			len(run.calls), shellName, len(wantZones), formatFakeCalls(run.calls))
 	}
 
@@ -1114,8 +1192,8 @@ func assertAzureDNSSECRun(t *testing.T, shellName string, run guideBlockRun, wan
 			value string
 			why   string
 		}{
-			{"--zone-name", wantZone, "the public zone of the page, read out of it: a loop that read the line wrong asks about a zone that does not exist, and the zone loses its signed state"},
-			{"--resource-group", azureDNSSECResourceGroup, "the zone's resource group, which the DNSSEC call needs beside the zone's name"},
+			{"--zone-name", wantZone.zone, "the public zone of the page, read out of it: a loop that read the line wrong asks about a zone that does not exist, and the zone loses its signed state"},
+			{"--resource-group", wantZone.group, "the zone's resource group, which the DNSSEC call needs beside the zone's name: a group name may start with a `-`, which the CLI reads as an option when the flag and its value are two words, so the call fails and the loop's `|| :` hides it (audit finding, PRD #581, milestone 4)"},
 			{"--output", "json", "the JSON output the program reads the provisioning state from"},
 		} {
 			if got, ok := passedFlag(call, want.name); !ok || got != want.value {
@@ -1156,15 +1234,11 @@ func assertAzureDNSSECRun(t *testing.T, shellName string, run guideBlockRun, wan
 		}
 	}
 
-	want := []dnssecConfiguration{{
-		ID:                azureDNSSECSignedConfigID,
-		Type:              "Microsoft.Network/dnszones/dnssecConfigs",
-		ProvisioningState: "Succeeded",
-	}}
+	want := scenario.wantConfigs
 
 	if diff := cmp.Diff(want, dnssecConfigurations(t, filepath.Join(run.outDir, azureDNSSECFile))); diff != "" {
-		t.Errorf("%s holds the wrong configurations under %s (-want +got):\n%s\nthe file holds one document per signed zone and nothing for an unsigned one, and no field beyond the three the --query keeps (PRD #581, milestone 4)",
-			azureDNSSECFile, shellName, diff)
+		t.Errorf("%s holds the wrong configurations under %s (-want +got):\n%s\nthe file holds one document per signed zone and nothing for an unsigned one, and no field beyond the three the --query keeps (PRD #581, milestone 4); a signed zone missing from it means its call failed, which `|| :` then hid: stderr = %q",
+			azureDNSSECFile, shellName, diff, run.stderr)
 	}
 }
 
@@ -1275,10 +1349,15 @@ func passedFlag(call []string, name string) (string, bool) {
 }
 
 // fakeAZDNSSECProgram returns a shell program that stands where az does for the
-// DNSSEC call: it records the arguments of every call, and answers the public
-// zones of the test's Resource Graph page. The signed zone gets its
-// configuration; the unsigned ones get the (NotFound) error a real call gives for
-// a zone without one, on stderr and with a non-zero status. Any other zone fails
+// DNSSEC call: it records the arguments of every call, parses them the way the
+// real CLI does, and answers the public zones of the test's Resource Graph pages.
+// A value that starts with `-` is an option to the real az even when the word
+// before it is a flag that takes one, so this fake reads it as an option too, and
+// the call fails: only the attached form `--resource-group="$rg"` delivers a
+// group whose name starts with a dash (audit finding, PRD #581, milestone 4).
+// The signed zone gets its configuration, built out of the group and the zone it
+// received; the unsigned ones get the (NotFound) error a real call gives for a
+// zone without one, on stderr and with a non-zero status. Any other zone fails
 // with the test's own message, so a loop that reads a zone wrong is visible rather
 // than silently answered.
 func fakeAZDNSSECProgram(callLog string) []byte {
@@ -1295,6 +1374,20 @@ func fakeAZDNSSECProgram(callLog string) []byte {
 	program.WriteString("zone=\n")
 	program.WriteString("previous=\n")
 	program.WriteString("for argument in \"$@\"; do\n")
+	// The real az reads a word that starts with a `-` as an option, whatever the
+	// flag before it: a resource group whose name starts with a dash only reaches
+	// it attached to `--resource-group=`, so a separate-word call fails the way az
+	// does and the loop's `|| :` hides it (audit finding, PRD #581, milestone 4).
+	program.WriteString("  case $previous in\n")
+	program.WriteString("    --resource-group|--zone-name)\n")
+	program.WriteString("      case $argument in\n")
+	program.WriteString("        -*)\n")
+	program.WriteString("          printf 'the real az reads %s as an option, not as the value of %s: the value has to be attached to the flag\\n' \"$argument\" \"$previous\" >&2\n")
+	program.WriteString("          exit 2\n")
+	program.WriteString("          ;;\n")
+	program.WriteString("      esac\n")
+	program.WriteString("      ;;\n")
+	program.WriteString("  esac\n")
 	program.WriteString("  case $previous in\n")
 	program.WriteString("    --resource-group) rg=$argument ;;\n")
 	program.WriteString("    --zone-name) zone=$argument ;;\n")
@@ -1308,6 +1401,12 @@ func fakeAZDNSSECProgram(callLog string) []byte {
 	program.WriteString("case $zone in\n")
 	program.WriteString(shellQuote(azureDNSSECSignedZone) + ")\n")
 	program.WriteString("  printf '%s\\n' " + shellQuote(azureDNSSECDocument) + "\n")
+	program.WriteString("  ;;\n")
+	// The signed zone in the group whose name starts with a dash answers with an
+	// ID built from the group and the zone it received: a call that never
+	// delivered the group writes no configuration for the zone at all.
+	program.WriteString(shellQuote(azureDNSSECDashZone) + ")\n")
+	program.WriteString("  printf '{\"id\": \"/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/%s/providers/Microsoft.Network/dnszones/%s/dnssecConfigs/default\", \"type\": \"Microsoft.Network/dnszones/dnssecConfigs\", \"provisioningState\": \"Succeeded\"}\\n' \"$rg\" \"$zone\"\n")
 	program.WriteString("  ;;\n")
 	program.WriteString(shellQuote(azureDNSSECUnsignedZone) + "|" + shellQuote(azureDNSSECLegacyZone) + ")\n")
 	program.WriteString("  printf \"(NotFound) DNSSEC is not enabled for DNS zone '%s'\\n\" \"$zone\" >&2\n")
