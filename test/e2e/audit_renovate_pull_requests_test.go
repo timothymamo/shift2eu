@@ -16,34 +16,35 @@ import (
 )
 
 // This file runs row 15 of .github/workflows/scheduled-security-audit.yml, the
-// read of Renovate's open pull requests, against recorded GitHub answers (issue
-// #660). The read used the search endpoint, and in the first audit run it
-// answered with the Dependency Dashboard issue and no pull request at all: the
-// search's answer depends on the token, while the pulls endpoint lists what the
-// repository holds. So the read calls the pulls endpoint, one page of 100 at a
-// time, and keeps the pull requests Renovate's own through a jq filter that
-// keeps the named fields alone.
+// read of Renovate's open pull requests, against answers in the shape GitHub
+// gives them (issue #660). The read used the search endpoint, and in the first
+// audit run it answered with the Dependency Dashboard issue and no pull request
+// at all: the search's answer depends on the token, while the pulls endpoint
+// lists what the repository holds. So the read calls the pulls endpoint, one
+// page of 100 at a time, and keeps the pull requests Renovate's own through a jq
+// filter that keeps the named fields alone.
 //
 // The test takes the read out of the workflow the release runs, checks that it
-// calls the pulls endpoint with that filter, and runs the filter against the
-// answers GitHub gave in the audit run, recorded and sanitised here: a pulls
-// page holding a pull request by renovate[bot] and one by another author, and
-// the search answer that holds the Dependency Dashboard issue beside a pull
-// request. It lives in the e2e tier, beside the tests that run the guide's jq
-// programs, because it starts a process and needs the jq the workflow's own
-// step calls, which the default tests never require.
+// calls the pulls endpoint with that filter, and runs the filter against answers
+// in the shape GitHub gives, synthesized and sanitised here: a pulls page
+// holding a pull request by renovate[bot] and one by another author, and a
+// search answer holding the Dependency Dashboard issue beside a pull request.
+// It lives in the e2e tier, beside the tests that run the guide's jq programs,
+// because it starts a process and needs the jq the workflow's own step calls,
+// which the default tests never require.
 
 const (
 	// auditRenovateWorkflow is the workflow the audit runs, read from the test's
 	// own working directory (test/e2e): the document a released audit is.
 	auditRenovateWorkflow = "../../.github/workflows/scheduled-security-audit.yml"
-	// auditRenovatePullsAnswer is the recorded answer of one page of the pulls
-	// endpoint: the repository's open pull requests, Renovate's first and another
-	// author's second, every field the API answers with.
+	// auditRenovatePullsAnswer is an answer in the shape the pulls endpoint gives,
+	// synthesized here: the repository's open pull requests, Renovate's first and
+	// another author's second, every field the API answers with.
 	auditRenovatePullsAnswer = "testdata/audit-renovate/pulls-page-1.json"
-	// auditRenovateSearchAnswer is the recorded answer of the search endpoint the
-	// read used before: the Dependency Dashboard issue by renovate[bot] and one of
-	// its pull requests, beside each other in one list of items.
+	// auditRenovateSearchAnswer is an answer in the shape the search endpoint
+	// gives, synthesized here: the Dependency Dashboard issue by renovate[bot]
+	// and one of its pull requests, beside each other in one list of items. It is
+	// the answer the read used to be run against.
 	auditRenovateSearchAnswer = "testdata/audit-renovate/search-issues.json"
 	// auditRenovatePullsEndpoint is the endpoint the read must call: the open pull
 	// requests of the repository, 100 to a page, the page number a variable the
@@ -63,12 +64,12 @@ var auditRenovateReadLine = regexp.MustCompile(`(?m)^[ \t]*read_api[ \t]+(?:"([^
 
 // TestScheduledSecurityAuditReadsRenovatesPullRequests holds the audit's read of
 // Renovate's open pull requests to the pulls endpoint and its filter, and runs
-// that filter against the answers GitHub gave (issue #660).
+// that filter against answers in the shape GitHub gives (issue #660).
 func TestScheduledSecurityAuditReadsRenovatesPullRequests(t *testing.T) {
 	t.Parallel()
 
 	jq := jqPath(t)
-	workflow := readAuditRenovateRecord(t, auditRenovateWorkflow)
+	workflow := readAuditRenovateAnswer(t, auditRenovateWorkflow)
 	name, endpoint, filter := auditRenovateRead(t, workflow)
 
 	t.Run("the pulls endpoint", func(t *testing.T) {
@@ -91,10 +92,10 @@ func TestScheduledSecurityAuditReadsRenovatesPullRequests(t *testing.T) {
 		}
 	})
 
-	t.Run("the recorded pulls page", func(t *testing.T) {
+	t.Run("the pulls page", func(t *testing.T) {
 		t.Parallel()
 
-		answer := readAuditRenovateRecord(t, auditRenovatePullsAnswer)
+		answer := readAuditRenovateAnswer(t, auditRenovatePullsAnswer)
 
 		got := decodeAuditRenovateAnswer(t, auditJQ(t, jq, auditRenovateFilterOrNothing(filter), answer))
 
@@ -120,10 +121,14 @@ func TestScheduledSecurityAuditReadsRenovatesPullRequests(t *testing.T) {
 		}
 	})
 
-	t.Run("the recorded search answer", func(t *testing.T) {
+	// The search answer illustrates why the old search read was wrong: it holds
+	// an issue beside a pull request, and neither has a head ref. The read the
+	// workflow makes is pinned above; this subtest pins no behaviour of the
+	// workflow and only shows the answer the search endpoint gave.
+	t.Run("the search answer", func(t *testing.T) {
 		t.Parallel()
 
-		answer := readAuditRenovateRecord(t, auditRenovateSearchAnswer)
+		answer := readAuditRenovateAnswer(t, auditRenovateSearchAnswer)
 
 		// The search endpoint answers with an object whose items: holds the
 		// issues and the pull requests alike, so the same filter reads .items.
@@ -202,13 +207,14 @@ func auditRenovateRead(t *testing.T, workflow []byte) (name, endpoint, filter st
 	return name, endpoint, filter
 }
 
-// readAuditRenovateRecord returns the recorded answer or the workflow at path.
-func readAuditRenovateRecord(t *testing.T, path string) []byte {
+// readAuditRenovateAnswer returns the answer, in the shape GitHub gives, or the
+// workflow at path.
+func readAuditRenovateAnswer(t *testing.T, path string) []byte {
 	t.Helper()
 
 	src, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read %s: %v; the recorded answer is the shape GitHub gives the read", path, err)
+		t.Fatalf("read %s: %v; the file is an answer in the shape GitHub gives the read", path, err)
 	}
 
 	return src
@@ -238,7 +244,7 @@ func auditJQ(t *testing.T, jq, program string, input []byte) []byte {
 	switch {
 	case err == nil:
 	case errors.As(err, &exitErr):
-		t.Fatalf("jq %s exited %d on the recorded answer, want 0; stderr = %q", program, exitErr.ExitCode(), stderr.String())
+		t.Fatalf("jq %s exited %d on the answer, want 0; stderr = %q", program, exitErr.ExitCode(), stderr.String())
 	default:
 		t.Fatalf("run jq %s: %v", program, err)
 	}

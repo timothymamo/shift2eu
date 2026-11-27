@@ -993,18 +993,41 @@ const (
 	// Renovate's own entries alone, each of the named fields, no body of a title
 	// the model would read as an instruction.
 	auditRenovatePullsRead = "            read_api \"renovate-pull-requests-${page}\" \"repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}\" '{count: length, renovate: [.[] | select(.user.login == \"renovate[bot]\") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}'\n"
-	// auditRenovatePullsStop is the condition that ends the pages: a read that
-	// left no .exit file (the step's budget skipped it), one whose exit is not 0
-	// (the API refused it) and one whose page held fewer than 100 items.
-	auditRenovatePullsStop = "            if [ ! -f \"${out}/api/renovate-pull-requests-${page}.exit\" ] || [ \"$(cat \"${out}/api/renovate-pull-requests-${page}.exit\")\" != 0 ] || [ \"$(jq '.count' \"${out}/api/renovate-pull-requests-${page}.json\")\" -lt 100 ]; then\n" +
+	// auditRenovatePullsStop is the condition that ends the pages before any
+	// count is read: a page that left no .exit file (the step's budget skipped
+	// it) and one whose exit is not 0 (the API refused it). It is the stop the
+	// count guard and the under-100 test below cannot cover: without it the loop
+	// reads past a refusal whose answer it cannot count.
+	auditRenovatePullsStop = "            if [ ! -f \"${out}/api/renovate-pull-requests-${page}.exit\" ] || [ \"$(cat \"${out}/api/renovate-pull-requests-${page}.exit\")\" != 0 ]; then\n" +
+		"              break\n" +
+		"            fi\n"
+	// auditRenovatePullsCount is row 15's count guard: the page's unfiltered
+	// length read once into count, and every answer that is no number of items
+	// (a page the read left empty or half written, so jq fails or prints
+	// nothing) said in the limits and the pages ended there. Without it the
+	// under-100 test below compares a word that is no number, which is false,
+	// and the loop reads on and answers a false clean page count.
+	auditRenovatePullsCount = "            count=\"$(jq '.count' \"${out}/api/renovate-pull-requests-${page}.json\" 2> /dev/null || true)\"\n" +
+		"            if [[ ! \"${count}\" =~ ^[0-9]+$ ]]; then\n" +
+		"              echo \"supply-chain: page ${page} of the open pull requests answered no count\" >> \"${results}/limits.txt\"\n" +
+		"              break\n" +
+		"            fi\n"
+	// auditRenovatePullsCountLine is that guard's limits line alone: the one
+	// line that tells a page whose count was no number apart from a page of
+	// fewer than 100 pull requests.
+	auditRenovatePullsCountLine = "              echo \"supply-chain: page ${page} of the open pull requests answered no count\" >> \"${results}/limits.txt\"\n"
+	// auditRenovatePullsUnder is the test that ends the pages on a page of fewer
+	// than 100 pull requests: the last page, so every later page is empty.
+	auditRenovatePullsUnder = "            if [ \"${count}\" -lt 100 ]; then\n" +
 		"              break\n" +
 		"            fi\n"
 	// auditRenovatePullsLimit is the ten-page limit and the limits line it
-	// writes: a repository with more than 1000 open pull requests says so, so
-	// that Renovate's past the tenth page are a limit the report names and never
-	// a clean answer.
+	// writes: a repository whose tenth page of 100 was full says so, so that
+	// Renovate's past it, if any, are a limit the report names and never a clean
+	// answer. It comes after the under-100 test, so it speaks only of a page the
+	// loop knows to be full.
 	auditRenovatePullsLimit = "            if [ \"${page}\" -ge 10 ]; then\n" +
-		"              echo \"supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read\" >> \"${results}/limits.txt\"\n" +
+		"              echo \"supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read\" >> \"${results}/limits.txt\"\n" +
 		"              break\n" +
 		"            fi\n"
 )
@@ -4379,7 +4402,10 @@ func TestAuditWorkflow(t *testing.T) {
 		// Issue #660: the search endpoint answered the first audit run with the
 		// Dependency Dashboard issue and no pull request, so row 15 lists the open
 		// pull requests through the pulls endpoint, keeping the ones Renovate's own,
-		// page by page, and names the ten-page limit in the limits.
+		// page by page. A page that was skipped or refused ends the pages before any
+		// count is read, a page whose count is no number is a limits line and also
+		// ends them, a page of fewer than 100 is the last, and the tenth full page
+		// names in the limits what it did not read.
 		{
 			name: "row 15's Renovate pull requests read through the search endpoint again",
 			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsRead,
@@ -4397,8 +4423,23 @@ func TestAuditWorkflow(t *testing.T) {
 			wantIn:   "select(.user.login == \"renovate[bot]\")",
 		},
 		{
+			name:     "row 15's Renovate pull requests loop reading on past a refused or skipped page",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsStop, ""),
+			wantIn:   "renovate-pull-requests-${page}.exit",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop with no count guard",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsCount, ""),
+			wantIn:   "answered no count",
+		},
+		{
+			name:     "row 15's Renovate pull requests loop's count guard saying nothing in the limits",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsCount, strings.Replace(auditRenovatePullsCount, auditRenovatePullsCountLine, "", 1)),
+			wantIn:   "answered no count",
+		},
+		{
 			name:     "row 15's Renovate pull requests loop reading one page always",
-			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsStop, strings.Replace(auditRenovatePullsStop, " || [ \"$(jq '.count' \"${out}/api/renovate-pull-requests-${page}.json\")\" -lt 100 ]", "", 1)),
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsUnder, ""),
 			wantIn:   "-lt 100",
 		},
 		{
@@ -4408,8 +4449,8 @@ func TestAuditWorkflow(t *testing.T) {
 		},
 		{
 			name:     "row 15's Renovate pull requests loop's ten-page limit said in no limits line",
-			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsLimit, strings.Replace(auditRenovatePullsLimit, "              echo \"supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read\" >> \"${results}/limits.txt\"\n", "", 1)),
-			wantIn:   "more than 1000 open pull requests",
+			workflow: mutate(t, acceptedWorkflow, auditRenovatePullsLimit, strings.Replace(auditRenovatePullsLimit, "              echo \"supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read\" >> \"${results}/limits.txt\"\n", "", 1)),
+			wantIn:   "the tenth page of 100 open pull requests was full",
 		},
 		{
 			name:     "row 9's failed unpack scanning the member it partly wrote",

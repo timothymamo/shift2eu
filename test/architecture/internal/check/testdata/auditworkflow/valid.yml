@@ -1149,11 +1149,19 @@ jobs:
           page=1
           while :; do
             read_api "renovate-pull-requests-${page}" "repos/${GH_REPO}/pulls?state=open&per_page=100&page=${page}" '{count: length, renovate: [.[] | select(.user.login == "renovate[bot]") | {number, title, draft, created_at, updated_at, head: .head.ref, labels: [.labels[].name]}]}'
-            if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ] || [ "$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json")" -lt 100 ]; then
+            if [ ! -f "${out}/api/renovate-pull-requests-${page}.exit" ] || [ "$(cat "${out}/api/renovate-pull-requests-${page}.exit")" != 0 ]; then
+              break
+            fi
+            count="$(jq '.count' "${out}/api/renovate-pull-requests-${page}.json" 2> /dev/null || true)"
+            if [[ ! "${count}" =~ ^[0-9]+$ ]]; then
+              echo "supply-chain: page ${page} of the open pull requests answered no count" >> "${results}/limits.txt"
+              break
+            fi
+            if [ "${count}" -lt 100 ]; then
               break
             fi
             if [ "${page}" -ge 10 ]; then
-              echo "supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read" >> "${results}/limits.txt"
+              echo "supply-chain: the tenth page of 100 open pull requests was full: Renovate's past it, if any, were not read" >> "${results}/limits.txt"
               break
             fi
             page=$((page + 1))
