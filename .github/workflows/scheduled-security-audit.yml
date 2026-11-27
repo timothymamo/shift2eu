@@ -200,6 +200,8 @@ jobs:
             echo "::error title=Audit checks::go.mod's go line read as more than one line: see runbook step 11"
             exit 1
           fi
+          # A prerelease go line (1.28rc1) is refused on purpose: the module pins only releases, and
+          # refusing one fails closed with a clear error.
           if ! [[ "${gomod_go}" =~ ^1\.[0-9]+(\.[0-9]+)?$ ]]; then
             echo "::error title=Audit checks::go.mod's go line read as no Go version: see runbook step 11"
             exit 1
