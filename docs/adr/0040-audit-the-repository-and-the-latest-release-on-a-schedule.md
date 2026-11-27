@@ -4217,7 +4217,10 @@ scan raised test values on every run.
   pkg@version` cannot: it looks up the module's deprecation through the proxy. Before the scan, the
   "Download the Go modules" step fails the run with an `::error` when `govulncheck -version` (the Go it
   scans for, which is the go command's) or `go version` of the binary (the Go that built it) names another
-  Go than go.mod's; only `go version` of the binary catches a tool built with another Go.
+  Go than go.mod's; only `go version` of the binary catches a tool built with another Go. go.mod carries
+  no `toolchain` line, and `go list -m -f '{{.GoVersion}}'` prints the go line even when one exists: adding
+  one would build govulncheck with the go line's Go while later go commands run the toolchain line's, so
+  the guard would fail the audit until the derivation and the guard read the same Go.
 - **Row 10's SBOM scan.** `--skip-check-update` is `trivy image`'s flag alone; `trivy sbom` at v0.76.2
   rejects it and exits 1 before scanning, and both scans shared it. The image scan alone passes it now.
   `test/architecture` holds each trivy subcommand's flags to a table read from the pinned release's CLI

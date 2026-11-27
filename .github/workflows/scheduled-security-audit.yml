@@ -97,9 +97,9 @@ jobs:
       # govulncheck decides which standard library it can load: one built with an older Go cannot load
       # the module at all (issue #658). So its install reads go.mod's go line at run time and passes it
       # as GOTOOLCHAIN=go<version> (issue #687): the workflow names no Go version of its own, and the
-      # next step fails the run when the built tool's Go is not go.mod's. It stays in this step: after the module download
-      # every Go command runs with GOPROXY=off, and go install pkg@version cannot (it looks up the
-      # module's deprecation through the proxy).
+      # next step fails the run when the built tool's Go is not go.mod's. It stays in this step: after
+      # the module download every Go command runs with GOPROXY=off, and go install pkg@version cannot
+      # (it looks up the module's deprecation through the proxy).
       - name: Download the pinned tools and verify their checksums
         timeout-minutes: 25
         env:
