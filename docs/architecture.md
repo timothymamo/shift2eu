@@ -59,15 +59,16 @@ Arrows are imports. They point inwards only:
   (issue #119). `test/architecture` fails on a list entry that is a strict prefix of another and on
   a directory under `internal/adapter` the rule does not name; `test/lint` probes the rule with
   depguard. The adapters that must stay offline (the inventory-file reader, the snapshot reader, the
-  embedded-snapshot targets and the reporters) each name what they import in a strict allow list. A reporter writes only to the
-  `io.Writer` it is given: it reads no file, no environment and no clock, and makes no network
-  call. The PDF reporter, `adapter/report/pdfreport`
+  embedded-snapshot targets and the reporters) each name what they import in a strict allow list. A
+  reporter writes only to the `io.Writer` it is given: it reads no file, no environment and no clock,
+  and makes no network call. The PDF reporter, `adapter/report/pdfreport`
   ([ADR 0049](adr/0049-write-the-pdf-report-with-a-standard-library-writer.md), PRD #584), carries its
   own small PDF writer on the standard library: integer layout, the standard core fonts, every value
   escaped into a literal string, the bytes the same on every release target. It cannot import
   `internal/version`, so the composition root passes it the version line its footer shows
-  (`pdfreport.New(version.String())`); `cmd/shift2eu` constructs it for `--format pdf`. The live sources share one strict allow list, `cloud-adapters-reach-the-cloud-through-the-sdk`
-  (Cloud read-only rule below).
+  (`pdfreport.New(version.String())`); `cmd/shift2eu` constructs it for `--format pdf`. The live
+  sources share one strict allow list, `cloud-adapters-reach-the-cloud-through-the-sdk` (Cloud
+  read-only rule below).
 - **CLI** (`internal/cli`) turns user input into use-case calls and prints results. No business rules.
   Only `cmd/shift2eu` imports it. Its imports are a strict allow list (`cli-gets-adapters-from-cmd`,
   issue #152): the application, the domain, `internal/version` and exactly the standard packages it
@@ -91,8 +92,9 @@ Arrows are imports. They point inwards only:
   is the thin `syscall/js` glue: it registers one JavaScript function that calls `internal/web`, and it is
   the only package that imports `syscall/js` (`web-composition-root`, `syscall-js-only-in-the-web-root`).
   Its untagged package `cmd/shift2eu-web/internal/wire` builds the adapters `cmd/shift2eu`'s offline path
-  builds but the PDF reporter (its allow list already permits it; PRD #584 milestone 2 constructs it), the inventory reader in its in-memory mode and the HTML reporter, into `web.Deps`
-  (`web-composition-root-wire`). It builds and is tested natively. Its tests, allowed to import
+  builds, except the PDF reporter, plus the inventory reader in its in-memory mode and the HTML
+  reporter, into `web.Deps` (`web-composition-root-wire`). Its allow list already permits `pdfreport`;
+  PRD #584 milestone 2 constructs it. It builds and is tested natively. Its tests, allowed to import
   `internal/cli` (`web-composition-root-wire-tests`), hold the option parity and the download parity with
   the CLI. Beside them only `internal/cli`'s own tests import it; every other test
   file is refused it (`cli-only-in-named-tests`, issue #345), and `test/architecture`

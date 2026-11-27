@@ -159,7 +159,9 @@ then add the detail sections. With the layout of today's reports:
   - the plan (name, vCPUs, memory, included storage, plan price), or "no plan large enough" with the
     largest plan;
   - the plan, storage and fixed-fee parts and the monthly total;
-  - the count and the hours, each marked "assumed" when the resource gives none;
+  - the count, marked "assumed" when the resource gives none, and the hours, marked "assumed" (730) or
+    "given", plus any billing cap; as in the Markdown report, the PDF does not print the hours an
+    inventory gives, because `HoursPerMonth` is a float and pdfreport has no floating point (ADR 0049);
   - the plan's billing cap, if any (ADR 0029), and "storage not included" when it applies (ADR 0032);
   - otherwise "not estimated" and the reason in plain words, as in the Markdown report.
 
@@ -858,8 +860,8 @@ recommended*, followed by the number. ADR 0049 records the answers that shape mi
    worked out, and says in one sentence that there is no readiness score. A score is a domain decision
    for its own PRD. When it lands, the PDF's *How this report is worked out* section gains it.
    *Follow-up, decided with it:* CLAUDE.md's glossary defines **Assessment** with a "readiness score", and
-   `docs/architecture.md` mentions one. A small docs issue, filed with milestone 1's PR, marks it "not
-   yet implemented" in both.
+   `docs/architecture.md` mentions one. *Decided:* a small docs issue marks it "not yet implemented" in
+   both; it is not filed yet.
    This PRD does not change either.
 7. **Where the module's version stamp comes from** (milestone 2). GoReleaser's `{{ .ShortCommit }}` is
    git's abbreviated hash, whose length depends on which objects the clone holds. The `image` job
