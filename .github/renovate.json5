@@ -35,9 +35,9 @@
     },
     {
       // shift2eu is an application, so it is built with the Go it declares. Renovate leaves the go
-      // directive alone by default; bump it together with the VM's Go version.
-      // The scheduled audit's govulncheck install names the same Go (issue #658).
-      description: 'Go toolchain: go.mod go directive, dev/lima.yaml and the scheduled audit',
+      // directive alone by default; bump it together with the VM's Go version. The scheduled audit's
+      // govulncheck install reads go.mod's go line at run time, so it needs no copy here (issue #687).
+      description: 'Go toolchain: go.mod go directive and dev/lima.yaml',
       matchDatasources: ['golang-version'],
       rangeStrategy: 'bump',
       groupName: 'Go toolchain',
@@ -228,9 +228,6 @@
       ],
       matchStrings: [
         '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+\\S+:\\s*(?:image=[^\\s:]+:)?"?(?<currentValue>[^"\\s@]+)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?"?',
-        // A shell line of a run: block that names go.mod's Go as GOTOOLCHAIN=go<version>: the scheduled
-        // audit's govulncheck install (issue #658). The "Go toolchain" group moves it with go.mod's go line.
-        '# renovate: datasource=(?<datasource>golang-version) depName=(?<depName>go)\\s+GOTOOLCHAIN=go(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)\\s',
       ],
     },
     {

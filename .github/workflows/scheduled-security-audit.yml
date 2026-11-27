@@ -95,9 +95,9 @@ jobs:
       # the checksum database, so it has no SHA-256 line. go install pkg@version picks its toolchain from
       # that module's own go line, not from go.mod's, even in the checkout, and the Go that builds
       # govulncheck decides which standard library it can load: one built with an older Go cannot load
-      # the module at all (issue #658). So its install names go.mod's Go as GOTOOLCHAIN=go<version>,
-      # which Renovate's "Go toolchain" group moves with go.mod's go line, and the next step fails the
-      # run when the built tool's Go is not go.mod's. It stays in this step: after the module download
+      # the module at all (issue #658). So its install reads go.mod's go line at run time and passes it
+      # as GOTOOLCHAIN=go<version> (issue #687): the workflow names no Go version of its own, and the
+      # next step fails the run when the built tool's Go is not go.mod's. It stays in this step: after the module download
       # every Go command runs with GOPROXY=off, and go install pkg@version cannot (it looks up the
       # module's deprecation through the proxy).
       - name: Download the pinned tools and verify their checksums
@@ -186,9 +186,8 @@ jobs:
             exit 1
           fi
           tar -C "${bin}" -xzf "${dl}/trivy.tar.gz" trivy
-          # go.mod's go line, for the install below: test/architecture fails when the two differ.
-          # renovate: datasource=golang-version depName=go
-          GOTOOLCHAIN=go1.27.4 GOBIN="${bin}" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          # go.mod's go line, read here in the checkout at run time (issue #687): go.mod holds the one version.
+          GOTOOLCHAIN="go$(go list -m -f '{{.GoVersion}}')" GOBIN="${bin}" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           # trivy's vulnerability database, downloaded now (row 2), so that row 10 scans offline from it.
           # It moves every few hours and has no pin: trivy checks the OCI manifest's digest as it pulls it.
           # A failed download is recorded, and row 10 is then not run.
@@ -196,8 +195,8 @@ jobs:
           timeout 10m "${bin}/trivy" image --download-db-only --cache-dir "${RUNNER_TEMP}/trivy-cache" --skip-version-check --disable-telemetry --no-progress > "${RUNNER_TEMP}/results/trivy-db.stdout" 2> "${RUNNER_TEMP}/results/trivy-db.stderr" || rc=$?
           echo "${rc}" > "${RUNNER_TEMP}/results/trivy-db.exit"
           echo "${bin}" >> "${GITHUB_PATH}"
-      # This step's go mod download, run in the checkout, is the one that fetches the Go of go.mod's go
-      # line (GOTOOLCHAIN, checksum-verified): no actions/setup-go, which would restore an Actions cache.
+      # Go commands run in the checkout fetch the Go of go.mod's go line (GOTOOLCHAIN, checksum-verified;
+      # the previous step's go list -m already does): no actions/setup-go, which would restore an Actions cache.
       - name: Download the Go modules
         timeout-minutes: 10
         run: |

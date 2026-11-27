@@ -10,8 +10,9 @@
   directory out of the work area, and issue #614 accepts the CLI's built-in read-only Bash commands
   (2026-11-25); issue #632 mints the publish job's App token with no `permission-*` input (2026-11-26);
   issue #661 adds row 13's inputs that pass loading and row 14's second fuzz target (2026-11-26);
-  issue #658 fixes rows 3 and 10's scans and adds the history scan's ignore file (2026-11-26)
-- Date: 2026-11-21, amended 2026-11-22 to 2026-11-26
+  issue #658 fixes rows 3 and 10's scans and adds the history scan's ignore file (2026-11-26);
+  issue #687 derives the Go row 2 builds govulncheck with from go.mod at install (2026-11-27)
+- Date: 2026-11-21, amended 2026-11-22 to 2026-11-27
 
 ## Context
 
@@ -152,7 +153,7 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | # | Check | Job, run by | Network |
 |---|---|---|---|
 | 1 | Record the `main` SHA and the latest release tag | checks, workflow step | GitHub reads |
-| 2 | Download pinned tools, verify their checksums (govulncheck built with go.mod's Go, issue #658); `go mod download` for the module and `tools/`; trivy's database | checks, workflow step | yes |
+| 2 | Download pinned tools, verify their checksums (govulncheck built with the Go go.mod's go line names, read at install, issues #658 and #687); `go mod download` for the module and `tools/`; trivy's database | checks, workflow step | yes |
 | 3 | govulncheck (source) and osv-scanner on the module and `tools/`; govulncheck held to go.mod's Go first (issue #658) | checks, workflow step | vulnerability databases |
 | 4 | gitleaks on the full history, `--redact`, minus the closed false hits of the root `.gitleaksignore`, which only the maintainer's review grows (issue #658) | checks, workflow step | no |
 | 5 | zizmor and actionlint on `.github/workflows` | checks, workflow step | GitHub reads only |
@@ -4207,9 +4208,11 @@ scan raised test values on every run.
 - **Row 3's source govulncheck.** `go install pkg@version` picks its toolchain from that module's own go
   line, not from go.mod's, even in the checkout, so govulncheck was built with Go 1.26 and could not load
   the module (`go 1.27.4`): both source scans exited 1. The install, still in row 2's download step,
-  names go.mod's Go as `GOTOOLCHAIN=go<version>`. A `# renovate: datasource=golang-version depName=go`
-  comment and a matchString of the generic customManager keep it in the "Go toolchain" group, which moves
-  it with go.mod's go line, and `test/architecture` fails when the two differ. It stays in row 2's step
+  names go.mod's Go as `GOTOOLCHAIN=go<version>`. Since issue #687 (2026-11-27) it reads that version
+  from go.mod's go line at install, `GOTOOLCHAIN="go$(go list -m -f '{{.GoVersion}}')"` in the checkout,
+  so the workflow names no Go version of its own: no second copy, no `# renovate:` comment and no
+  Renovate matchString keep one in step (`test/architecture` refuses a literal `go1.<n>` anywhere in the
+  workflow, `test/lint` any customManager that matches a `GOTOOLCHAIN=` line). It stays in row 2's step
   because after the module download every Go command runs with `GOPROXY=off`, and `go install
   pkg@version` cannot: it looks up the module's deprecation through the proxy. Before the scan, the
   "Download the Go modules" step fails the run with an `::error` when `govulncheck -version` (the Go it
