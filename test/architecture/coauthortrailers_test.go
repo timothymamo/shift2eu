@@ -22,6 +22,11 @@ const (
 	// status check on main (ADR 0050, Maintainer steps).
 	coAuthorCheckName = "Co-author trailers (base)"
 
+	// coAuthorWorkflowYAMLPath is the other spelling GitHub reads the workflow
+	// under: a copy at that path would define the co-author check a second time,
+	// so the guard refuses it (issue #706, the auditor's finding L3).
+	coAuthorWorkflowYAMLPath = ".github/workflows/coauthor-trailers.yaml"
+
 	// ciWorkflowPath is the CI workflow that keeps the legacy co-author job during
 	// the two-step rollout (issue #706): the follow-up PR removes that job once the
 	// maintainer requires coAuthorCheckName, and the guard's exception with it.
@@ -90,7 +95,10 @@ func TestCICoAuthorTrailersRunsFromTheBaseBranch(t *testing.T) {
 // as YAML spells them: `name: "Co-author trailers (base)"`, `name: 'Co-author
 // trailers (base)'` and `name: ${{ 'Co-author trailers (base)' }}` all report a
 // run of that name, and a name is a job's id when the job holds none (the
-// auditor's finding F3). A pull request could loosen this pin too, so it is a
+// auditor's finding F3). Every workflow GitHub runs is read, of both spellings -
+// .yml and .yaml - and a job the reader cannot read as one name, such as a block
+// scalar or a quoted key, fails this test closed rather than being skipped (the
+// auditor's finding L3). A pull request could loosen this pin too, so it is a
 // review aid, not a barrier. The trigger is the barrier.
 func TestCICoAuthorTrailersStaysOutOfCI(t *testing.T) {
 	t.Parallel()
@@ -100,7 +108,7 @@ func TestCICoAuthorTrailersStaysOutOfCI(t *testing.T) {
 		t.Fatalf("resolve %q: %v", repoRoot, err)
 	}
 
-	paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
+	paths, err := workflowPaths(root)
 	if err != nil {
 		t.Fatalf("list .github/workflows: %v", err)
 	}
@@ -109,16 +117,29 @@ func TestCICoAuthorTrailersStaysOutOfCI(t *testing.T) {
 		t.Fatalf("no workflow under .github/workflows, so this test would pin nothing")
 	}
 
+	// One source of the check: GitHub runs a workflow of either spelling, so a
+	// coauthor-trailers.yaml beside the .yml would define the co-author check a
+	// second time, under a trigger and steps this guard never reads.
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(coAuthorWorkflowYAMLPath))); err == nil {
+		t.Errorf("%s exists beside %s, want the .yml alone: GitHub reads both spellings, so the copy defines the co-author check a second time (ADR 0050, issue #706)",
+			coAuthorWorkflowYAMLPath, coAuthorWorkflowPath)
+	}
+
 	jobs := 0
 	var legacy []coAuthorJobName
 
-	for _, path := range paths {
-		if filepath.Base(path) == filepath.Base(coAuthorWorkflowPath) {
+	for _, name := range paths {
+		if filepath.Base(name) == filepath.Base(coAuthorWorkflowPath) {
 			continue
 		}
 
-		name := ".github/workflows/" + filepath.Base(path)
-		names := workflowJobNames(t, name, readWorkflow(t, root, name))
+		names, err := workflowJobNames(name, readWorkflow(t, root, name))
+		if err != nil {
+			t.Errorf("%s: %v, want every job of every workflow under .github/workflows read as a check run reports it: a job this reader cannot read could report any name, the co-author check's among them (ADR 0050, issue #706)",
+				name, err)
+
+			continue
+		}
 
 		jobs += len(names)
 
@@ -195,15 +216,15 @@ type coAuthorJobName struct {
 	raw  string
 }
 
-// value returns the name the job's check run reports: a single- or
-// double-quoted scalar unquoted, a plain value as it stands, and a job without a
-// name: named by its id, which is the name GitHub reports for it.
+// value returns the name the job's check run reports: the scalar the guard read
+// from name:, unquoted there, and a job without a name: named by its id, which
+// is the name GitHub reports for it.
 func (n coAuthorJobName) value() string {
 	if n.line == 0 {
 		return n.id
 	}
 
-	return unquoteYAMLScalar(n.raw)
+	return n.raw
 }
 
 // unquoteYAMLScalar returns the text a single- or double-quoted YAML scalar
@@ -222,29 +243,155 @@ func unquoteYAMLScalar(raw string) string {
 	return raw
 }
 
-// workflowJobNames returns every job of the workflow document doc that path
-// names, in the order of its id, with the name: it reports as a check.
-func workflowJobNames(t *testing.T, path, doc string) []coAuthorJobName {
-	t.Helper()
+// workflowPaths returns the paths, relative to root, of every workflow under
+// .github/workflows that GitHub runs, sorted: both spellings, .yml and .yaml. A
+// guard that globbed *.yml alone would never read a workflow added as
+// spoof.yaml, and so never refuse the job name it reports (issue #706, the
+// auditor's finding L3).
+func workflowPaths(root string) ([]string, error) {
+	entries, err := os.ReadDir(filepath.Join(root, ".github", "workflows"))
+	if err != nil {
+		return nil, err
+	}
 
+	var paths []string
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		if ext := filepath.Ext(entry.Name()); ext != ".yml" && ext != ".yaml" {
+			continue
+		}
+
+		paths = append(paths, ".github/workflows/"+entry.Name())
+	}
+
+	slices.Sort(paths)
+
+	return paths, nil
+}
+
+// workflowJobNames returns every job of the workflow document doc that path
+// names, in the order of its id, with the name: it reports as a check. It fails
+// closed: a job that is not a block mapping, and a job whose name: key or value
+// is not one this guard reads as the single name GitHub reports, are errors, so
+// a spelling it cannot read is refused rather than read as a job with no name:
+// (issue #706, the auditor's finding L3).
+func workflowJobNames(path, doc string) ([]coAuthorJobName, error) {
 	jobs, err := workflowJobs(doc)
 	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
+		return nil, err
 	}
 
 	names := make([]coAuthorJobName, 0, len(jobs))
 
 	for _, id := range jobIDs(jobs) {
-		name := coAuthorJobName{path: path, id: id}
-
-		if num, raw, ok := ciScalar(jobs[id], "name"); ok {
-			name.line, name.raw = num, raw
+		name, err := coAuthorJobNameOf(id, jobs[id])
+		if err != nil {
+			return nil, err
 		}
+
+		name.path = path
 
 		names = append(names, name)
 	}
 
-	return names
+	return names, nil
+}
+
+// coAuthorJobNameOf returns the job id of a workflow with the name: its check
+// run reports, read from the block of the job's keys. It fails closed on every
+// spelling but a block mapping holding `name: <value>`, the value a single-line
+// plain or quoted scalar without a backslash: a job whose body is a flow
+// collection, a quoted name key, a value on another line and a block scalar all
+// report a name to GitHub that a line-wise reader of `name: ` alone never
+// compares (issue #706, the auditor's finding L3).
+func coAuthorJobNameOf(id string, block []ciLine) (coAuthorJobName, error) {
+	name := coAuthorJobName{id: id}
+
+	if len(block) == 0 {
+		return name, nil
+	}
+
+	indent := ciKeyIndent(block)
+
+	for _, l := range block {
+		if l.indent != indent {
+			continue
+		}
+
+		// A job is a block mapping: a flow collection spells the same job to
+		// GitHub, and holds a name: this line-wise reader never sees.
+		if strings.HasPrefix(l.text, "{") || strings.HasPrefix(l.text, "[") {
+			return name, fmt.Errorf("line %d: the job %s is a flow collection, want a block mapping of its keys: the reader sees no name: in it, so a name it reports would slip past every rule",
+				l.num, id)
+		}
+
+		key, _, ok := strings.Cut(l.text, ":")
+		if !ok || unquoteYAMLScalar(strings.TrimSpace(key)) != "name" {
+			continue
+		}
+
+		if l.text == "name:" {
+			return name, fmt.Errorf("line %d: the job %s holds its name value on the lines below the key, want a single-line plain or quoted scalar after `name: `: a value that does not sit on the key's line is a name this reader never compares",
+				l.num, id)
+		}
+
+		if !strings.HasPrefix(l.text, "name: ") {
+			return name, fmt.Errorf("line %d: the job %s spells its name key %q, want `name: <value>`: a quoted key, or a space before the colon, reads the same name to GitHub, so a job of that name could report a check beside the co-author check's own",
+				l.num, id, l.text)
+		}
+
+		value, err := coAuthorNameScalar(l.num, id, strings.TrimPrefix(l.text, "name: "))
+		name.line, name.raw = l.num, value
+
+		return name, err
+	}
+
+	return name, nil
+}
+
+// coAuthorNameScalar returns the name the name: value raw reports, and fails on
+// every value it cannot read as the one name GitHub reports: a block scalar's
+// marker, a flow collection, a YAML indicator, a quoted scalar that does not
+// close on the same line, and any value holding a backslash, whose escape spells
+// the name in characters no literal comparison sees (issue #706, the auditor's
+// finding L3).
+func coAuthorNameScalar(num int, id, raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("line %d: the job %s holds an empty name value, want a single-line plain or quoted scalar: GitHub reports no name for it, so every rule compares nothing",
+			num, id)
+	}
+
+	switch raw[0] {
+	case '>', '|':
+		return "", fmt.Errorf("line %d: the job %s holds the block scalar marker %q for its name, want a single-line plain or quoted scalar: the lines below the marker are the name GitHub reports, and this reader compares the marker",
+			num, id, raw)
+	case '[', '{':
+		return "", fmt.Errorf("line %d: the job %s holds a flow collection %q for its name, want a single-line plain or quoted scalar: GitHub reports the name the collection holds",
+			num, id, raw)
+	case '&', '*', '!', '%', '@', '`':
+		return "", fmt.Errorf("line %d: the job %s holds the YAML indicator %q in its name value, want a single-line plain or quoted scalar",
+			num, id, raw)
+	}
+
+	if strings.Contains(raw, "\\") {
+		return "", fmt.Errorf("line %d: the job %s holds a backslash in its name value %q, want a single-line plain or quoted scalar with none: an escape spells the name GitHub reports in characters no literal comparison sees",
+			num, id, raw)
+	}
+
+	if raw[0] == '"' || raw[0] == '\'' {
+		if len(raw) < 2 || raw[len(raw)-1] != raw[0] {
+			return "", fmt.Errorf("line %d: the job %s holds the quoted name value %q, want one quoted scalar on the key's line: a quote that runs on reports a name this reader never compares",
+				num, id, raw)
+		}
+
+		return raw[1 : len(raw)-1], nil
+	}
+
+	return raw, nil
 }
 
 // coAuthorNameProblem is one job of a workflow that may report a status check
@@ -296,12 +443,18 @@ func coAuthorNameProblems(names []coAuthorJobName) []coAuthorNameProblem {
 }
 
 // TestCICoAuthorTrailersNameGuardReadsEverySpelling pins the name guard's parser
-// and rules on small workflow snippets (issue #706, the auditor's finding F3).
-// The integration test above reads the repository's workflows, where a spelling
-// no workflow uses goes untested: here each quoted, plain and templated variant
-// of the refused names is read, and a name the guard must allow - the allow-listed
-// matrix name, ci.yml's legacy job, a quoted name holding no (base) - stays
-// allowed.
+// and rules on small workflow snippets (issue #706, the auditor's findings F3 and
+// L3). The integration test above reads the repository's workflows, where a
+// spelling no workflow uses goes untested: here each quoted, plain and templated
+// variant of the refused names is read, and a name the guard must allow - the
+// allow-listed matrix name, ci.yml's legacy job, a quoted name holding no (base)
+// - stays allowed.
+//
+// The guard reads no spelling it cannot read as the single name a check run
+// reports. A block scalar, a value on the lines below the key, a backslash
+// escape, a quoted name key, a flow collection and a job that is not a block
+// mapping are each refused with an error, so a name that would report a check
+// beside the co-author check's own fails the test instead of passing it unseen.
 func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 	t.Parallel()
 
@@ -319,6 +472,9 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 		// wantProblems is the rendering of every problem the guard reports, in
 		// order, and nil when it reports none.
 		wantProblems []string
+		// wantErr is the text the guard's refusal holds, and empty when the guard
+		// must read the snippet.
+		wantErr string
 	}{
 		{
 			name:      "a plain name that reports no (base) check",
@@ -423,13 +579,88 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 				`0: coauthor-trailers: "coauthor-trailers": ` + ruleLegacyJobID,
 			},
 		},
+		{
+			name:      "a (base) name in a .yaml workflow",
+			path:      ".github/workflows/spoof.yaml",
+			doc:       "jobs:\n  build:\n    name: Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Co-author trailers (base)"},
+			wantProblems: []string{
+				`3: build: "Co-author trailers (base)": ` + ruleBaseName,
+			},
+		},
+		{
+			name:    "a block-scalar (base) name",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: >-\n      Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "block scalar marker",
+		},
+		{
+			name:    "a literal block-scalar (base) name",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: |\n      Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "block scalar marker",
+		},
+		{
+			name:    "a (base) name on the lines below the key",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name:\n      Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "on the lines below the key",
+		},
+		{
+			name:    "a double-quoted (base) name spelled with escapes",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: \"Co-author trailers \\u0028base\\u0029\"\n    runs-on: ubuntu-latest\n",
+			wantErr: "backslash",
+		},
+		{
+			name:    "a double-quoted name key",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    \"name\": Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "spells its name key",
+		},
+		{
+			name:    "a single-quoted name key",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    'name': Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantErr: "spells its name key",
+		},
+		{
+			name:    "a flow-mapping job",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build: {name: \"Co-author trailers (base)\", runs-on: ubuntu-latest}\n",
+			wantErr: "is not a job id ending in a colon",
+		},
+		{
+			name:    "a job whose body is a flow mapping",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    {name: \"Co-author trailers (base)\", runs-on: ubuntu-latest}\n",
+			wantErr: "flow collection",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			names := workflowJobNames(t, tc.path, tc.doc)
+			names, err := workflowJobNames(tc.path, tc.doc)
+
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("workflowJobNames(%q) reads %v, want an error holding %q: a spelling the guard cannot read as the one name a check run reports is a name it compares with no rule, so a job of the co-author check's name could slip past it (ADR 0050, issue #706)",
+						tc.doc, names, tc.wantErr)
+				}
+
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("workflowJobNames(%q) fails with %q, want an error holding %q", tc.doc, err, tc.wantErr)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("workflowJobNames(%q): %v, want the snippet read: the real workflows hold only the spellings the guard reads, so it must not refuse them",
+					tc.doc, err)
+			}
 
 			gotNames := make(map[string]string, len(names))
 			for _, n := range names {
@@ -450,6 +681,40 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 				t.Errorf("coAuthorNameProblems(%q) (-want +got):\n%s\nWant every name that could report a check beside Co-author trailers (base) refused, however it is quoted or templated, and the allowed ones alone reported by none", tc.doc, diff)
 			}
 		})
+	}
+}
+
+// TestCICoAuthorTrailersReadsBothWorkflowSpellings pins that the guard's reader
+// takes every workflow file GitHub runs under .github/workflows: both *.yml and
+// *.yaml, and neither a directory nor a file of another extension (issue #706,
+// the auditor's finding L3). A glob of *.yml alone left a workflow added as
+// spoof.yaml unread, and so its job names unrefused.
+func TestCICoAuthorTrailersReadsBothWorkflowSpellings(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dir := filepath.Join(root, ".github", "workflows")
+
+	if err := os.MkdirAll(filepath.Join(dir, "nested.yaml"), 0o750); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	for _, name := range []string{"ci.yml", "spoof.yaml", "notes.txt", "workflow.yaml.bak"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("jobs: {}\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	paths, err := workflowPaths(root)
+	if err != nil {
+		t.Fatalf("list %s: %v", dir, err)
+	}
+
+	want := []string{".github/workflows/ci.yml", ".github/workflows/spoof.yaml"}
+
+	if diff := cmp.Diff(want, paths); diff != "" {
+		t.Errorf("workflowPaths(%q) (-want +got):\n%s\nWant both spellings GitHub runs, .yml and .yaml, and no other file: a workflow added under one spelling the reader skips is a job name the guard never reads",
+			root, diff)
 	}
 }
 
