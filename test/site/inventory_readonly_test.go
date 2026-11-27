@@ -35,7 +35,8 @@ import (
 // A command the text wraps — after the CLI's name in a code span, a prose line, a
 // fence body or a heredoc body, or in the middle of a program's comment table — is
 // thus read whole. The one line that continues nothing is the next command's: a
-// continuation whose first field names a CLI starts that CLI's own sequence, so the
+// continuation whose first field, as its own line's scan sees it, names a CLI starts
+// that CLI's own sequence, so the
 // `az rest` reads the text gives a line each are reads of their own, not one
 // invocation with two methods. The guard is the line's last character: the guide's
 // JSON writes `"source": "aws",`, whose comma ends the mention, not the
@@ -383,9 +384,11 @@ func (c cloudCLI) denies(flag string) bool {
 // the line an argument before them wraps onto, and no CLI need be named on the line:
 // the CLIs read the variable and take the flag in every invocation. It runs once per
 // logical line, before the field loop, so a line is reported once. The name a field
-// gives is trimmed of the `:` and the `-`, `+` and `?` a parameter expansion puts
-// after it (`${AWS_ENDPOINT_URL:=https://example.com}` reaches it as
-// `AWS_ENDPOINT_URL:`), and of the single quote a shell text may put around it.
+// gives ends at the first of the `:` and the `-`, `+` and `?` a parameter expansion
+// puts after it, whether or not a word follows the operator: a variable's name holds
+// none of them, so `${AWS_ENDPOINT_URL:-https://example.com}` reaches it as
+// `AWS_ENDPOINT_URL:` and `${AZURE_CONFIG_DIR+set}` as `AZURE_CONFIG_DIR+`. The single
+// quote a shell text may put around it is trimmed too.
 func deniedToken(file string, line logicalLine) (string, bool) {
 	for _, field := range lineFields(line.text) {
 		word := strings.Trim(field, "'")
@@ -395,7 +398,10 @@ func deniedToken(file string, line logicalLine) (string, bool) {
 
 		flag := flagName(word)
 		name, _, _ := strings.Cut(word, "=")
-		name = strings.TrimRight(name, ":-+?")
+
+		if at := strings.IndexAny(name, ":-+?"); at >= 0 {
+			name = name[:at]
+		}
 
 		for _, cli := range cloudCLIs {
 			if slices.Contains(cli.deniedFlags, flag) {
@@ -1086,11 +1092,11 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 // TestReadOnlyCheckSeparatesConsecutiveCommands shows the scan reads commands the
 // text gives one line each as the commands they are (issue #716's fifth review). A
 // line that ends at its last field takes the next line's fields, but no sequence
-// starts with another CLI's name: a line whose first continuation field names a CLI
-// is that CLI's own sequence, so two `az rest` reads whose words sit one above the
-// other are two reads, not one invocation with two methods. The wrap cases of
+// starts with another CLI's name: a line whose first field names a CLI is that CLI's
+// own sequence, so two `az rest` reads whose words sit one above the other are two
+// reads, not one invocation with two methods. The wrap cases of
 // TestReadOnlyCheckFlagsPlantedWrites still fail: a sequence continues only while
-// the next line's first continuation field names no CLI.
+// the next line's first field names no CLI.
 func TestReadOnlyCheckSeparatesConsecutiveCommands(t *testing.T) {
 	t.Parallel()
 
@@ -1360,8 +1366,8 @@ func scanText(file, text string) fieldScan {
 			// the words after a command path are positionals, so prose appended to
 			// a read changes nothing, while a denied flag or a second method the
 			// text wraps onto the line is read where it belongs. A next line whose
-			// first continuation field names a CLI is that CLI's own command, not
-			// this one's continuation: the text wrote two commands, one per line.
+			// first field names a CLI is that CLI's own command, not this one's
+			// continuation: the text wrote two commands, one per line.
 			if next, ok := continuationOf(lines, at, line.text, fields); ok {
 				words = append(slices.Clone(words), continuationFields(next.text)...)
 			}
@@ -1489,10 +1495,14 @@ func endsWithLastField(text string, fields []string) bool {
 }
 
 // continuationOf returns the line that continues a line's field sequence, and
-// whether there is one: the line after it, when that line's first continuation field
-// names no CLI. A continuation field that names a CLI belongs to that CLI's own
+// whether there is one: the line after it, unless the first field that line's own
+// scan sees names a CLI. A first field that names a CLI belongs to that CLI's own
 // sequence, so the two `az rest` reads the text gives a line each stay apart, while
 // `aws` on a line and `ec2 create-tags` on the next are one command the text wrapped.
+// The cut is decided on the field the next line's own scan sees, not on the
+// continuation fields: a comment or blockquote marker is no part of the command, but
+// `#aws` is one field that names no CLI, so the line it opens is no command of its
+// own and goes on with this one.
 func continuationOf(lines []logicalLine, at int, text string, fields []string) (logicalLine, bool) {
 	if at+1 >= len(lines) || !endsWithLastField(text, fields) {
 		return logicalLine{}, false
@@ -1500,7 +1510,7 @@ func continuationOf(lines []logicalLine, at int, text string, fields []string) (
 
 	next := lines[at+1]
 
-	if nextFields := continuationFields(next.text); len(nextFields) > 0 && cliNameField(nextFields[0]) != "" {
+	if nextFields := lineFields(next.text); len(nextFields) > 0 && cliNameField(nextFields[0]) != "" {
 		return logicalLine{}, false
 	}
 
