@@ -28,6 +28,10 @@ const (
 	piTesterUpdateTarget       = "vm-pi-tester"
 )
 
+// piTesterNoticePrefix starts the wrapper's one line about the project's copies: the reason, then one
+// "<project> (installed: <installed>)" pair per copy the tester did not take, "; "-joined (issue #692, round 3).
+const piTesterNoticePrefix = "pi-tester: project copies missing or different from the installed ones: "
+
 // piTesterInstalled is one fake root's installed layout: the directory the wrapper is installed in, and the
 // three files under it, as the wrapper finds them beside its own path.
 type piTesterInstalled struct {
@@ -375,6 +379,22 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 
 			line := lines[0]
 
+			// The notice's grammar (round 3): one prefix, then one "<project> (installed: <installed>)" pair per
+			// copy the tester did not take, "; "-joined, so a maintainer reads which copy the tester left and where
+			// the installed one is.
+			pairs := make([]string, 0, wantPairs)
+
+			for _, copy := range copies {
+				if !copy.matches {
+					pairs = append(pairs, fmt.Sprintf("%s (installed: %s)", copy.project, copy.installed))
+				}
+			}
+
+			if want := piTesterNoticePrefix + strings.Join(pairs, "; "); !strings.HasPrefix(line, want) {
+				t.Errorf("the wrapper's one line is %q, which does not start with %q: the line carries its reason first and then the differing copies as \"<project> (installed: <installed>)\" pairs joined by \"; \", so a maintainer reads which copy the tester did not take and where the installed one is (issue #692, round 3)",
+					line, want)
+			}
+
 			if !strings.Contains(line, "make "+piTesterUpdateTarget) {
 				t.Errorf("the wrapper's one line is %q, which does not name the update step make %s: a maintainer reading the pane cannot tell how to update the installed copy (issue #692)", line, piTesterUpdateTarget)
 			}
@@ -584,6 +604,12 @@ func piTesterStepUnderRoot(t *testing.T, step []string, root string) string {
 // and runs the machine's own install with the rest, which applies the mode and creates the files.
 const piTesterFakeInstall = `#!/bin/sh
 real='%s'
+if [ -n "${SHIFT2EU_TEST_INSTALL_LOG:-}" ]; then
+  {
+    printf 'tool=install\n'
+    for a in "$@"; do printf 'arg=%%s\n' "$a"; done
+  } >> "${SHIFT2EU_TEST_INSTALL_LOG}"
+fi
 options=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -605,26 +631,73 @@ done
 exec "${real}" ${options} "$@"
 `
 
+// piTesterStepState is what one run of the provisioning step leaves at one of its three destinations: nothing, a
+// copy make vm-pi-tester left with other content, or the template's copy with its mode.
+type piTesterStepState int
+
+const (
+	piTesterStepAbsent piTesterStepState = iota
+	piTesterStepChanged
+	piTesterStepTemplate
+)
+
+// piTesterStepSet is the state of the wrapper, the deny extension and the deny list, in that order.
+type piTesterStepSet struct {
+	wrapper   piTesterStepState
+	extension piTesterStepState
+	list      piTesterStepState
+}
+
 // TestLimaPiTesterStepLeavesAnInstalledCopyAlone pins the boot guard of issue #692: Lima runs the template's system
 // provisioning on every boot, so a step that installs over its destination would replace the copy the maintainer
 // put there with make vm-pi-tester each time the VM starts, undoing it. The step's own shell text is run here
 // against a fake root, with the destination it names rewritten into that root and a stand-in install that drops the
-// ownership options only root can use: the first run installs the three files, and a run over copies the
-// maintainer changed leaves them as they are.
+// ownership options only root can use.
+//
+// The three files are installed as one set, guarded on the wrapper, which both installers write last and which
+// therefore marks a complete installation (issue #692, round 3): with the wrapper there the step installs nothing,
+// and without it the step installs all three from the template, the two deny files too, overwriting a deny file
+// that is already there. The cases are the states such a root can be left in: none of the files, a complete set a
+// maintainer changed, the deny files without the wrapper (an installation cut short), and the wrapper without the
+// deny list (where the wrapper's own fail-closed check refuses visibly).
 func TestLimaPiTesterStepLeavesAnInstalledCopyAlone(t *testing.T) {
 	t.Parallel()
 
 	installPath := realTool(t, "install")
 	step := limaPiTesterInstallSubshell(t, readRepoFile(t, limaTemplateRepoPath))
 
+	changed := "# installed by make vm-pi-tester, as a later change leaves it\n"
+
 	cases := []struct {
 		name string
-		// installed changes the three files before the run: the copy a maintainer's make vm-pi-tester left, which
-		// a boot must not replace.
-		installed bool
+		// why names, for a failure, the state the case leaves behind and the guard it decides.
+		why    string
+		before piTesterStepSet
+		after  piTesterStepSet
 	}{
-		{name: "a root with none of the files yet"},
-		{name: "a root where make vm-pi-tester already installed them", installed: true},
+		{
+			name:  "a root with none of the files yet",
+			why:   "the wrapper, which marks a complete installation, is not there",
+			after: piTesterStepSet{wrapper: piTesterStepTemplate, extension: piTesterStepTemplate, list: piTesterStepTemplate},
+		},
+		{
+			name:   "a root where make vm-pi-tester already installed them",
+			why:    "the wrapper, which marks a complete installation, is there",
+			before: piTesterStepSet{wrapper: piTesterStepChanged, extension: piTesterStepChanged, list: piTesterStepChanged},
+			after:  piTesterStepSet{wrapper: piTesterStepChanged, extension: piTesterStepChanged, list: piTesterStepChanged},
+		},
+		{
+			name:   "the deny files are there and the wrapper is missing",
+			why:    "the wrapper, which marks a complete installation, is not there",
+			before: piTesterStepSet{extension: piTesterStepChanged, list: piTesterStepChanged},
+			after:  piTesterStepSet{wrapper: piTesterStepTemplate, extension: piTesterStepTemplate, list: piTesterStepTemplate},
+		},
+		{
+			name:   "the wrapper is there and the deny list is missing",
+			why:    "the wrapper, which marks a complete installation, is there",
+			before: piTesterStepSet{wrapper: piTesterStepChanged, extension: piTesterStepChanged},
+			after:  piTesterStepSet{wrapper: piTesterStepChanged, extension: piTesterStepChanged, list: piTesterStepAbsent},
+		},
 	}
 
 	for _, tc := range cases {
@@ -669,17 +742,21 @@ func TestLimaPiTesterStepLeavesAnInstalledCopyAlone(t *testing.T) {
 				path   string
 				mode   os.FileMode
 				source string
+				before piTesterStepState
+				after  piTesterStepState
 			}{
-				{name: "the wrapper", path: filepath.Join(installedDir, "pi-tester.sh"), mode: 0o755, source: piTesterScript},
-				{name: "the deny extension", path: filepath.Join(installedDir, "extensions", "deny-env-printing.ts"), mode: 0o644, source: denyExtensionFile},
-				{name: "the deny list", path: filepath.Join(installedDir, "deny-env-printing.json"), mode: 0o644, source: denyListFile},
+				{name: "the wrapper", path: filepath.Join(installedDir, "pi-tester.sh"), mode: 0o755, source: piTesterScript, before: tc.before.wrapper, after: tc.after.wrapper},
+				{name: "the deny extension", path: filepath.Join(installedDir, "extensions", "deny-env-printing.ts"), mode: 0o644, source: denyExtensionFile, before: tc.before.extension, after: tc.after.extension},
+				{name: "the deny list", path: filepath.Join(installedDir, "deny-env-printing.json"), mode: 0o644, source: denyListFile, before: tc.before.list, after: tc.after.list},
 			}
 
-			changed := "# installed by make vm-pi-tester, as a later change leaves it\n"
-
-			if tc.installed {
-				for _, file := range files {
+			for _, file := range files {
+				switch file.before {
+				case piTesterStepChanged:
+					// The copy a maintainer's make vm-pi-tester left, which a boot must not replace.
 					writeFileMode(t, file.path, []byte(changed), file.mode)
+				case piTesterStepTemplate:
+					writeFileMode(t, file.path, []byte(readRepoFile(t, file.source)), file.mode)
 				}
 			}
 
@@ -689,27 +766,39 @@ func TestLimaPiTesterStepLeavesAnInstalledCopyAlone(t *testing.T) {
 			}
 
 			for _, file := range files {
-				info, err := os.Stat(file.path)
-				if err != nil {
-					t.Fatalf("the provisioning step installed no %s at %s, so the tester has none of the files it needs after a VM is created (issue #692): %v\noutput: %s", file.name, file.path, err, out)
-				}
-
 				got, err := os.ReadFile(file.path)
-				if err != nil {
-					t.Fatalf("read %s: %v", file.path, err)
-				}
 
-				if tc.installed {
+				switch file.after {
+				case piTesterStepAbsent:
+					if err == nil {
+						t.Errorf("the provisioning step installed %s at %s although %s: the three files are installed as one set, and a boot must install nothing behind a complete installation, because the wrapper's own fail-closed check reports the file it needs (issue #692, round 3)\noutput: %s",
+							file.name, file.path, tc.why, out)
+					}
+
+					continue
+				case piTesterStepChanged:
+					if err != nil {
+						t.Fatalf("the provisioning step removed %s at %s although %s: the three files are installed as one set, so a boot installs nothing behind a complete installation (issue #692, round 3): %v\noutput: %s",
+							file.name, file.path, tc.why, err, out)
+					}
+
 					if string(got) != changed {
-						t.Errorf("a run of the provisioning step replaced %s at %s with the repository's copy, although a copy the maintainer installed was already there: Lima runs this step on every boot, so installing over the destination undoes make vm-pi-tester each time the VM starts. The step's install commands have to sit behind a guard that tests the destination first, as `[ -e %s ]` or `[ ! -e %s ]` (issue #692, the review's blocker)",
-							file.name, file.path, file.path, file.path)
+						t.Errorf("a run of the provisioning step replaced %s at %s with the repository's copy although %s: Lima runs this step on every boot, so installing over the destination undoes make vm-pi-tester each time the VM starts. The step's install commands have to sit behind a guard that tests %s first (issue #692, round 3)",
+							file.name, file.path, tc.why, piTesterInstalledScript)
 					}
 
 					continue
 				}
 
+				info, err := os.Stat(file.path)
+				if err != nil {
+					t.Fatalf("the provisioning step installed no %s at %s although %s: a VM created from the template gets all three files from it (issue #692, round 3): %v\noutput: %s",
+						file.name, file.path, tc.why, err, out)
+				}
+
 				if want := readRepoFile(t, file.source); string(got) != want {
-					t.Errorf("the provisioning step installed %s as %q, want %s byte for byte: a VM would run a copy that is not the one the tests run (issue #692)", file.name, string(got), file.source)
+					t.Errorf("the provisioning step left %s as %q, want %s byte for byte, although %s: when the wrapper is absent the step installs all three from the template, the two deny files too, so a destination that holds a deny file and no wrapper gets the template's copy (issue #692, round 3)\noutput: %s",
+						file.name, string(got), file.source, tc.why, out)
 				}
 
 				if perm := info.Mode().Perm(); perm != file.mode {
@@ -718,4 +807,141 @@ func TestLimaPiTesterStepLeavesAnInstalledCopyAlone(t *testing.T) {
 			}
 		})
 	}
+}
+
+// piTesterInstallOrder returns the tester's three files in the order an installer installs them, from the record a
+// fake install or sudo leaves: every install invocation's last argument, reduced to the file name it installs, with
+// a move's leading dot and trailing .new dropped. Directory creations and every other call fall out.
+func piTesterInstallOrder(log string) []string {
+	files := map[string]bool{
+		"pi-tester.sh":           true,
+		"deny-env-printing.ts":   true,
+		"deny-env-printing.json": true,
+	}
+
+	type call struct {
+		tool string
+		args []string
+	}
+
+	var calls []call
+
+	for _, line := range strings.Split(log, "\n") {
+		switch {
+		case strings.HasPrefix(line, "tool="):
+			calls = append(calls, call{tool: strings.TrimPrefix(line, "tool=")})
+		case strings.HasPrefix(line, "arg=") && len(calls) > 0:
+			calls[len(calls)-1].args = append(calls[len(calls)-1].args, strings.TrimPrefix(line, "arg="))
+		}
+	}
+
+	var order []string
+
+	for _, invocation := range calls {
+		args := invocation.args
+
+		// A fake install logs its own arguments; a fake sudo logs the command it runs, install, first.
+		if invocation.tool == "sudo" {
+			if len(args) == 0 || args[0] != "install" {
+				continue
+			}
+
+			args = args[1:]
+		} else if invocation.tool != "install" || len(args) == 0 {
+			continue
+		}
+
+		name := filepath.Base(args[len(args)-1])
+		name = strings.TrimSuffix(strings.TrimPrefix(name, "."), ".new")
+
+		if files[name] {
+			order = append(order, name)
+		}
+	}
+
+	return order
+}
+
+// piTesterInstallOrderPinned is the order both installers write the three files in (issue #692, round 3).
+var piTesterInstallOrderPinned = []string{"deny-env-printing.ts", "deny-env-printing.json", "pi-tester.sh"}
+
+// TestPiTesterInstallersInstallTheWrapperLast pins the order both installers write the three files in (issue #692,
+// round 3): the wrapper is installed after both deny files, because the wrapper is what marks an installation
+// complete - the provisioning step installs the whole set only when it is absent - so a wrapper written first would
+// let a run interrupted before the deny files leave a layout that looks installed. The provisioning step's own
+// shell text is run with a fake install that records each invocation, and the script make vm-pi-tester prints with
+// the sandbox's recording sudo, so each installer's record holds the destinations in the order it wrote them.
+func TestPiTesterInstallersInstallTheWrapperLast(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the template's provisioning step", func(t *testing.T) {
+		t.Parallel()
+
+		installPath := realTool(t, "install")
+		step := limaPiTesterInstallSubshell(t, readRepoFile(t, limaTemplateRepoPath))
+
+		root := newSandboxRoot(t)
+		tmpDir := filepath.Join(root, "tmp")
+		binDir := filepath.Join(root, "bin")
+		installLog := filepath.Join(root, "install.log")
+
+		for _, dir := range []string{tmpDir, binDir} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatalf("create %s: %v", dir, err)
+			}
+		}
+
+		writeFileMode(t, filepath.Join(binDir, "install"), []byte(fmt.Sprintf(piTesterFakeInstall, installPath)), 0o700)
+
+		env := map[string]string{
+			"PATH":                      binDir + ":/usr/local/bin:/usr/bin:/bin",
+			"HOME":                      root,
+			"TMPDIR":                    tmpDir,
+			"SHIFT2EU_TEST_INSTALL_LOG": installLog,
+		}
+
+		cmd := exec.Command("sh", "-s")
+		cmd.Env = envList(env)
+		cmd.Dir = root
+		cmd.Stdin = strings.NewReader(piTesterStepUnderRoot(t, step, root))
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("the provisioning step exited non-zero: Lima would fail the VM's boot\noutput: %s\nerror: %v", out, err)
+		}
+
+		record, err := os.ReadFile(installLog)
+		if err != nil {
+			t.Fatalf("the provisioning step ran no install the fake recorded, so this test cannot tell the order it writes the tester's files in (issue #692, round 3): %v", err)
+		}
+
+		if diff := cmp.Diff(piTesterInstallOrderPinned, piTesterInstallOrder(string(record))); diff != "" {
+			t.Errorf("dev/lima.yaml's provisioning step installs the tester's files in the wrong order: the wrapper has to come last, after both deny files, because it is what marks an installation complete (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("the script make vm-pi-tester prints", func(t *testing.T) {
+		t.Parallel()
+
+		sb := newSandbox(t)
+		sb.useFakeVMSudo(t)
+
+		root := filepath.Join(sb.root, "pi-tester-root")
+		if err := os.MkdirAll(root, 0o700); err != nil {
+			t.Fatalf("create %s: %v", root, err)
+		}
+
+		stream := vmPiTesterStream(t, sb, piTesterScript, denyExtensionFile, denyListFile)
+
+		env := sb.baseEnv()
+		env[piTesterRootHook] = root
+
+		stdout, stderr, err := sb.runStream(t, env, stream)
+		if err != nil {
+			t.Fatalf("the script %s prints exited non-zero in the VM: %v\nstdout: %s\nstderr: %s", vmPiTesterGenerator, err, stdout, stderr)
+		}
+
+		if diff := cmp.Diff(piTesterInstallOrderPinned, piTesterInstallOrder(sb.argvLogText(t))); diff != "" {
+			t.Errorf("the script %s prints installs the tester's files in the wrong order: the wrapper has to come last, after both deny files, because it is what marks an installation complete (-want +got):\n%s", vmPiTesterGenerator, diff)
+		}
+	})
 }

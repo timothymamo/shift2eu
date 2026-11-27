@@ -29,6 +29,11 @@ const vmPiTesterCall = "vm_pi_tester"
 // vmPiTesterDoneLine is the line the make recipe requires of the printed script.
 const vmPiTesterDoneLine = "vm-pi-tester: done"
 
+// vmPiTesterInstalledLine is the line the printed script prints before the done line, naming the directory it
+// installed into; the make recipe requires it as it requires the done line (issue #692, round 3), since done alone
+// says the run finished, not that it installed into that /usr/local path.
+const vmPiTesterInstalledLine = "vm-pi-tester: installed the tester's wrapper and env-printing refusal in " + piTesterInstallParent + "/pi-tester"
+
 // piTesterRootHook is the variable the printed script has to honour, a prefix for the /usr/local/lib/shift2eu/pi-tester
 // it installs to (empty by default): a production hook these tests require, since without it the printed script can
 // only install to the machine's own /usr/local, which no test may write (issue #692).
@@ -253,6 +258,31 @@ func TestVMPiTesterScriptInstallsUnderTheRootHook(t *testing.T) {
 			vmPiTesterGenerator, vmPiTesterDoneLine, stdout, stderr)
 	}
 
+	// What make requires of the output (round 3): the installed line, naming the directory the root hook prefixed,
+	// and then the done line as the last line, so a maintainer reads where the run installed and make knows it
+	// installed there rather than somewhere else.
+	lines := piTesterOutputLines(stdout)
+	if len(lines) == 0 {
+		t.Fatalf("the script %s prints wrote nothing on stdout, so neither the installed line nor %q reaches make (issue #692, round 3):\nstderr: %s",
+			vmPiTesterGenerator, vmPiTesterDoneLine, stderr)
+	}
+
+	if last := lines[len(lines)-1]; last != vmPiTesterDoneLine {
+		t.Errorf("the last line the script %s prints writes is %q, want %q exactly: make reads that line as the run's end (issue #692, round 3): %q",
+			vmPiTesterGenerator, last, vmPiTesterDoneLine, lines)
+	}
+
+	wantInstalledLine := "vm-pi-tester: installed the tester's wrapper and env-printing refusal in " + filepath.Join(root, filepath.FromSlash(piTesterInstallDir))
+
+	switch installed := slices.Index(lines, wantInstalledLine); {
+	case installed < 0:
+		t.Errorf("the script %s prints wrote no line %q, the directory the run installed into under the root %s names: the line is what names an installation, and make requires it as it requires %q (issue #692, round 3): %q",
+			vmPiTesterGenerator, wantInstalledLine, piTesterRootHook, vmPiTesterDoneLine, lines)
+	case installed == len(lines)-1:
+		t.Errorf("the script %s prints writes the installed line after the last line %q: the installed line has to precede it, so the directory is printed even when the done line is the last thing a maintainer sees (issue #692, round 3): %q",
+			vmPiTesterGenerator, vmPiTesterDoneLine, lines)
+	}
+
 	script, extension, list := piTesterRootInstalled(root)
 
 	files := []struct {
@@ -434,7 +464,9 @@ func makefilePhonyTargets(text string) []string {
 
 // TestMakefileHasThePiTesterUpdateTarget pins the update path of issue #692: a VM created before the root-owned
 // tester wrapper has it installed by make vm-pi-tester, a host target with a help line like vm-gh-wrapper's, so
-// the maintainer does not have to rebuild the VM.
+// the maintainer does not have to rebuild the VM. The recipe runs the VM's script with the tests' root hook unset,
+// and requires both lines the script prints, the one naming the directory it installed into as well as the done
+// line (round 3).
 func TestMakefileHasThePiTesterUpdateTarget(t *testing.T) {
 	t.Parallel()
 
@@ -470,5 +502,49 @@ func TestMakefileHasThePiTesterUpdateTarget(t *testing.T) {
 
 	if rule+1 >= len(lines) || !strings.HasPrefix(lines[rule+1], "\t") {
 		t.Errorf("%s: %s has no recipe line after it, so the target installs nothing (issue #692): %s", makefilePath, piTesterUpdateTarget, strings.TrimSpace(lines[rule]))
+	}
+
+	var recipe []string
+
+	for i := rule + 1; i < len(lines) && strings.HasPrefix(lines[i], "\t"); i++ {
+		recipe = append(recipe, lines[i])
+	}
+
+	// The root hook is the tests' prefix for the install directory, so the VM's run unsets it (round 3): a value in
+	// the maintainer's environment would otherwise send the installation outside /usr/local.
+	limactl := -1
+
+	for i, line := range recipe {
+		if strings.Contains(line, "limactl shell") {
+			limactl = i
+
+			break
+		}
+	}
+
+	switch {
+	case limactl < 0:
+		t.Errorf("%s: the %s recipe has no limactl line, so the script never reaches the VM (issue #692):\n%s", makefilePath, piTesterUpdateTarget, strings.Join(recipe, "\n"))
+	case !strings.Contains(recipe[limactl], "env -u "+piTesterRootHook+" sh -s"):
+		t.Errorf("%s: the %s recipe runs %q, which does not run the script with `env -u %s sh -s`: the hook is the tests' prefix for %s, and a value of it in the maintainer's environment would send the VM's installation outside /usr/local (issue #692, round 3):\n%s",
+			makefilePath, piTesterUpdateTarget, strings.TrimSpace(recipe[limactl]), piTesterRootHook, piTesterInstallParent, strings.Join(recipe, "\n"))
+	}
+
+	// The recipe requires the line the script prints for the directory it installed into, as it requires the done
+	// line (round 3): "done" alone says the run finished, not that it installed into the path the recipe means, so a
+	// run whose paths changed under the root hook would pass.
+	requiresInstalled := false
+
+	for _, line := range recipe {
+		if strings.Contains(line, "grep -Fqx") && strings.Contains(line, vmPiTesterInstalledLine) {
+			requiresInstalled = true
+
+			break
+		}
+	}
+
+	if !requiresInstalled {
+		t.Errorf("%s: the %s recipe does not check the VM's output with `grep -Fqx %q`, as it checks %q: a run that finished without installing into %s would otherwise pass, for instance after a path change on either side (issue #692, round 3):\n%s",
+			makefilePath, piTesterUpdateTarget, vmPiTesterInstalledLine, vmPiTesterDoneLine, piTesterInstallParent+"/pi-tester", strings.Join(recipe, "\n"))
 	}
 }
