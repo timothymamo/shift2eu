@@ -88,7 +88,7 @@ var (
 	digestPattern  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 	versionPattern = regexp.MustCompile(`^v?[0-9]{1,4}(\.[0-9]{1,4}){0,3}$`)
 	rulePattern    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$`)
-	filePattern    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.+@:/-]*$`)
+	filePattern    = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.+@:/-]*$`)
 	sinkPattern    = regexp.MustCompile(`^[A-Za-z0-9_.()*/:\[\]-]{1,120}$`)
 	integerLiteral = regexp.MustCompile(`^-?(0|[1-9][0-9]{0,15})$`)
 )
@@ -605,7 +605,11 @@ func validateFinding(f Finding, path string, ran map[string]bool) error {
 }
 
 // validFile is the schema's file rule: 1 to 200 bytes of the allowed set,
-// starting with a letter, a digit or _, with no empty, . or .. segment.
+// starting with a letter, a digit, _ or a dot, with no empty, . or .. segment.
+// A segment may start with a dot (.github/workflows/ci.yml, .dot-agent-deck.toml
+// are real repository paths), but a segment that is exactly . or .., or
+// empty, is still refused. Longer runs of dots such as ... are ordinary
+// names, and a leading / stays refused.
 func validFile(file string) bool {
 	if len(file) == 0 || len(file) > maxFileBytes || !filePattern.MatchString(file) {
 		return false

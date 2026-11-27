@@ -781,6 +781,56 @@ func TestPiEnvDenyListRefusesPrintingTheEnvironment(t *testing.T) {
 		// The file the deck keeps the agents' keys in.
 		"cat ~/.config/dot-agent-deck/daemon.env",
 		"grep KEY /home/u/.config/dot-agent-deck/daemon.env",
+		// The agents App's token file, which `make agents-token` writes under the VM user's home and the gh
+		// wrapper reads (ADR 0031, docs/dev-environment.md): printing it hands over the one GitHub credential
+		// every agent pushes with, so every spelling of its path is refused, as the deck's keys file is.
+		"cat ~/.config/shift2eu/agents-app-token",
+		"cat /home/x/.config/shift2eu/agents-app-token",
+		"head -c 32 ~/.config/shift2eu/agents-app-token",
+		`printf '%s' "$(cat ~/.config/shift2eu/agents-app-token)"`,
+		// The file named without its folder, which is how a search or a quoted path reaches it: a walk of the
+		// home directory that prints what its name matches reads the token, and so does a spelling of the folder
+		// a glob or quoted segment builds (`~/.con*/shift2eu`, `~/.config/'shift2eu'`).
+		"find ~ -name agents-app-token -exec cat {} +",
+		"cat ~/.con*/shift2eu/agents-app-token",
+		"cat ~/.config/'shift2eu'/agents-app-token",
+		// The folder, rather than the one file in it: `make agents-token` writes the token and the identity
+		// beside it, and a glob, a listing or a cd reads whichever file is there now, so the whole folder is
+		// refused as the deck's key directory is.
+		"cat ~/.config/shift2eu/agents-app-t*",
+		"cd ~/.config/shift2eu && cat agents-app-token",
+		"ls ~/.config/shift2eu",
+		// The tester's own marker (issue #662): the VM's login profile leaves the agents' keys file unsourced for
+		// the tester only while SHIFT2EU_PI_TESTER is set and non-empty, so a command that unsets it and starts a
+		// login shell puts every key back in the pane, which is the round trip the marker exists to close.
+		"unset SHIFT2EU_PI_TESTER; bash -l",
+		"SHIFT2EU_PI_TESTER= bash -l -c true",
+		"env -u SHIFT2EU_PI_TESTER bash -l",
+		// A login shell started with no environment at all: `env -i`, `--ignore-environment`, `env -`,
+		// `exec -c`, `sudo -i` and `su -` each either clear the marker or start a login shell that never saw it,
+		// and the VM's login profile then sources the agents' keys file, which is the round trip the marker exists
+		// to close (issue #662, round 3's audit, finding SF-1).
+		"env -i HOME=/home/x bash -l -c true",
+		"env --ignore-environment bash -l",
+		"env - bash -l",
+		"exec -c bash -l",
+		"sudo -i",
+		"sudo -iu someone true",
+		"su -l someone",
+		"su - someone",
+		// The same clearing and the same login shell behind the syntax that hides a command word from a
+		// matcher anchored on a separator: a quoted `bash -c` argument, a keyword's body (`if`, `for`), a
+		// wrapper (`command`, `eval`), an option of `exec` itself, and `su -` ended by a separator rather
+		// than by the end of the command. Each still starts the login shell the marker never reached.
+		"bash -c 'exec -c bash -l'",
+		`sh -c "exec -c bash -l"`,
+		"if true; then exec -c bash -l; fi",
+		"for x in 1; do exec -c bash; done",
+		"command exec -c bash -l",
+		"eval exec -c bash -l",
+		"exec -a name -c bash -l",
+		"su -;true",
+		"su -\ntrue",
 		// A single key, expanded by name.
 		"echo $DEEPSEEK_API_KEY",
 		`printf %s "$GH_TOKEN"`,
@@ -974,11 +1024,34 @@ func TestPiEnvDenyListAllowsTheWork(t *testing.T) {
 		// deck writes a task and a report into.
 		"cat .dot-agent-deck.toml",
 		"ls .dot-agent-deck/",
+		// The program that mints the agents App's token, named beside the file it mints into: reading the
+		// script hands over no credential, so the refusal of the token file must not reach it.
+		"sed -n '1,20p' dev/agents-app-token.sh",
+		"shellcheck dev/agents-app-token.sh",
 		// The git commands that read configuration or push a branch: the
 		// helper's own name and the branch's name hold no token, so the refusal
 		// of the credential helper must not reach them.
 		"git config --global credential.helper",
 		"git push origin chore/540-deny-env-printing",
+		// A diff and a test run in the repository.
+		"git diff --stat",
+		"go test -run TestX ./test/devenv/",
+		// A command word after an option that takes a value, in the wrappers the agents type: `find`'s
+		// `-exec` predicate and its placeholders, the wrapper's own option and the value it takes, the
+		// remote command of `docker exec` and of `ssh`, and a program run through `exec` itself. None of
+		// them clears the environment or starts a login shell, so none of them may be refused.
+		"find . -exec grep -l foo {} +",
+		"find . -name '*.go' -exec gofumpt -l {} \\;",
+		"env -u X go test ./...",
+		"env -C sub make test",
+		"nice -n 10 make test",
+		"xargs -0 -I{} ls {}",
+		"sudo apt-get install jq",
+		"docker exec -it c sh",
+		"ssh -i key host true",
+		"sudo -E make",
+		"su -c id root",
+		"exec ./bin/shift2eu --help",
 	}
 
 	for _, command := range cases {

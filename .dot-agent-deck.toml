@@ -91,9 +91,14 @@ the user and never message another worker; you report only to the orchestrator.
 
 [[orchestrations.roles]]
 name = "tester"
-# pi on DeepSeek V4.1 Flash. --approve trusts the project: .pi/settings.json loads the skills from
-# .claude/skills, and .pi/extensions/deny-env-printing.ts refuses env-printing commands (ADR 0044).
-command = "pi --provider deepseek --model deepseek-flash --thinking high --approve"
+# pi on DeepSeek V4.1 Flash, started through dev/pi-tester.sh (issue #662, ADR 0044): the wrapper refuses
+# to start pi unless the env-printing refusal's two files are in place, and hands pi only an allow list of
+# variables (its DeepSeek key, the basics, the deck's pane variables), no GitHub token or other agent's key.
+# The path is relative to the pane's working directory, the unit's folder. agent = "pi", because the deck
+# cannot see the agent behind a launcher. --approve trusts the project: .pi/settings.json loads the skills
+# from .claude/skills, and .pi/extensions/deny-env-printing.ts refuses env-printing commands.
+command = "dev/pi-tester.sh --provider deepseek --model deepseek-flash --thinking high --approve"
+agent = "pi"
 description = "Writes failing tests first (unit, contract, golden, e2e) and confirms they pass after the coder implements"
 prompt_template = """
 Work only in the worktree named on the task's first line (`Worktree: <path>`): run every non-git command
