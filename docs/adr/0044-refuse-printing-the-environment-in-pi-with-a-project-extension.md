@@ -283,8 +283,12 @@ both now (options 1 and 3 of the issue). The decision above stands; this adds a 
   only filters the names the walk reports, neither is a place it goes, and where the walk goes is its
   `path`, which stays checked, with its ancestors (round 3's review, finding S1). The `glob` is no longer
   checked for the App's folder or files (issue #691): a lexical glob check added cost and no boundary, since
-  a walk whose path is neither the folder, under it nor an ancestor of it never reaches the token, whatever
-  its glob. The repository's `dev/agents-app-token.sh`, which mints the token and holds none, stays
+  pi's grep and find do not follow symlinks, so a walk whose path is neither the folder, under it nor an
+  ancestor of it never reaches the token, whatever its glob (symlinks aside: a path that is itself a symlink
+  to the folder or an ancestor is a limit documented below, in the amendment's consequences). The deck's
+  key-file checks (`daemon.env`, `.config/dot-agent-deck`) on a `glob` and a `pattern` are kept unchanged:
+  they err strict, and issue #691 covered the App's token alone; a follow-up may relax them the same way.
+  The repository's `dev/agents-app-token.sh`, which mints the token and holds none, stays
   readable. The list refuses any bash command naming the folder
   (`\.config[/.]*/shift2eu\b`: the file, a glob, a `cd`, an `ls`), naming the token or identity file other
   than as the script (`agents-app-(token|identity)($|[^.a-z])`: `find ~ -name agents-app-token`, a globbed
