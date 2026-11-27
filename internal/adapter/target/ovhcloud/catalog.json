@@ -44,11 +44,11 @@
         { "name": "Essential DB1-4", "vcpus": 2, "memoryGiB": 4, "storageGiB": 40, "prices": [{ "amount": 59.422, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
         { "name": "Essential DB1-7", "vcpus": 2, "memoryGiB": 7, "storageGiB": 80, "prices": [{ "amount": 119.866, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
         { "name": "Essential DB1-15", "vcpus": 4, "memoryGiB": 15, "storageGiB": 160, "prices": [{ "amount": 240.9, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] }] },
-        { "name": "Discovery B3-4", "vcpus": 1, "memoryGiB": 4, "storageGiB": 0, "prices": [{ "amount": 65.919, "currency": "EUR", "regions": [] }] },
-        { "name": "Discovery B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 0, "prices": [{ "amount": 125.268, "currency": "EUR", "regions": [] }] },
-        { "name": "Discovery B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 0, "prices": [{ "amount": 250.463, "currency": "EUR", "regions": [] }] },
-        { "name": "Discovery B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 0, "prices": [{ "amount": 500.853, "currency": "EUR", "regions": [] }] },
-        { "name": "Discovery B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 0, "prices": [{ "amount": 1001.633, "currency": "EUR", "regions": [] }] }
+        { "name": "Discovery B3-4", "vcpus": 1, "memoryGiB": 4, "storageGiB": 40, "prices": [{ "amount": 65.919, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-8", "vcpus": 2, "memoryGiB": 8, "storageGiB": 80, "prices": [{ "amount": 125.268, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-16", "vcpus": 4, "memoryGiB": 16, "storageGiB": 160, "prices": [{ "amount": 250.463, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-32", "vcpus": 8, "memoryGiB": 32, "storageGiB": 320, "prices": [{ "amount": 500.853, "currency": "EUR", "regions": [] }] },
+        { "name": "Discovery B3-64", "vcpus": 16, "memoryGiB": 64, "storageGiB": 640, "prices": [{ "amount": 1001.633, "currency": "EUR", "regions": [] }] }
       ],
       "storagePrices": [{ "amount": 0.292, "currency": "EUR", "regions": [] }]
     },

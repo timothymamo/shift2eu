@@ -430,7 +430,7 @@ Analytics pricing guide), the regions page and the prices page.
   term.
 
 - **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with Kafka", read 2026-11-27, each price read per region from the page's embedded data, never from the table's default "All regions" view, which can show an Asia-Pacific price). Plans: the Gen 2 Business flavours (DB1), priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Production flavours (B3), in all five 1-AZ regions at one price; the table says "Gen 2 instances will still be available under our Essential/Business/Enterprise plans". vCPU ("vCore") and memory are per node, under the page's "Information per node". The plan's price is the page's "Price(excl. VAT/hour/node)" × 730 (the data's `per-node` price), so an estimate multiplies it by the resource's count, its brokers (ADR 0025); the tier runs 3 nodes, and the page's total is the per-node price × 3 in every row. No price needed rounding. Kafka sells no B3-64 or larger flavour.
-- **Included storage, per node** (PRD #571, decided question 2 of milestone 5): Gen 3 is the lower bound of the page's "Usable storage" range, which is **per node**: the Analytics pricing guide's example "| Kafka | Production | B3-8 | 320 GB | 180 GB |" (base and additional storage) bills the additional storage as "180 GB × 30 days × 24 hours × 3 nodes", and the same B3 flavour has the same range on the 3- and 6-node plans. Gen 2 is **derived**: the page's lower bound is the cluster's total (DB1-7: 960 GiB at 3 nodes, 1.875 TiB = 1920 GiB at 6 nodes, both 320 GiB × nodes), so the snapshot records the lower bound ÷ 3. No page states the Gen 2 figure per node; the division rests on that pattern alone. TiB × 1024.
+- **Included storage, per node** (PRD #571 milestone 5, decision D2): Gen 3 is the lower bound of the page's "Usable storage" range, which is **per node**: the Analytics pricing guide's example "| Kafka | Production | B3-8 | 320 GB | 180 GB |" (base and additional storage) bills the additional storage as "180 GB × 30 days × 24 hours × 3 nodes", and the same B3 flavour has the same range on the 3- and 6-node plans. Gen 2 is **derived**: the page's lower bound is the cluster's total (DB1-7: 960 GiB at 3 nodes, 1.875 TiB = 1920 GiB at 6 nodes, both 320 GiB × nodes), so the snapshot records the lower bound ÷ 3. No page states the Gen 2 figure per node; the division rests on that pattern alone. TiB × 1024.
 
 | Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/hour total (3 nodes) | EUR/month per node (× 730) | Price regions |
 |---|---|---|---|---|---|---|---|---|
@@ -541,18 +541,18 @@ Analytics pricing guide), the regions page and the prices page.
   second (Analytics pricing guide), with no minimum term.
 
 - **Prices** (prices page, *Analytics*, table "Essential/Discovery Plan - Analytics with OpenSearch", read 2026-11-27, each price read per region from the page's embedded data: the table's default "All regions" view shows "€0.074788" for `Discovery B3-4`, the Asia-Pacific price, against the EU 0.0903). Plans: the Gen 2 Essential flavours (DB1), priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Discovery flavours (B3), in all five 1-AZ regions at one price. vCPU ("vCore") and memory per node; the plan's price is the page's "Price(excl. VAT/hour/node)" × 730 (ADR 0025); the tier runs 1 node, and the total equals the per-node price. No price needed rounding.
-- **Included storage, per node** (decided question 2 of milestone 5): for Gen 2, the lower bound of the page's "Usable storage" range; at 1 node the cluster's total and the node's are the same figure (the 3- and 6-node tiers show that the lower bound is the cluster total: DB1-7 is 80, 240 and 480 GiB at 1, 3 and 6 nodes). For **Gen 3, none is recorded**: the same B3 flavour shows the same range at 1, 3 and 6 nodes (B3-8: "From 80 GiB to 400 GiB"), which suggests a per-node figure, but no OpenSearch page says so (the pricing guide's per-node example is Kafka's), so a Gen 3 plan includes 0 GiB and the estimate prices all its storage at the storage price below (*Left out on purpose*).
+- **Included storage, per node** (PRD #571 milestone 5, decision D2): the lower bound of the page's "Usable storage" range, for both generations. At 1 node the cluster's total and the node's are the same figure, so whether the lower bound is per node or per cluster does not matter here. For Gen 2 the 3- and 6-node tiers show that the lower bound is the cluster total (DB1-7 is 80, 240 and 480 GiB at 1, 3 and 6 nodes). For Gen 3 (Discovery) the same argument holds at one node, and the product page's Discovery card says "1 node included … 40 GB storage", `Discovery B3-4`'s lower bound. The 3-node Gen 3 plans (*Analytics for OpenSearch Multi-node* and its *3-AZ* form) are another matter: there the per-node reading of the same range is an inference no OpenSearch page states, so they record none (*Left out on purpose*).
 
 | Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/month per node (× 730) | Price regions |
 |---|---|---|---|---|---|---|---|
 | `Essential DB1-4` | 2 | 4 GB × 1 node | From 40 GiB to 120 GiB | 40 | 0.0814 | `59.422` | `GRA`, `LIM`, `SBG`, `WAW` |
 | `Essential DB1-7` | 2 | 7 GB × 1 node | From 80 GiB to 240 GiB | 80 | 0.1642 | `119.866` | `GRA`, `LIM`, `SBG`, `WAW` |
 | `Essential DB1-15` | 4 | 15 GB × 1 node | From 160 GiB to 480 GiB | 160 | 0.33 | `240.90` | `GRA`, `LIM`, `SBG`, `WAW` |
-| `Discovery B3-4` | 1 | 4 GB × 1 node | From 40 GiB to 200 GiB | 0 (not stated per node) | 0.0903 | `65.919` | all |
-| `Discovery B3-8` | 2 | 8 GB × 1 node | From 80 GiB to 400 GiB | 0 | 0.1716 | `125.268` | all |
-| `Discovery B3-16` | 4 | 16 GB × 1 node | From 160 GiB to 800 GiB | 0 | 0.3431 | `250.463` | all |
-| `Discovery B3-32` | 8 | 32 GB × 1 node | From 320 GiB to 1.5625 TiB | 0 | 0.6861 | `500.853` | all |
-| `Discovery B3-64` | 16 | 64 GB × 1 node | From 640 GiB to 3.125 TiB | 0 | 1.3721 | `1001.633` | all |
+| `Discovery B3-4` | 1 | 4 GB × 1 node | From 40 GiB to 200 GiB | 40 | 0.0903 | `65.919` | all |
+| `Discovery B3-8` | 2 | 8 GB × 1 node | From 80 GiB to 400 GiB | 80 | 0.1716 | `125.268` | all |
+| `Discovery B3-16` | 4 | 16 GB × 1 node | From 160 GiB to 800 GiB | 160 | 0.3431 | `250.463` | all |
+| `Discovery B3-32` | 8 | 32 GB × 1 node | From 320 GiB to 1.5625 TiB | 320 | 0.6861 | `500.853` | all |
+| `Discovery B3-64` | 16 | 64 GB × 1 node | From 640 GiB to 3.125 TiB | 640 | 1.3721 | `1001.633` | all |
 
 - **Storage price:** the table's "Price per GB of additional storage:€0.0004/hour/node" (the data's `opensearch-essential-additionnal-storage-gb`, one price in every region) × 730 = `0.292` per GiB per node a month, not multiplied by the tier's node count (as for *Analytics for Kafka*: storage per node × `count`, PRD #571 *Estimates*). The undisplayed monthly figure in the page's data is not used.
 - **Billing change announced:** as for *Analytics for Kafka*.
@@ -593,7 +593,7 @@ the prices page.
   this snapshot does not record.
 
 - **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with OpenSearch", read 2026-11-27, per region from the embedded data). Plans: the Gen 2 Business flavours, priced in `GRA`, `LIM`, `SBG` and `WAW` only (no Roubaix price), and the Gen 3 Production flavours, in all five 1-AZ regions at one price. vCPU and memory per node; the plan's price is the page's price per node × 730 (ADR 0025); the tier runs 3 nodes, and the total is the per-node price × 3 in every row. No price needed rounding.
-- **Included storage, per node:** Gen 2 is **derived**, the page's lower bound (the cluster's total) ÷ 3, as for *Analytics for Kafka*'s Gen 2 flavours: no page states the per-node figure. Gen 3 records none, as for *Analytics for OpenSearch*.
+- **Included storage, per node:** Gen 2 is **derived**, the page's lower bound (the cluster's total) ÷ 3, as for *Analytics for Kafka*'s Gen 2 flavours: no page states the per-node figure. Gen 3 records none: at 3 nodes, reading the range as per node is an inference no OpenSearch page states (*Left out on purpose*, OpenSearch Gen 3 included storage).
 
 | Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/hour total (3 nodes) | EUR/month per node (× 730) | Price regions |
 |---|---|---|---|---|---|---|---|---|
@@ -638,7 +638,7 @@ the prices page.
   prices the Production flavours there (`EU-WEST-PAR`, `EU-SOUTH-MIL`).
 - **Fixed node count:** exactly 3 nodes, as for *Analytics for OpenSearch Multi-node*.
 
-- **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with OpenSearch", read per region from the embedded data for `EU-WEST-PAR` and `EU-SOUTH-MIL`, the same in both, read 2026-11-27). Plans: the Gen 3 Production flavours; the page prices no Business (Gen 2) flavour there. vCPU and memory per node; the plan's price is the page's price per node × 730 (ADR 0025); the tier runs 3 nodes. No included storage is recorded (as for *Analytics for OpenSearch*'s Gen 3 flavours). No price needed rounding.
+- **Prices** (prices page, *Analytics*, table "Business/Production Plan - Analytics with OpenSearch", read per region from the embedded data for `EU-WEST-PAR` and `EU-SOUTH-MIL`, the same in both, read 2026-11-27). Plans: the Gen 3 Production flavours; the page prices no Business (Gen 2) flavour there. vCPU and memory per node; the plan's price is the page's price per node × 730 (ADR 0025); the tier runs 3 nodes. No included storage is recorded (as for *Analytics for OpenSearch Multi-node*'s Gen 3 flavours). No price needed rounding.
 
 | Plan | vCPU | Memory | Usable storage on the page | Included GiB per node | EUR/hour per node | EUR/hour total (3 nodes) | EUR/month per node (× 730) | Price regions |
 |---|---|---|---|---|---|---|---|---|
@@ -2130,7 +2130,7 @@ Active Archive, and Cold Archive in Paris only). Pages: <https://www.ovhcloud.co
   Load Balancer (no matching category); Local Zones (PRD #11). MongoDB, Valkey, Load Balancer and Managed
   Private Registry are offerings since PRD #552 milestone 5, OpenSearch and Kafka since PRD #571
   milestone 5.
-- **OpenSearch and Kafka Enterprise/Advanced: no offering** (PRD #571 milestone 5, decided question 1,
+- **OpenSearch and Kafka Enterprise/Advanced: no offering** (PRD #571 milestone 5, decision D1,
   under the tier-variant rule). OpenSearch's Advanced (Gen 3) and Enterprise (Gen 2) plans run 6 nodes,
   keep daily backups 30 days and carry a higher SLA (99.95% Single AZ, 99.99% Multi AZ); Kafka's run 6
   brokers with the same higher SLA. None of these is a capability in the vocabulary, so the tier adds no
@@ -2153,13 +2153,16 @@ Active Archive, and Cold Archive in Paris only). Pages: <https://www.ovhcloud.co
 - **OpenSearch (all three) and Kafka (both) `read-replicas` and `ipv6`:** the Analytics capabilities
   page leaves "Read-only nodes" empty for OpenSearch, and no Kafka page states read-only nodes; IPv6 is
   not stated.
-- **OpenSearch Gen 3 included storage:** the Discovery, Production and Advanced B3 flavours show the same
-  "Usable storage" range at 1, 3 and 6 nodes (B3-8: "From 80 GiB to 400 GiB"), and the product page's
-  "Discovery … 1 node included … 40 GB storage" matches `Discovery B3-4`'s lower bound, but no page says
-  the figure is per node (the Analytics pricing guide's per-node example is Kafka's). So the Gen 3
-  OpenSearch plans include 0 GiB (PRD #571 milestone 5, decided question 2), and an estimate prices all
-  their storage at the storage price: a resource gets an estimate above OVHcloud's price by up to the
-  lower bound × the storage price per node. A later refresh that finds a per-node statement records it.
+- **OpenSearch Gen 3 included storage at 3 nodes:** the Discovery, Production and Advanced B3 flavours
+  show the same "Usable storage" range at 1, 3 and 6 nodes (B3-8: "From 80 GiB to 400 GiB"). At one node
+  (Discovery) the lower bound is the node's storage whichever way it is read, as for the Gen 2 Essential
+  plans, and the product page's "Discovery … 1 node included … 40 GB storage" matches `Discovery B3-4`'s
+  lower bound, so the Discovery plans record it. At 3 nodes, reading the range as per node is an
+  inference: no OpenSearch page says so (the Analytics pricing guide's per-node example is Kafka's). So
+  the 3-node Production B3 plans, in *Analytics for OpenSearch Multi-node* and its *3-AZ* form, include
+  0 GiB (PRD #571 milestone 5, decision D2), and an estimate prices all their storage at the storage
+  price: a resource gets an estimate above OVHcloud's price by up to the lower bound × the storage price
+  per node. A later refresh that finds a per-node statement records it.
 - **The Discovery plan of OpenSearch in Paris and Milan:** the OpenSearch capabilities page lists
   Discovery among the plans "In 3-AZ regions", and the prices page prices it there (`Discovery B3-4`
   €0.09562 an hour), but it is one node with no high availability, so it would add no capability to the

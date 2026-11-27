@@ -14,11 +14,12 @@ managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage
 volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.
 A MongoDB database is 2 vCPU, 8 GiB of memory, 100 GiB of storage and count 3, the nodes of a
 replica set; a search cluster and a Kafka cluster are the same size, 2 vCPU, 8 GiB of memory
-and 100 GiB of storage per node at count 3, with no capability, so they are priced on the 1-AZ
-tier the default region serves; a cache is 6 GiB of memory per node, count 2 and
-`node-high-availability`, so it is priced on the multi-node tier a replicated cache is served
-by, and its capability is shown after its size; a load balancer and a container registry take
-no size and are not priced.
+and 100 GiB of storage per node at count 3, on the 1-AZ tier the default region serves; the
+search cluster also lists `node-high-availability`, as a cache does, because three nodes are
+the multi-node tier and OVHcloud's single-node Discovery plan is no 3-node cluster; a cache is
+6 GiB of memory per node, count 2 and `node-high-availability`, so it is priced on the
+multi-node tier a replicated cache is served by, and its capability is shown after its size;
+a load balancer and a container registry take no size and are not priced.
 
 - `OVHcloud`: prices retrieved 2026-11-27 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
 - `Scaleway`: prices retrieved 2026-11-13 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
@@ -36,7 +37,7 @@ no size and are not priced.
 | `OVHcloud` | `messaging.kafka` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month | `Analytics for Kafka` | `Production B3-8` | €609.26 |  |
 | `OVHcloud` | `network.loadbalancer` | none | none | none | — | `not-priced` |
 | `OVHcloud` | `registry.container` | none | none | none | — | `not-priced` |
-| `OVHcloud` | `search.opensearch` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month | `Analytics for OpenSearch` | `Discovery B3-8` | €463.40 |  |
+| `OVHcloud` | `search.opensearch` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month, `node-high-availability` | `Analytics for OpenSearch Multi-node` | `Production B3-8` | €503.92 |  |
 | `OVHcloud` | `storage.block` | 100 GiB storage, count 1 | `Block Storage` | none | €4.31 |  |
 | `OVHcloud` | `storage.object` | 100 GiB storage | `Object Storage` | none | €0.71 |  |
 | `Scaleway` | `compute.baremetal` | 4 vCPU, 32 GiB memory, count 1, 730 h/month | `Elastic Metal` | `EM-A116X-SSD` | €56.21 |  |

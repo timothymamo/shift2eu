@@ -511,6 +511,27 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    there, on purpose. `examples/aws/inventory.json` gains `shop-log-search`, a sized OpenSearch domain of
    three nodes without `zone-high-availability`, so the sample also shows an OpenSearch estimate in `GRA` (*Analytics for OpenSearch
    Multi-node*, `Production B3-8`, €503.92 a month); the sample's counts go from 18 to 19 resources.
+   Milestone 5's decisions, which OVHcloud's `SOURCES.md` and the adapter's tests cite as "PRD #571
+   milestone 5, decision D<n>" (they are not the numbered decided questions below):
+   - **D1. Advanced and Enterprise get no offering.** Under the tier-variant rule (ADR 0011): they add
+     only 6 nodes, longer backup retention and a higher SLA, none of which is a capability in the
+     vocabulary, and the catalog has no node-count or retention field, so an Advanced plan could never
+     be chosen over the Production plan with the same per-node flavour.
+   - **D2. Gen 2 flavours are included, and included storage is per node.** Gen 2 (Essential, Business)
+     is priced in `GRA`, `LIM`, `SBG` and `WAW` only. Where the page's "Usable storage" lower bound is
+     the cluster's total, the per-node figure is derived as the lower bound ÷ the nodes, and recorded
+     as derived. At one node (Discovery and Essential) the lower bound is the node's storage either
+     way, so it is recorded as is; the product page's Discovery card says "1 node included … 40 GB
+     storage". Kafka's Gen 3 lower bound is per node (the pricing guide's worked example). The 3-node
+     OpenSearch Gen 3 (Production) plans get no included storage: no OpenSearch page states their
+     range per node.
+   - **D3. The Analytics pages are cited**, not the Databases pages, for capabilities, deployment
+     modes, security, backups and pricing.
+   - **D4. Storage is priced per GiB per node**, the hourly price × 730, multiplied by `count` in the
+     estimate and never by the tier's node count.
+   - **D5. Five offerings**, named tier variant first, then `3-AZ`: *Analytics for OpenSearch*,
+     *Analytics for OpenSearch Multi-node*, *Analytics for OpenSearch Multi-node 3-AZ*, *Analytics
+     for Kafka* and *Analytics for Kafka 3-AZ*.
 6. [ ] **UpCloud catalog.** Offerings for `search.opensearch`: Managed OpenSearch (1 node) and a
    multi-node variant with `node-high-availability`, `encryption-at-rest` and `snapshots` (the backups
    page; to be checked that a restorable backup meets the `snapshots` definition, as for OVHcloud), in
