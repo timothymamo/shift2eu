@@ -331,6 +331,17 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 			installed := writePiTesterInstalled(t, root, extension, list)
 			project := writePiTesterUnit(t, root, tc.projectExtension, tc.projectList, tc.projectWrapper)
 
+			// The wrapper names the project from the working directory's PWD, which the shell resolves, while
+			// t.TempDir() hands back the path it created, symlinks and all: on macOS /var is a symlink to
+			// /private/var, so the notice prints /private/var/folders/... for a project under /var/folders/....
+			// Resolve the directory before comparing, so the expectation is the path the wrapper reports (issue #692).
+			resolvedProject, err := filepath.EvalSymlinks(project)
+			if err != nil {
+				t.Fatalf("resolve %s, the directory the wrapper runs in, so the notice's project path can be compared with it (issue #692): %v", project, err)
+			}
+
+			project = resolvedProject
+
 			stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
 			if err != nil {
 				t.Fatalf("the wrapper exited non-zero although the installed files are whole: a missing or weakened copy in the unit folder must not stop the tester (issue #692): %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
@@ -357,8 +368,8 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 
 			wantPairs := 0
 
-			for _, copy := range copies {
-				if !copy.matches {
+			for _, entry := range copies {
+				if !entry.matches {
 					wantPairs++
 				}
 			}
@@ -384,9 +395,9 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 			// the installed one is.
 			pairs := make([]string, 0, wantPairs)
 
-			for _, copy := range copies {
-				if !copy.matches {
-					pairs = append(pairs, fmt.Sprintf("%s (installed: %s)", copy.project, copy.installed))
+			for _, entry := range copies {
+				if !entry.matches {
+					pairs = append(pairs, fmt.Sprintf("%s (installed: %s)", entry.project, entry.installed))
 				}
 			}
 
@@ -406,19 +417,19 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 					got, got, wantPairs, line)
 			}
 
-			for _, copy := range copies {
-				named := strings.Contains(line, copy.project)
+			for _, entry := range copies {
+				named := strings.Contains(line, entry.project)
 
 				switch {
-				case copy.matches && named:
+				case entry.matches && named:
 					t.Errorf("the wrapper's one line is %q, which names the project copy %s (%s) although it is byte for byte the installed %s: a line that names a copy which matches sends the maintainer to update a file that needs nothing (issue #692): %q",
-						line, copy.name, copy.project, copy.installed, line)
-				case !copy.matches && !named:
+						line, entry.name, entry.project, entry.installed, line)
+				case !entry.matches && !named:
 					t.Errorf("the wrapper's one line is %q, which does not name the project copy %s (%s), missing or not byte for byte the installed %s: a maintainer cannot tell which copy the tester did not take (issue #692)",
-						line, copy.name, copy.project, copy.installed)
-				case !copy.matches && !strings.Contains(line, copy.installed):
+						line, entry.name, entry.project, entry.installed)
+				case !entry.matches && !strings.Contains(line, entry.installed):
 					t.Errorf("the wrapper's one line is %q, which does not name the installed file %s (%s): a maintainer cannot tell which copy the tester used (issue #692)",
-						line, copy.name, copy.installed)
+						line, entry.name, entry.installed)
 				}
 			}
 
