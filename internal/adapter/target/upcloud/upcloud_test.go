@@ -9,7 +9,11 @@
 // verdicts PRD 77 asks of the data: categories UpCloud does not serve are a
 // blocker, no offering claims zone-level high availability, and every capability
 // that holds only on some plans lives on a tier variant named after that plan,
-// with the base offering not listing it (ADR 0011). The snapshot document format
+// with the base offering not listing it (ADR 0011). Since PRD #552 milestone 7 the
+// snapshot also serves cache.redis (Valkey, on a 1-node offering and a per-node
+// 2-node tier), network.loadbalancer (unpriced, with neither udp nor ipv6) and
+// storage.file (an NFS share and its encrypted variant, priced the GiB-month), and
+// it serves no MongoDB, topic, serverless container or registry. The snapshot document format
 // itself, its strictness, its errors and the SOURCES.md rule are pinned once, in
 // the shared reader's own tests (internal/adapter/target/snapshot). It is
 // black-box: only the package's exported API is used.
@@ -93,6 +97,9 @@ func TestCatalogContract(t *testing.T) {
 			taxonomy.StorageBlock,
 			taxonomy.DatabasePostgreSQL,
 			taxonomy.DatabaseMySQL,
+			taxonomy.CacheRedis,
+			taxonomy.NetworkLoadBalancer,
+			taxonomy.StorageFile,
 		},
 	})
 }
@@ -129,7 +136,7 @@ func TestCatalogSnapshotHeader(t *testing.T) {
 
 	// The date the prices were taken, not the date the catalog capabilities were
 	// last refreshed (ADR 0024).
-	wantRetrievedOn := time.Date(2026, time.November, 13, 0, 0, 0, 0, time.UTC)
+	wantRetrievedOn := time.Date(2026, time.November, 27, 0, 0, 0, 0, time.UTC)
 	if !snap.RetrievedOn.Equal(wantRetrievedOn) {
 		t.Errorf("Snapshot().RetrievedOn = %s, want %s",
 			snap.RetrievedOn.Format(time.RFC3339), wantRetrievedOn.Format(time.RFC3339))
@@ -171,22 +178,27 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 	}
 
 	// planCategories are the categories PRD #190 prices by plan: a server or a
-	// managed cluster runs on one, and so does a managed database node. UpCloud
-	// sells no bare metal, so compute.baremetal is absent (ADR 0023). A database
-	// plan's price is the price of one node, because ADR 0025 counts database
-	// nodes in size.count and the estimate multiplies the plan price by it.
+	// managed cluster runs on one, so does a managed database node, and so does a
+	// cache node (PRD #552, ADR 0046). UpCloud sells no bare metal, so
+	// compute.baremetal is absent (ADR 0023). A database or cache plan's price is
+	// the price of one node, because ADR 0025 counts nodes in size.count and the
+	// estimate multiplies the plan price by it.
 	planCategories := []taxonomy.Category{
 		taxonomy.ComputeVM,
 		taxonomy.KubernetesManaged,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
+		taxonomy.CacheRedis,
 	}
 
 	// storageCategories are the categories PRD #190 prices per GiB of storage
-	// kept: block volumes, objects, and the storage a managed database uses.
+	// kept: block volumes, objects, a file share (PRD #552) and the storage a
+	// managed database uses. Valkey sells no storage volume, so its offerings are
+	// not one of them.
 	storageCategories := []taxonomy.Category{
 		taxonomy.StorageBlock,
 		taxonomy.StorageObject,
+		taxonomy.StorageFile,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
 	}
@@ -480,13 +492,280 @@ func TestCatalogFixedFees(t *testing.T) {
 	}
 }
 
+// The new offerings' names, as the snapshot writes them, shared by the tests
+// PRD #552 milestone 7 adds.
+const (
+	managedValkeyName   = "Managed Valkey"
+	valkeyMultiNodeName = "Managed Valkey Multi-node"
+	loadBalancerName    = "Managed Load Balancer"
+	fileStorageName     = "File Storage"
+	fileEncryptedName   = "File Storage Encrypted"
+)
+
+// fileStorageZones are the zones the availability page marks File Storage
+// available in (read 2026-11-27): every declared EU zone but Madrid and Warsaw.
+func fileStorageZones() []string {
+	return []string{"de-fra1", "dk-cph1", "fi-hel1", "fi-hel2", "nl-ams1", "se-sto1"}
+}
+
+// TestNewCategoryOfferingPrices pins PRD #552 milestone 7 on the embedded
+// snapshot: the offerings the three new categories gain, the zones each is
+// available in, and the plans and prices UpCloud publishes for them.
+//
+// Both Valkey tiers are the configurations page's plans at the pricing page's
+// monthly price, converted at 730/720 like every database price (ADR 0024).
+// *Managed Valkey* sells the eight 1-node plans, the €8 1x1xCPU-1GB one included
+// (milestone 7's decision D2). *Managed Valkey Multi-node* sells the seven
+// 2-node plans, whose page price covers the whole service, at the per-node price
+// the page price ÷ 2 × 730 / 720 gives, rounded once (decision D1). File Storage
+// is sold per GiB, at the page's €0.15 a GiB a month converted to 0.1521, the
+// same for both of its variants since encryption at rest is free (decision D3).
+// The Managed Load Balancer is not sold by plan and carries no price (decision
+// D4), so its estimate is "not priced" rather than zero.
+func TestNewCategoryOfferingPrices(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	t.Run("regions", func(t *testing.T) {
+		t.Parallel()
+
+		// Both Valkey tiers and the load balancer are available in every declared
+		// EU zone; File Storage is not in Madrid or Warsaw yet (its availability
+		// page marks those two unavailable).
+		tests := []struct {
+			offering string
+			want     []string
+		}{
+			{offering: managedValkeyName, want: wantRegions()},
+			{offering: valkeyMultiNodeName, want: wantRegions()},
+			{offering: loadBalancerName, want: wantRegions()},
+			{offering: fileStorageName, want: fileStorageZones()},
+			{offering: fileEncryptedName, want: fileStorageZones()},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if diff := cmp.Diff(tc.want, o.Regions); diff != "" {
+					t.Errorf("offering %s zones mismatch (-want +got):\n%s", text.Quote(o.Name), diff)
+				}
+			})
+		}
+	})
+
+	t.Run("valkey plans", func(t *testing.T) {
+		t.Parallel()
+
+		// The memory is per node and the price is the price of one node: ADR 0025
+		// counts the nodes of a cache in size.count, and the estimate multiplies
+		// the plan price by it, so a 2-node plan's stored price is half the page's
+		// whole-service figure, not the whole figure.
+		tests := []struct {
+			name               string
+			offering           string
+			plan               string
+			wantVCPUs          int64
+			wantMemoryMilliGiB int64
+			wantAmount         catalog.Amount
+		}{
+			// Managed Valkey: the 1-node table's monthly price × 730 / 720.
+			{name: "managed-valkey/1x1xCPU-1GB", offering: managedValkeyName, plan: "1x1xCPU-1GB", wantVCPUs: 1, wantMemoryMilliGiB: 1_000, wantAmount: catalog.Amount(81_111)},
+			{name: "managed-valkey/1x1xCPU-2GB", offering: managedValkeyName, plan: "1x1xCPU-2GB", wantVCPUs: 1, wantMemoryMilliGiB: 2_000, wantAmount: catalog.Amount(506_944)},
+			{name: "managed-valkey/1x2xCPU-4GB", offering: managedValkeyName, plan: "1x2xCPU-4GB", wantVCPUs: 2, wantMemoryMilliGiB: 4_000, wantAmount: catalog.Amount(912_500)},
+			{name: "managed-valkey/1x2xCPU-8GB", offering: managedValkeyName, plan: "1x2xCPU-8GB", wantVCPUs: 2, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(1_216_667)},
+			{name: "managed-valkey/1x2xCPU-14GB", offering: managedValkeyName, plan: "1x2xCPU-14GB", wantVCPUs: 2, wantMemoryMilliGiB: 14_000, wantAmount: catalog.Amount(1_622_222)},
+			{name: "managed-valkey/1x4xCPU-28GB", offering: managedValkeyName, plan: "1x4xCPU-28GB", wantVCPUs: 4, wantMemoryMilliGiB: 28_000, wantAmount: catalog.Amount(3_041_667)},
+			{name: "managed-valkey/1x8xCPU-56GB", offering: managedValkeyName, plan: "1x8xCPU-56GB", wantVCPUs: 8, wantMemoryMilliGiB: 56_000, wantAmount: catalog.Amount(5_981_944)},
+			{name: "managed-valkey/1x16xCPU-112GB", offering: managedValkeyName, plan: "1x16xCPU-112GB", wantVCPUs: 16, wantMemoryMilliGiB: 112_000, wantAmount: catalog.Amount(11_761_111)},
+			// Managed Valkey Multi-node: the 2-node table's whole-plan price ÷ 2 × 730 / 720, per node, rounded once.
+			{name: "managed-valkey-multi-node/2x1xCPU-2GB", offering: valkeyMultiNodeName, plan: "2x1xCPU-2GB", wantVCPUs: 1, wantMemoryMilliGiB: 2_000, wantAmount: catalog.Amount(506_944)},
+			{name: "managed-valkey-multi-node/2x2xCPU-4GB", offering: valkeyMultiNodeName, plan: "2x2xCPU-4GB", wantVCPUs: 2, wantMemoryMilliGiB: 4_000, wantAmount: catalog.Amount(861_806)},
+			{name: "managed-valkey-multi-node/2x2xCPU-8GB", offering: valkeyMultiNodeName, plan: "2x2xCPU-8GB", wantVCPUs: 2, wantMemoryMilliGiB: 8_000, wantAmount: catalog.Amount(1_165_972)},
+			{name: "managed-valkey-multi-node/2x2xCPU-14GB", offering: valkeyMultiNodeName, plan: "2x2xCPU-14GB", wantVCPUs: 2, wantMemoryMilliGiB: 14_000, wantAmount: catalog.Amount(1_571_528)},
+			{name: "managed-valkey-multi-node/2x4xCPU-28GB", offering: valkeyMultiNodeName, plan: "2x4xCPU-28GB", wantVCPUs: 4, wantMemoryMilliGiB: 28_000, wantAmount: catalog.Amount(3_041_667)},
+			{name: "managed-valkey-multi-node/2x8xCPU-56GB", offering: valkeyMultiNodeName, plan: "2x8xCPU-56GB", wantVCPUs: 8, wantMemoryMilliGiB: 56_000, wantAmount: catalog.Amount(5_931_250)},
+			{name: "managed-valkey-multi-node/2x16xCPU-112GB", offering: valkeyMultiNodeName, plan: "2x16xCPU-112GB", wantVCPUs: 16, wantMemoryMilliGiB: 112_000, wantAmount: catalog.Amount(11_761_111)},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+				p := planNamed(t, o, tc.plan)
+
+				if p.VCPUs != tc.wantVCPUs {
+					t.Errorf("offering %s plan %s vCPUs = %d, want %d: the configurations page's CPU-core column, per node",
+						text.Quote(o.Name), text.Quote(p.Name), p.VCPUs, tc.wantVCPUs)
+				}
+
+				if p.MemoryMilliGiB != tc.wantMemoryMilliGiB {
+					t.Errorf("offering %s plan %s memory = %d thousandths of a GiB, want %d: the page's memory column, per node",
+						text.Quote(o.Name), text.Quote(p.Name), p.MemoryMilliGiB, tc.wantMemoryMilliGiB)
+				}
+
+				// No Valkey plan is sold with storage: the page prices no volume,
+				// and its data lives on the nodes' local disk.
+				if p.IncludedStorageGiB != 0 {
+					t.Errorf("offering %s plan %s included storage = %d GiB, want 0: UpCloud includes no storage volume in a Valkey plan",
+						text.Quote(o.Name), text.Quote(p.Name), p.IncludedStorageGiB)
+				}
+
+				for _, region := range o.Regions {
+					got, ok := o.PlanPrice(tc.plan, region)
+					if !ok {
+						t.Errorf("offering %s lists no price for plan %s in zone %s, want %s a month",
+							text.Quote(o.Name), text.Quote(tc.plan), text.Quote(region), tc.wantAmount)
+
+						continue
+					}
+
+					if got != tc.wantAmount {
+						t.Errorf("offering %s plan %s price in zone %s = %s, want %s: the page's monthly price per node × 730 / 720 (milestone 7's decision D1 for the 2-node tier)",
+							text.Quote(o.Name), text.Quote(tc.plan), text.Quote(region), got, tc.wantAmount)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("valkey plan counts", func(t *testing.T) {
+		t.Parallel()
+
+		// The plans subtest walks the plans the table names, so a plan present in
+		// the snapshot and absent here would go unnoticed: pin each offering's
+		// count too, 8 on the 1-node offering and the seven 2-node plans on the
+		// multi-node tier (decision D1).
+		tests := []struct {
+			offering string
+			want     int
+		}{
+			{offering: managedValkeyName, want: 8},
+			{offering: valkeyMultiNodeName, want: 7},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if len(o.Plans) != tc.want {
+					t.Errorf("offering %s lists %d plans, want %d: %v",
+						text.Quote(o.Name), len(o.Plans), tc.want, planNames(o.Plans))
+				}
+			})
+		}
+	})
+
+	t.Run("file storage price", func(t *testing.T) {
+		t.Parallel()
+
+		// The page's "€0.15 per GiB" for a 30-day month, converted at 730/720:
+		// 0.1521 a GiB a month, the same in every zone that hosts the share and
+		// on both variants, since encryption at rest is free (decision D3).
+		const want = catalog.Amount(1_521)
+
+		for _, name := range []string{fileStorageName, fileEncryptedName} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, name)
+
+				if len(o.Plans) != 0 {
+					t.Errorf("offering %s lists plans %v, want none: a file share is priced per GiB, not by plan",
+						text.Quote(o.Name), planNames(o.Plans))
+				}
+
+				for _, region := range o.Regions {
+					got, ok := o.StoragePrice(region)
+					if !ok {
+						t.Errorf("offering %s lists no storage price in zone %s, want %s a GiB a month",
+							text.Quote(o.Name), text.Quote(region), want)
+
+						continue
+					}
+
+					if got != want {
+						t.Errorf("offering %s storage price in zone %s = %s, want %s: the page's €0.15 a GiB a month × 730 / 720",
+							text.Quote(o.Name), text.Quote(region), got, want)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("no price on the load balancer", func(t *testing.T) {
+		t.Parallel()
+
+		// Decision D4: UpCloud sells the load balancer by an Essentials,
+		// Development or Production plan whose price depends on a size an
+		// inventory never records, so the snapshot records no plan and no price,
+		// and the estimate says "not priced" rather than zero.
+		o := offeringNamed(t, cat, loadBalancerName)
+
+		if !slices.Contains(o.Categories, taxonomy.NetworkLoadBalancer) {
+			t.Errorf("offering %s categories = %v, want them to include %s",
+				text.Quote(o.Name), o.Categories, text.Quote(string(taxonomy.NetworkLoadBalancer)))
+		}
+
+		if len(o.Plans) != 0 {
+			t.Errorf("offering %s lists plans %v, want none: the snapshot prices no load balancer plan",
+				text.Quote(o.Name), planNames(o.Plans))
+		}
+
+		if len(o.StoragePrices) != 0 {
+			t.Errorf("offering %s lists %d storage prices, want none", text.Quote(o.Name), len(o.StoragePrices))
+		}
+
+		if len(o.FixedFees) != 0 {
+			t.Errorf("offering %s lists fixed fees %v, want none: UpCloud charges no fee on top of a load balancer plan",
+				text.Quote(o.Name), o.FixedFees)
+		}
+	})
+}
+
+// planNamed returns o's plan called name, and fails the test if there is none.
+func planNamed(t *testing.T, o catalog.Offering, name string) catalog.Plan {
+	t.Helper()
+
+	for _, p := range o.Plans {
+		if p.Name == name {
+			return p
+		}
+	}
+
+	t.Fatalf("offering %s has no plan called %s: it sells %s",
+		text.Quote(o.Name), text.Quote(name), planNames(o.Plans))
+
+	return catalog.Plan{}
+}
+
+// planNames lists the names of plans for a message, or says there are none.
+func planNames(plans []catalog.Plan) string {
+	if len(plans) == 0 {
+		return "none"
+	}
+
+	names := make([]string, len(plans))
+	for i, p := range plans {
+		names[i] = p.Name
+	}
+
+	return strings.Join(names, ", ")
+}
+
 // TestCatalogPlanBillingCapHours pins ADR 0029's data: UpCloud bills Cloud
 // Servers and Kubernetes nodes by the hour, capped at 672 hours (24 h × 28 days)
 // a month, so the three offerings whose plans are server or node plans carry
-// that cap. Its databases, block storage and object storage are charged by the
-// hour with no cap, their monthly figures being for a 30-day, 730-hour month, so
-// they carry none. The map names every offering, so a refresh that adds one
-// cannot slip past the rule.
+// that cap. Its databases, Valkey, block storage, object storage and File Storage
+// are charged by the hour with no cap, their monthly figures being for a 30-day,
+// 730-hour month, so they carry none. The map names every offering, so a refresh
+// that adds one cannot slip past the rule.
 func TestCatalogPlanBillingCapHours(t *testing.T) {
 	t.Parallel()
 
@@ -501,6 +780,11 @@ func TestCatalogPlanBillingCapHours(t *testing.T) {
 		"Managed PostgreSQL Multi-node": 0,
 		"Managed MySQL":                 0,
 		"Managed MySQL Multi-node":      0,
+		"Managed Valkey":                0,
+		"Managed Valkey Multi-node":     0,
+		"Managed Load Balancer":         0,
+		"File Storage":                  0,
+		"File Storage Encrypted":        0,
 	}
 
 	offerings := catalogOf(t).Offerings()
@@ -1032,16 +1316,26 @@ const objectStorageName = "Managed Object Storage"
 // category UpCloud does not serve gets fit none, the target-neutral reason naming
 // UpCloud and the category, and is listed as a blocker. The snapshot serves
 // neither serverless functions nor message queues: UpCloud's documentation has no
-// FaaS or queue product.
+// FaaS or queue product. Of the categories PRD #552 adds it serves neither a
+// MongoDB-compatible database, nor a publish-subscribe topic, nor a serverless
+// container, nor a container registry, whose open beta PRD #552 leaves out
+// (milestone 7).
 func TestNoOfferingForUnservedCategories(t *testing.T) {
 	t.Parallel()
 
 	cat := catalogOf(t)
 
-	// PRD 77 expects no generally available UpCloud offering to serve these. A
-	// change that adds one updates the PRD with the snapshot, so this test fails
-	// first and the review sees it.
-	unserved := []taxonomy.Category{taxonomy.ServerlessFunction, taxonomy.MessagingQueue}
+	// PRD 77 and PRD #552 expect no generally available UpCloud offering to serve
+	// these. A later change that adds one updates the PRD with the snapshot, so
+	// this test fails first and the review sees it.
+	unserved := []taxonomy.Category{
+		taxonomy.ServerlessFunction,
+		taxonomy.MessagingQueue,
+		taxonomy.DatabaseMongoDB,
+		taxonomy.MessagingTopic,
+		taxonomy.ServerlessContainer,
+		taxonomy.RegistryContainer,
+	}
 
 	for _, o := range cat.Offerings() {
 		for _, category := range o.Categories {
@@ -1184,7 +1478,12 @@ func checkMapping(t *testing.T, got mapping.Result, wantFit mapping.Fit, want []
 // capability is pointed at the variant; one that needs nothing the variant adds is
 // pointed at the base offering, which wins the tie by name, and the variant ties
 // behind it. A resource that needs zone level is partial on both, because neither
-// survives the loss of a data centre, and the base is named.
+// survives the loss of a data centre, and the base is named. Since PRD #552
+// milestone 7 the rule is pinned for the cache, the load balancer and the file
+// share as well: *Managed Valkey Multi-node* adds node-high-availability on the 2-
+// and 3-node plans (decision D1), *File Storage Encrypted* adds encryption at rest
+// (decision D3), and neither Valkey tier lists sharding nor the load balancer udp
+// or ipv6, which UpCloud documents nowhere (decision D4).
 func TestTierVariantIsBestOffering(t *testing.T) {
 	t.Parallel()
 
@@ -1343,6 +1642,119 @@ func TestTierVariantIsBestOffering(t *testing.T) {
 				{Name: "Managed MySQL", Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ReadReplicas, taxonomy.ZoneHighAvailability}},
 			},
 		},
+		{
+			name:     "valkey needs nothing",
+			category: taxonomy.CacheRedis,
+			wantFit:  mapping.Direct,
+			want: []candidateExpectation{
+				{Name: managedValkeyName, Fit: mapping.Direct},
+				{Name: valkeyMultiNodeName, Fit: mapping.Direct},
+			},
+		},
+		{
+			// Both tiers back their data up every 12 hours, and UpCloud encrypts
+			// an instance's volume and its backups at rest whatever the plan, so
+			// neither capability picks a tier.
+			name:         "valkey needs encryption at rest and snapshots",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest, taxonomy.Snapshots},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: managedValkeyName, Fit: mapping.Direct},
+				{Name: valkeyMultiNodeName, Fit: mapping.Direct},
+			},
+		},
+		{
+			name:         "valkey needs node-level high availability",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: valkeyMultiNodeName, Fit: mapping.Direct},
+				{Name: managedValkeyName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+			},
+		},
+		{
+			name:         "valkey needs zone-level high availability",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: managedValkeyName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+				{Name: valkeyMultiNodeName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+			},
+		},
+		{
+			// No page read documents cluster mode or sharding: "clustered" on the
+			// configurations page means a primary and a standby.
+			name:         "valkey needs sharding",
+			category:     taxonomy.CacheRedis,
+			capabilities: []taxonomy.Capability{taxonomy.Sharding},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: managedValkeyName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Sharding}},
+				{Name: valkeyMultiNodeName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Sharding}},
+			},
+		},
+		{
+			name:     "load balancer needs nothing",
+			category: taxonomy.NetworkLoadBalancer,
+			wantFit:  mapping.Direct,
+			want:     []candidateExpectation{{Name: loadBalancerName, Fit: mapping.Direct}},
+		},
+		{
+			// A frontend forwards tcp or http only, so a load balancer that needs
+			// to forward UDP is partial (decision D4).
+			name:         "load balancer needs udp",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.UDP},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: loadBalancerName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.UDP}},
+			},
+		},
+		{
+			// Its frontend network is IPv4 only, so neither direction of ipv6 is
+			// met (decision D4).
+			name:         "load balancer needs ipv6",
+			category:     taxonomy.NetworkLoadBalancer,
+			capabilities: []taxonomy.Capability{taxonomy.IPv6},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: loadBalancerName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.IPv6}},
+			},
+		},
+		{
+			name:     "file storage needs nothing",
+			category: taxonomy.StorageFile,
+			wantFit:  mapping.Direct,
+			want: []candidateExpectation{
+				{Name: fileStorageName, Fit: mapping.Direct},
+				{Name: fileEncryptedName, Fit: mapping.Direct},
+			},
+		},
+		{
+			name:         "file storage needs encryption at rest",
+			category:     taxonomy.StorageFile,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: fileEncryptedName, Fit: mapping.Direct},
+				{Name: fileStorageName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+			},
+		},
+		{
+			// No page read mentions a snapshot of a share, so a share that needs
+			// one is partial on both variants.
+			name:         "file storage needs snapshots",
+			category:     taxonomy.StorageFile,
+			capabilities: []taxonomy.Capability{taxonomy.Snapshots},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: fileStorageName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Snapshots}},
+				{Name: fileEncryptedName, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Snapshots}},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -1383,6 +1795,14 @@ func TestBaseOfferingsOmitVariantCapabilities(t *testing.T) {
 		{
 			offering:     "Managed MySQL",
 			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability, taxonomy.ReadReplicas},
+		},
+		{
+			offering:     managedValkeyName,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+		},
+		{
+			offering:     fileStorageName,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest},
 		},
 	}
 
