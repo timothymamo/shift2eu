@@ -10,10 +10,10 @@ have a direct equivalent, which a partial one, which have none, and what blocks 
 
 **Status:** walking skeleton. `shift2eu assess` works offline: it reads an inventory file and assesses it
 against an embedded OVHcloud, Scaleway or UpCloud catalog snapshot, through every layer, or compares
-several targets in one report (`--target all` or a list), as Markdown or as versioned JSON
-(`--format json`, ADR 0018) (PRD #2, OVHcloud from PRD #11, UpCloud from PRD #77 and the comparison
-from PRD #89, the JSON report from PRD #103, all in `prds/done/`), or as a PDF (`--format pdf`, ADR 0049,
-PRD #584 milestone 1). It reads inventory
+several targets in one report (`--target all` or a list). It writes the report as Markdown, as
+versioned JSON (`--format json`, ADR 0018) or as a PDF (`--format pdf`, ADR 0049). The assessment comes
+from PRD #2, OVHcloud from PRD #11, UpCloud from PRD #77, the comparison from PRD #89 and the JSON
+report from PRD #103, all in `prds/done/`, and the PDF from PRD #584 milestone 1. It reads inventory
 schema versions 1 and 2 (ADR 0006, ADR 0025). From a sized inventory it names a plan and estimates a
 monthly list price per resource, per workload and in total from the snapshots' dated prices (on by
 default, `--no-estimate` turns it off), groups resources by workload, notes blockers on related
