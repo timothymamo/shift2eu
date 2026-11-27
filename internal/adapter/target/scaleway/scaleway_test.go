@@ -8,7 +8,11 @@
 // PRD #552 milestone 6 the snapshot also serves the cache, MongoDB, load
 // balancer, topic, serverless container and registry categories, prices the
 // cache and MongoDB offerings by plan, records no price for the other four and
-// serves no file share. The
+// serves no file share; since PRD #571 milestone 7 it serves search.opensearch
+// and messaging.kafka too, each in a Standalone or Single-AZ tier and a
+// node-high-availability tier, prices both by node type and leaves
+// zone-high-availability off, because no page says either product keeps serving
+// through the loss of a zone. The
 // storage an offering charges beyond what a plan includes is pinned against the
 // embedded snapshot too (issue #219): every offering in scope carries a per-GiB
 // storage price, or says in SOURCES.md why it has none, and a bare-metal server
@@ -66,8 +70,8 @@ func wantRegions() []string {
 
 // TestCatalogContract runs the target contract suite every target adapter must
 // pass: the display name, every offering only in a declared EU region, the four
-// categories PRD 2 requires and the six PRD #552 milestone 6 adds, the same
-// catalog on every call, and cancellation.
+// categories PRD 2 requires, the six PRD #552 milestone 6 adds and the two PRD
+// #571 milestone 7 adds, the same catalog on every call, and cancellation.
 func TestCatalogContract(t *testing.T) {
 	t.Parallel()
 
@@ -86,6 +90,8 @@ func TestCatalogContract(t *testing.T) {
 			taxonomy.MessagingTopic,
 			taxonomy.ServerlessContainer,
 			taxonomy.RegistryContainer,
+			taxonomy.SearchOpenSearch,
+			taxonomy.MessagingKafka,
 		},
 	})
 }
@@ -117,7 +123,9 @@ func TestCatalogSnapshotHeader(t *testing.T) {
 		t.Errorf("Snapshot().SourceURL = %s, want %s", text.Quote(snapshot.SourceURL), text.Quote(wantSourceURL))
 	}
 
-	wantRetrievedOn := time.Date(2026, time.November, 26, 0, 0, 0, 0, time.UTC)
+	// PRD #571 milestone 7 priced the OpenSearch and Kafka node types from the
+	// maintainer's saved copy of the prices page, read 2026-11-27 (ADR 0007).
+	wantRetrievedOn := time.Date(2026, time.November, 27, 0, 0, 0, 0, time.UTC)
 	if !snapshot.RetrievedOn.Equal(wantRetrievedOn) {
 		t.Errorf("Snapshot().RetrievedOn = %s, want %s",
 			snapshot.RetrievedOn.Format(time.RFC3339), wantRetrievedOn.Format(time.RFC3339))
@@ -160,16 +168,21 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 		taxonomy.DatabaseMySQL,
 		taxonomy.CacheRedis,
 		taxonomy.DatabaseMongoDB,
+		taxonomy.SearchOpenSearch,
+		taxonomy.MessagingKafka,
 	}
 
 	// storageCategories are the categories PRD #190 prices per GiB of storage
-	// kept: block volumes, objects, and the storage a managed database uses.
+	// kept: block volumes, objects, the storage a managed database uses, and the
+	// storage a search or Kafka cluster bills per node (ADR 0047).
 	storageCategories := []taxonomy.Category{
 		taxonomy.StorageBlock,
 		taxonomy.StorageObject,
 		taxonomy.DatabasePostgreSQL,
 		taxonomy.DatabaseMySQL,
 		taxonomy.DatabaseMongoDB,
+		taxonomy.SearchOpenSearch,
+		taxonomy.MessagingKafka,
 	}
 
 	// leftOut exempts an offering from the two coverage rules, never from the
@@ -634,6 +647,306 @@ func planNamed(t *testing.T, o catalog.Offering, name string) catalog.Plan {
 	t.Fatalf("offering %s has no plan called %s: it sells %v", text.Quote(o.Name), text.Quote(name), planNames(o))
 
 	return catalog.Plan{}
+}
+
+// TestOpenSearchAndKafkaOfferingsAndPrices pins PRD #571 milestone 7 on the
+// embedded snapshot: the four offerings the two new categories gain, the
+// region each is available in, the node types and per-node prices they sell and
+// the storage they bill beyond a node type.
+//
+// The facts come from the maintainer's saved copy of Scaleway's Managed
+// Databases prices page (read 2026-11-27), whose embedded JSON holds every
+// zone's price and each node type's status, and from the saved copies of the
+// Cloud Essentials for OpenSearch and Clusters for Apache Kafka® documentation
+// pages. Both products' node types carry the status `general_availability`
+// there, which is what decided question 2's gate asked for.
+//
+// Each product is sold in a base tier and a node-high-availability tier, and the
+// price page prices node types, not tiers: a Standalone or Single-AZ cluster and
+// its High Availability or Multi-AZ counterpart sell the same node types at the
+// same per-node price. Only Kafka's Multi-AZ tier costs more per node, which the
+// page's separate `Multi-AZ option` column gives.
+func TestOpenSearchAndKafkaOfferingsAndPrices(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	// The base tier carries the product's name, the tier that adds a capability
+	// takes the tier's name, as "Managed Database for PostgreSQL and MySQL" and
+	// its "... High Availability" do (PRD 14, one offering per tier).
+	const (
+		openSearchStandalone = "Cloud Essentials for OpenSearch"
+		openSearchHA         = "Cloud Essentials for OpenSearch High Availability"
+		kafkaSingleAZ        = "Clusters for Apache Kafka"
+		kafkaMultiAZ         = "Clusters for Apache Kafka Multi-AZ"
+	)
+
+	// The availability page and the Go SDK must both place an offering: the CSV
+	// saved on 2026-11-27 marks Cloud Essentials for OpenSearch available across
+	// the Paris region and Clusters for Apache Kafka® across Paris and Milan, but
+	// `api/searchdb/v1alpha1` and `api/kafka/v1alpha1` both declare `Regions()` as
+	// `fr-par` alone. A region only the page gives is left out, as Milan is for the
+	// Load Balancer and the Container Registry, so Milan is out for Kafka and the
+	// page's Milan-only node types are not plans of the snapshot.
+	t.Run("regions", func(t *testing.T) {
+		t.Parallel()
+
+		for _, name := range []string{openSearchStandalone, openSearchHA, kafkaSingleAZ, kafkaMultiAZ} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, name)
+
+				want := []string{"fr-par"}
+				if diff := cmp.Diff(want, o.Regions); diff != "" {
+					t.Errorf("offering %s regions mismatch (-want +got):\n%s", text.Quote(o.Name), diff)
+				}
+			})
+		}
+	})
+
+	// The plans are the price page's node types, per node: the "Price (€/hour)"
+	// column in the Single-AZ or Standalone tier, and the "Multi-AZ option" column
+	// in the Multi-AZ tier, each × 730 for the month the snapshot records.
+	t.Run("plans", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			offering string
+			plans    []planExpectation
+		}{
+			{
+				offering: openSearchStandalone,
+				plans: []planExpectation{
+					{name: "SEARCHDB-SHARED-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(722_700)},
+					{name: "SEARCHDB-SHARED-4C-16G", vcpus: 4, memoryMilliGiB: 16_000, amount: catalog.Amount(1_445_400)},
+					{name: "SEARCHDB-DEDICATED2-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(970_900)},
+					{name: "SEARCHDB-DEDICATED2-4C-16G", vcpus: 4, memoryMilliGiB: 16_000, amount: catalog.Amount(1_934_500)},
+					{name: "SEARCHDB-DEDICATED2-8C-32G", vcpus: 8, memoryMilliGiB: 32_000, amount: catalog.Amount(3_810_600)},
+				},
+			},
+			{
+				offering: openSearchHA,
+				plans: []planExpectation{
+					{name: "SEARCHDB-SHARED-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(722_700)},
+					{name: "SEARCHDB-SHARED-4C-16G", vcpus: 4, memoryMilliGiB: 16_000, amount: catalog.Amount(1_445_400)},
+					{name: "SEARCHDB-DEDICATED2-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(970_900)},
+					{name: "SEARCHDB-DEDICATED2-4C-16G", vcpus: 4, memoryMilliGiB: 16_000, amount: catalog.Amount(1_934_500)},
+					{name: "SEARCHDB-DEDICATED2-8C-32G", vcpus: 8, memoryMilliGiB: 32_000, amount: catalog.Amount(3_810_600)},
+				},
+			},
+			{
+				offering: kafkaSingleAZ,
+				plans: []planExpectation{
+					{name: "BROKERNODE-SHARED-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(1_109_600)},
+					{name: "BROKERNODE-SHARED-4C-16G", vcpus: 4, memoryMilliGiB: 16_000, amount: catalog.Amount(2_211_900)},
+					{name: "BROKERNODE-DEDICATED-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(1_387_000)},
+					{name: "BROKERNODE-DEDICATED2-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(1_387_000)},
+				},
+			},
+			{
+				offering: kafkaMultiAZ,
+				plans: []planExpectation{
+					{name: "BROKERNODE-SHARED-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(1_219_100)},
+					{name: "BROKERNODE-SHARED-4C-16G", vcpus: 4, memoryMilliGiB: 16_000, amount: catalog.Amount(2_430_900)},
+					{name: "BROKERNODE-DEDICATED-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(1_525_700)},
+					{name: "BROKERNODE-DEDICATED2-2C-8G", vcpus: 2, memoryMilliGiB: 8_000, amount: catalog.Amount(1_525_700)},
+				},
+			},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				for _, want := range tc.plans {
+					t.Run(want.name, func(t *testing.T) {
+						t.Parallel()
+
+						p := planNamed(t, o, want.name)
+
+						if p.VCPUs != want.vcpus {
+							t.Errorf("offering %s plan %s vCPUs = %d, want %d: the page's vCPU column, per node",
+								text.Quote(o.Name), text.Quote(p.Name), p.VCPUs, want.vcpus)
+						}
+
+						if p.MemoryMilliGiB != want.memoryMilliGiB {
+							t.Errorf("offering %s plan %s memory = %d thousandths of a GiB, want %d",
+								text.Quote(o.Name), text.Quote(p.Name), p.MemoryMilliGiB, want.memoryMilliGiB)
+						}
+
+						// Scaleway bills a cluster's storage per node and includes none in a
+						// node type, so every GiB is priced on its own at the storage price
+						// below (ADR 0047).
+						if p.IncludedStorageGiB != 0 {
+							t.Errorf("offering %s plan %s included storage = %d GiB, want 0: the page includes none in a node type",
+								text.Quote(o.Name), text.Quote(p.Name), p.IncludedStorageGiB)
+						}
+
+						for _, region := range o.Regions {
+							got, ok := o.PlanPrice(want.name, region)
+							if !ok {
+								t.Errorf("offering %s lists no price for plan %s in region %s, want %s a month",
+									text.Quote(o.Name), text.Quote(want.name), text.Quote(region), want.amount)
+
+								continue
+							}
+
+							if got != want.amount {
+								t.Errorf("offering %s plan %s price in region %s = %s, want %s: the page's hourly price per node × 730",
+									text.Quote(o.Name), text.Quote(want.name), text.Quote(region), got, want.amount)
+							}
+						}
+					})
+				}
+			})
+		}
+	})
+
+	// The plans subtest walks the plans the table names, so a plan present in the
+	// snapshot and absent here would go unnoticed: pin each offering's count too.
+	// The two dedicated generations are both in the page's Paris table at the same
+	// price, so both are node types of the snapshot.
+	t.Run("plan counts", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			offering string
+			want     int
+		}{
+			{offering: openSearchStandalone, want: 5},
+			{offering: openSearchHA, want: 5},
+			{offering: kafkaSingleAZ, want: 4},
+			{offering: kafkaMultiAZ, want: 4},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if len(o.Plans) != tc.want {
+					t.Errorf("offering %s lists %d plans, want %d: %v",
+						text.Quote(o.Name), len(o.Plans), tc.want, planNames(o))
+				}
+			})
+		}
+	})
+
+	// A node type the page sells in Milan alone cannot be a plan of an offering
+	// available in Paris only: BROKERNODE-DEDICATED3-* is the Milan-only third
+	// generation, and the availability page's Milan column is what the SDK's
+	// Regions() then rules out (the regions subtest).
+	t.Run("no plan from a region outside the offering's", func(t *testing.T) {
+		t.Parallel()
+
+		for _, name := range []string{openSearchStandalone, openSearchHA, kafkaSingleAZ, kafkaMultiAZ} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, name)
+
+				for _, plan := range planNames(o) {
+					if strings.HasPrefix(plan, "BROKERNODE-DEDICATED3-") {
+						t.Errorf("offering %s lists plan %s, want none: the page sells it in Milan alone, which the Kafka SDK does not declare",
+							text.Quote(o.Name), text.Quote(plan))
+					}
+				}
+			})
+		}
+	})
+
+	// Block Storage 5K, the volume type every node type lists, at 0.000136 EUR an
+	// hour a GiB, 0.0993 a GiB a month, as the MongoDB offerings record the same
+	// volume type and price.
+	t.Run("storage prices", func(t *testing.T) {
+		t.Parallel()
+
+		want := catalog.Amount(993)
+
+		for _, name := range []string{openSearchStandalone, openSearchHA, kafkaSingleAZ, kafkaMultiAZ} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, name)
+
+				for _, region := range o.Regions {
+					got, ok := o.StoragePrice(region)
+					if !ok {
+						t.Errorf("offering %s lists no storage price in region %s, want %s a GiB a month",
+							text.Quote(o.Name), text.Quote(region), want)
+
+						continue
+					}
+
+					if got != want {
+						t.Errorf("offering %s storage price in region %s = %s, want %s: Block Storage 5K at 0.000136 an hour × 730",
+							text.Quote(o.Name), text.Quote(region), got, want)
+					}
+				}
+			})
+		}
+	})
+
+	// The capability claim is PRD #571 milestone 7's decision and the strict
+	// definition of ADR 0011: a capability is listed only where a page states it.
+	//
+	// OpenSearch's High Availability deployment "ensures fault tolerance in case of
+	// node failure", and its Standalone one is "without redundancy", so node level
+	// high availability is the High Availability tier's alone. Kafka's Multi-AZ
+	// tier spreads three brokers "across two Availability Zones" and its concepts
+	// page promises that "if a node fails, data replication means Apache Kafka® can
+	// keep serving data without downtime or data loss", so the Multi-AZ tier keeps
+	// serving through the loss of a node; a Single-AZ cluster may be one node
+	// ("1 - 30, in multiples of 3 (except for a single‑node option)"), so its tier
+	// claims nothing.
+	//
+	// Neither Kafka tier lists zone-high-availability. The changelog's "automatic
+	// failover and zero event loss" is not a page saying the cluster keeps serving
+	// through the loss of a zone, and the pages say only that the brokers are
+	// spread over two zones, with node-failure continuity.
+	//
+	// No page states encryption at rest or backups for either product, so neither
+	// is claimed: the snapshot lists what a page states, never what a product of
+	// its kind usually has.
+	t.Run("capabilities", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			offering string
+			want     []taxonomy.Capability
+		}{
+			{offering: openSearchStandalone, want: nil},
+			{offering: openSearchHA, want: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+			{offering: kafkaSingleAZ, want: nil},
+			{offering: kafkaMultiAZ, want: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+		}
+
+		for _, tc := range tests {
+			t.Run(tc.offering, func(t *testing.T) {
+				t.Parallel()
+
+				o := offeringNamed(t, cat, tc.offering)
+
+				if diff := cmp.Diff(tc.want, o.Capabilities); diff != "" {
+					t.Errorf("offering %s capabilities mismatch (-want +got):\n%s", text.Quote(o.Name), diff)
+				}
+			})
+		}
+	})
+}
+
+// planExpectation is one plan of TestOpenSearchAndKafkaOfferingsAndPrices: its
+// name, the vCPUs and memory a node has, and the monthly price of one node.
+// Every plan of the four offerings includes no storage.
+type planExpectation struct {
+	name           string
+	vcpus          int64
+	memoryMilliGiB int64
+	amount         catalog.Amount
 }
 
 // TestKapsuleDedicatedInMilan pins issue #211: Scaleway's Containers price page,
@@ -1629,6 +1942,153 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 			wantFit:      mapping.Partial,
 			want: []candidateExpectation{
 				{Name: containerRegistry, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkMapping(t, mapping.Map(newResource(t, tc.category, tc.capabilities...), cat), tc.wantFit, tc.want)
+		})
+	}
+}
+
+// TestOpenSearchAndKafkaBestOfferingAndFit pins PRD #571 milestone 7's mapping
+// criterion for the two categories the snapshot gains: the best offering of a
+// resource of each, with fit direct when the offering lists every capability the
+// resource lists and partial naming each capability it lacks otherwise. Every
+// row goes through mapping.Map on the embedded catalog, so the offerings'
+// capabilities, the tiers the snapshot records and the mapping's ordering
+// (direct before partial, then partial by missing capabilities, then by offering
+// name) are pinned together.
+//
+// A source's OpenSearch domain carries encryption-at-rest and snapshots (AWS
+// enables encryption on request and takes automated snapshots of every domain),
+// and its MSK cluster always encrypts at rest; no page states either for
+// Scaleway's two products, so such a resource is partial and the missing
+// capability is named. Both categories' tiers differ in node level high
+// availability alone. Nothing here lists zone-high-availability:
+// TestOpenSearchAndKafkaOfferingsAndPrices pins that neither Kafka tier claims
+// it, so a cluster that spans zones loses only that one against Multi-AZ and
+// both against Single-AZ, and a search cluster that spans zones, PRD #571's
+// acceptance example, is partial on both of Scaleway's OpenSearch offerings.
+func TestOpenSearchAndKafkaBestOfferingAndFit(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	const (
+		openSearchStandalone = "Cloud Essentials for OpenSearch"
+		openSearchHA         = "Cloud Essentials for OpenSearch High Availability"
+		kafkaSingleAZ        = "Clusters for Apache Kafka"
+		kafkaMultiAZ         = "Clusters for Apache Kafka Multi-AZ"
+	)
+
+	tests := []struct {
+		name         string
+		category     taxonomy.Category
+		capabilities []taxonomy.Capability
+		wantFit      mapping.Fit
+		want         []candidateExpectation
+	}{
+		{
+			name:     "search.opensearch/no capabilities",
+			category: taxonomy.SearchOpenSearch,
+			wantFit:  mapping.Direct,
+			want: []candidateExpectation{
+				{Name: openSearchStandalone, Fit: mapping.Direct},
+				{Name: openSearchHA, Fit: mapping.Direct},
+			},
+		},
+		{
+			name:         "search.opensearch/node-high-availability",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: openSearchHA, Fit: mapping.Direct},
+				{Name: openSearchStandalone, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+			},
+		},
+		{
+			name:         "search.opensearch/encryption-at-rest",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: openSearchStandalone, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+				{Name: openSearchHA, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+			},
+		},
+		{
+			name:         "search.opensearch/snapshots",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.Snapshots},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: openSearchStandalone, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Snapshots}},
+				{Name: openSearchHA, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Snapshots}},
+			},
+		},
+		{
+			name:         "search.opensearch/zone-high-availability",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: openSearchStandalone, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+				{Name: openSearchHA, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+			},
+		},
+		{
+			name:     "messaging.kafka/no capabilities",
+			category: taxonomy.MessagingKafka,
+			wantFit:  mapping.Direct,
+			want: []candidateExpectation{
+				{Name: kafkaSingleAZ, Fit: mapping.Direct},
+				{Name: kafkaMultiAZ, Fit: mapping.Direct},
+			},
+		},
+		{
+			name:         "messaging.kafka/node-high-availability",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Direct,
+			want: []candidateExpectation{
+				{Name: kafkaMultiAZ, Fit: mapping.Direct},
+				{Name: kafkaSingleAZ, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability}},
+			},
+		},
+		{
+			name:         "messaging.kafka/zone-high-availability",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: kafkaSingleAZ, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+				{Name: kafkaMultiAZ, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+			},
+		},
+		{
+			name:         "messaging.kafka/zone-high-availability and node-high-availability",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability, taxonomy.NodeHighAvailability},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: kafkaMultiAZ, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+				{Name: kafkaSingleAZ, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.NodeHighAvailability, taxonomy.ZoneHighAvailability}},
+			},
+		},
+		{
+			name:         "messaging.kafka/encryption-at-rest",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.EncryptionAtRest},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: kafkaSingleAZ, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
+				{Name: kafkaMultiAZ, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.EncryptionAtRest}},
 			},
 		},
 	}

@@ -1,7 +1,8 @@
 # PRD #571: OpenSearch and Kafka as taxonomy categories
 
-**Status:** In progress, milestones 1 to 5 done. The maintainer decided all six questions under *Decisions and
-decided questions* on 2026-11-25, as recommended. Milestone 1's ADR is
+**Status:** In progress, milestones 1 to 5 and 7 done. The maintainer decided all six questions under *Decisions and
+decided questions* on 2026-11-25, as recommended, and met decided question 2's gate on 2026-11-27 (both
+Scaleway products generally available since June 2026). Milestone 1's ADR is
 [0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md).
 **Issue:** #571
 
@@ -58,8 +59,8 @@ Each definition is what the taxonomy's doc comment will say (`internal/domain/ta
 
 | Category | Definition | OVHcloud | Scaleway | UpCloud |
 |---|---|---|---|---|
-| `search.opensearch` | A search and analytics engine the provider runs that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch up to 7.10, from which OpenSearch was forked | Public Cloud Databases for OpenSearch (GA) | Cloud Essentials for OpenSearch (general availability not confirmed: decided question 2) | Managed OpenSearch (GA) |
-| `messaging.kafka` | A cluster of brokers the provider runs that speaks the Apache Kafka protocol: a partitioned, replicated log whose consumers track their own offsets | Public Cloud Analytics for Kafka (GA) | Clusters for Apache Kafka® (general availability not confirmed: decided question 2) | none |
+| `search.opensearch` | A search and analytics engine the provider runs that speaks the OpenSearch REST API: OpenSearch, or Elasticsearch up to 7.10, from which OpenSearch was forked | Public Cloud Databases for OpenSearch (GA) | Cloud Essentials for OpenSearch (GA since June 2026: the maintainer, 2026-11-27, issue #571) | Managed OpenSearch (GA) |
+| `messaging.kafka` | A cluster of brokers the provider runs that speaks the Apache Kafka protocol: a partitioned, replicated log whose consumers track their own offsets | Public Cloud Analytics for Kafka (GA) | Clusters for Apache Kafka® (GA since June 2026: the maintainer, 2026-11-27, issue #571) | none |
 
 **Names.** Both are named after the protocol, as `cache.redis`, `database.postgresql` and
 `database.mongodb` are (ADR 0046, *The categories*): an application's client library decides what it
@@ -130,7 +131,12 @@ UpCloud from `upcloud.com/docs/`. The catalog milestones read each page again an
     <https://docs.ovhcloud.com/en/guides/public-cloud/databases/public-cloud-databases-regions-comparison>.
     Encryption at rest: "Are the nodes and the backups encrypted at rest? Yes, on every plan":
     <https://docs.ovhcloud.com/en/guides/public-cloud/databases/concepts-security-overview>.
-  - **Scaleway, general availability not confirmed.** Cloud Essentials for OpenSearch exists in the
+  - **Scaleway, GA since June 2026** (the maintainer, 2026-11-27, issue #571; until then "general
+    availability not confirmed", as read on 2026-11-25 below). Milestone 7 added *Cloud Essentials for
+    OpenSearch* (Standalone) and *Cloud Essentials for OpenSearch High Availability*
+    (`node-high-availability`), five node types each at the same per-node prices, Block Storage 5K per
+    node, `fr-par` only, no encryption at rest, snapshots or zone continuity stated (Scaleway's
+    `SOURCES.md`). Cloud Essentials for OpenSearch exists in the
     documentation (published 2025-08-05, validated 2025-12-16): deployment configurations High
     Availability ("fault tolerance in case of node failure") and Standalone ("without redundancy"),
     shared and dedicated vCPU node types, storage per node; changelog entries on 2026-07-01 (scale up
@@ -167,7 +173,12 @@ UpCloud from `upcloud.com/docs/`. The catalog milestones read each page again an
     family's capabilities, deployment modes and security pages instead
     (<https://docs.ovhcloud.com/en/guides/public-cloud/data-analytics/analytics/capabilities> and its
     siblings), which name Kafka and OpenSearch.
-  - **Scaleway, general availability not confirmed.** Clusters for Apache Kafka® exists in the
+  - **Scaleway, GA since June 2026** (the maintainer, 2026-11-27, issue #571; until then "general
+    availability not confirmed", as read on 2026-11-25 below). Milestone 7 added *Clusters for Apache
+    Kafka* (Single-AZ) and *Clusters for Apache Kafka Multi-AZ* (`node-high-availability` only, no
+    `zone-high-availability`: no page says it keeps serving through the loss of a zone), four Paris node
+    types each, Block Storage 5K per node, `fr-par` only (the SDK does not declare Milan), no encryption at
+    rest or snapshots stated (Scaleway's `SOURCES.md`). Clusters for Apache Kafka® exists in the
     documentation (posted 2025-09-15, validated 2026-06-19): 1 to 30 nodes, in multiples of 3 except
     one; Single-AZ and Multi-AZ ("replicate three nodes over two Availability Zones"; changelog
     2026-07-01: "Multi-AZ is now available … with automatic failover and zero event loss"); dedicated or
@@ -542,7 +553,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    the repository, never committed (as milestone 7 says):** the Managed Databases tab's OpenSearch
    table. One saved page serves this milestone and PRD #552 milestone 7 (its Valkey table), so the
    maintainer saves it once, for whichever runs first. Depends on 1 and PRD #552 milestone 7.
-7. [ ] **Scaleway catalog, or its record of absence.** **Gated on decided question 2.** If the maintainer
+7. [x] **Scaleway catalog, or its record of absence.** **Gated on decided question 2.** If the maintainer
    confirms general availability: offerings for `search.opensearch` (Standalone, and High Availability
    with `node-high-availability`) and `messaging.kafka` (Single-AZ, and Multi-AZ with
    `zone-high-availability` only if a page says it keeps serving through the loss of a zone; the
@@ -621,7 +632,9 @@ text as the decision)
    maintainer as recommended):* (a), both categories now, only the Scaleway milestone gated. A category with fewer
    targets is still more precise than `unclassified`: OVHcloud's and UpCloud's offerings are GA, and
    Scaleway shows "no offering in the Scaleway catalog" until its pages confirm GA, as PRD #552 did for
-   OVHcloud File Storage. Milestone 7 then adds the offerings or records their absence.
+   OVHcloud File Storage. Milestone 7 then adds the offerings or records their absence. *Gate
+   (2026-11-27):* met. The maintainer, 2026-11-27, issue #571: both products reached general
+   availability in June 2026, so milestone 7 added their offerings.
 3. **Serverless variants unsized.** *Decision (2026-11-25, decided by the maintainer as recommended):*
    classify them and leave them unsized ("size unknown"), as under *Decisions* (*Serverless variants
    are in, unsized*). The
@@ -875,3 +888,29 @@ text as the decision)
   to a new service meets `snapshots`.
 - Milestone 7: Scaleway's general availability of both products; their regions; their node types'
   vCPUs, memory and prices; whether any page states encryption at rest, backups or zone continuity.
+  Checked on 2026-11-27 (Scaleway's `SOURCES.md` gives every source):
+  - **General availability:** decided, the maintainer, 2026-11-27, issue #571: both products GA since
+    June 2026. The saved price page's data marks every node type of both `general_availability`, the
+    availability page's data has `isBeta` false for both, and the saved betas page lists neither.
+  - **Regions:** `fr-par` for both. The availability page and its CSV give OpenSearch in Paris and Kafka
+    in Paris and Milan, but SDK `api/searchdb/v1alpha1` and `api/kafka/v1alpha1` both declare `fr-par`
+    alone, so Milan is left out for Kafka (regions rule), with its Milan-only `BROKERNODE-DEDICATED3-*`
+    node types.
+  - **Node types and prices:** from the saved Managed Databases price page's embedded data, which the
+    visible Paris tables agree with, hourly × 730 per node. OpenSearch, both tiers at the same prices:
+    `SEARCHDB-SHARED-2C-8G` 2 vCPU 8 GB €72.27, `-SHARED-4C-16G` 4/16 €144.54, `-DEDICATED2-2C-8G` 2/8
+    €97.09, `-DEDICATED2-4C-16G` 4/16 €193.45, `-DEDICATED2-8C-32G` 8/32 €381.06. Kafka Single-AZ:
+    `BROKERNODE-SHARED-2C-8G` 2/8 €110.96, `-SHARED-4C-16G` 4/16 €221.19, `-DEDICATED-2C-8G` and
+    `-DEDICATED2-2C-8G` 2/8 €138.70; Multi-AZ, the page's "Multi-AZ option" column: €121.91, €243.09,
+    €152.57 and €152.57. Storage Block Storage 5K, €0.000136 per GB and hour, `0.0993` a GiB-month, per
+    node; no node type includes storage.
+  - **Encryption at rest and backups:** none stated. No saved page and no file under
+    `pages/opensearch/` or `pages/clusters-for-kafka/` of `scaleway/docs-content` (commit
+    `839dd366846140226cd50a0b9d10aea20959e514`) mentions encryption at rest, backups or snapshots; Kafka
+    names TLS in transit only. Neither capability is listed.
+  - **Zone continuity:** none stated. OpenSearch pages mention no zones; Kafka's Multi-AZ spreads three
+    brokers over two zones, with "automatic failover and zero event loss" (changelog, 2026-07-01), but no
+    page says the cluster keeps serving through the loss of a zone, so Multi-AZ lists
+    `node-high-availability` only. A three-node Single-AZ Kafka cluster is replicated too, but the tier
+    also sells one node, so it lists no capability and a replicated cluster is priced on Multi-AZ (about
+    10 % high; *Clusters for Apache Kafka*, **Estimate effect**).

@@ -12,7 +12,8 @@
 // balancer and container registry offerings record no plan or price, and
 // Topics and Events and Serverless Containers are usage-priced (PRD 552);
 // the snapshot serves no storage.file, since Scaleway's File Storage mounts
-// over virtiofs, not NFS.
+// over virtiofs, not NFS. The OpenSearch and Kafka offerings (PRD 571) are
+// priced per node, with their storage per GiB and node (ADR 0047).
 //
 // catalog.json is a target catalog snapshot of schema version 2, the format
 // every target with an embedded snapshot shares (ADR 0007, ADR 0024).
