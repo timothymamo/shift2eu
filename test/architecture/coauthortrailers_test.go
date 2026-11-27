@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 const (
@@ -19,6 +21,18 @@ const (
 	// coAuthorCheckName is the job's name, which the maintainer makes a required
 	// status check on main (ADR 0050, Maintainer steps).
 	coAuthorCheckName = "Co-author trailers (base)"
+
+	// ciWorkflowPath is the CI workflow that keeps the legacy co-author job during
+	// the two-step rollout (issue #706): the follow-up PR removes that job once the
+	// maintainer requires coAuthorCheckName, and the guard's exception with it.
+	ciWorkflowPath = ".github/workflows/ci.yml"
+
+	// legacyCoAuthorJobID and legacyCoAuthorCheckName are ci.yml's co-author job
+	// and the check it reports, kept from before the move (issues #663 and #689) so
+	// a co-author check still runs on every pull request until the maintainer
+	// requires coAuthorCheckName (issue #706).
+	legacyCoAuthorJobID     = "coauthor-trailers"
+	legacyCoAuthorCheckName = "Co-author trailers"
 )
 
 // TestCICoAuthorTrailersRunsFromTheBaseBranch pins the co-author check's own
@@ -61,34 +75,29 @@ func TestCICoAuthorTrailersRunsFromTheBaseBranch(t *testing.T) {
 	checkCoAuthorJob(t, root, doc)
 }
 
-// TestCICoAuthorTrailersStaysOutOfCI pins what the move out of ci.yml leaves
-// behind (ADR 0050, issue #706): ci.yml holds no coauthor-trailers job, and no
-// workflow but coauthor-trailers.yml names a job Co-author trailers (base).
+// TestCICoAuthorTrailersStaysOutOfCI pins the names the co-author check may be
+// reported under (ADR 0050, issue #706). The move to pull_request_target is a
+// two-step rollout: until the maintainer requires Co-author trailers (base),
+// ci.yml keeps the legacy coauthor-trailers job, the only job named Co-author
+// trailers, so a co-author check still runs on every pull request. No workflow
+// but coauthor-trailers.yml may report a (base) check, a templated name no
+// allow-list entry pins, or the legacy job's id.
 //
-// The second pin guards the residual risk the ADR records: the required check
-// pins the integration, not the workflow, so any workflow can report a job of
-// that name from the same integration, and a pull request could add such a job
-// to its own ci.yml that always passes. The pin refuses the name outside the
-// trusted file; a pull request could loosen it, so it is a review aid, not a
-// barrier. The trigger is the barrier.
+// The guard is the residual risk the ADR records: the required check pins the
+// integration, not the workflow, so any workflow can report a job of that name
+// from the same integration, and a pull request could add such a job to its own
+// ci.yml that always passes. The names are read as a check run reports them, not
+// as YAML spells them: `name: "Co-author trailers (base)"`, `name: 'Co-author
+// trailers (base)'` and `name: ${{ 'Co-author trailers (base)' }}` all report a
+// run of that name, and a name is a job's id when the job holds none (the
+// auditor's finding F3). A pull request could loosen this pin too, so it is a
+// review aid, not a barrier. The trigger is the barrier.
 func TestCICoAuthorTrailersStaysOutOfCI(t *testing.T) {
 	t.Parallel()
 
 	root, err := filepath.Abs(repoRoot)
 	if err != nil {
 		t.Fatalf("resolve %q: %v", repoRoot, err)
-	}
-
-	ci := readWorkflow(t, root, ".github/workflows/ci.yml")
-
-	jobs, err := workflowJobs(ci)
-	if err != nil {
-		t.Fatalf("read .github/workflows/ci.yml: %v", err)
-	}
-
-	if _, ok := jobs["coauthor-trailers"]; ok {
-		t.Errorf(".github/workflows/ci.yml still holds a coauthor-trailers job, want it only in %s: a pull_request job's steps come from the pull request's own ci.yml, so a pull request can rewrite the run that checks it (ADR 0050)",
-			coAuthorWorkflowPath)
 	}
 
 	paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", "*.yml"))
@@ -100,19 +109,347 @@ func TestCICoAuthorTrailersStaysOutOfCI(t *testing.T) {
 		t.Fatalf("no workflow under .github/workflows, so this test would pin nothing")
 	}
 
+	jobs := 0
+	var legacy []coAuthorJobName
+
 	for _, path := range paths {
 		if filepath.Base(path) == filepath.Base(coAuthorWorkflowPath) {
 			continue
 		}
 
 		name := ".github/workflows/" + filepath.Base(path)
+		names := workflowJobNames(t, name, readWorkflow(t, root, name))
 
-		for _, l := range workflowLines(t, name, readWorkflow(t, root, name)) {
-			if l.text == "name: "+coAuthorCheckName {
-				t.Errorf("%s:%d names a job %q, want that name only in %s: the required check pins the integration, not the workflow, so a job of that name elsewhere could report a check run beside the real one (ADR 0050)",
-					name, l.num, coAuthorCheckName, coAuthorWorkflowPath)
+		jobs += len(names)
+
+		for _, n := range names {
+			if n.value() == legacyCoAuthorCheckName {
+				legacy = append(legacy, n)
 			}
 		}
+
+		for _, problem := range coAuthorNameProblems(names) {
+			t.Errorf("%s: %s, want no workflow but %s to report a check beside the co-author check's own: a required check pins the integration, not the workflow, so a job of that name elsewhere could report a check run beside the real one, however the name is quoted or templated (ADR 0050, issue #706)",
+				name, problem, coAuthorWorkflowPath)
+		}
+	}
+
+	if jobs == 0 {
+		t.Fatalf("the workflows hold no job this test could read, so the name guard pins nothing: %v", paths)
+	}
+
+	// The rollout keeps exactly one job of the legacy name, ci.yml's
+	// coauthor-trailers, beside the new check; the follow-up that removes it
+	// changes this test with it.
+	switch len(legacy) {
+	case 0:
+		t.Errorf("no workflow holds a job named %q, want exactly one, ci.yml's %s: the rollout keeps the old job, and so a co-author check, on every pull request until the maintainer requires %q (issue #706)",
+			legacyCoAuthorCheckName, legacyCoAuthorJobID, coAuthorCheckName)
+	case 1:
+		if got := legacy[0]; got.path != ciWorkflowPath || got.id != legacyCoAuthorJobID {
+			t.Errorf("%s: the %s job reports %q, want that name only on %s's %s job: the rollout keeps that one job beside the new check (issue #706)",
+				got.path, got.id, legacyCoAuthorCheckName, ciWorkflowPath, legacyCoAuthorJobID)
+		}
+	default:
+		t.Errorf("%d workflows hold a job named %q, want exactly one, ci.yml's %s: the rollout keeps that one job and no second way to report it (issue #706)",
+			len(legacy), legacyCoAuthorCheckName, legacyCoAuthorJobID)
+	}
+}
+
+// The rules coAuthorNameProblems refuses a job name by. A check run's name is the
+// job's name: when it holds one, the job's id otherwise, so the guard reads the
+// name the run reports rather than the YAML's spelling of it.
+const (
+	// ruleBaseName refuses every name holding (base), quoted or plain: the
+	// required check's own name is Co-author trailers (base), so a job reporting
+	// it, however it is spelled, reports a check run beside the real one.
+	ruleBaseName = "names a (base) check"
+
+	// ruleTemplated refuses a name holding a ${{ }} expression that no allow-list
+	// entry pins: the expression expands to a name no literal comparison sees, the
+	// co-author check's among them.
+	ruleTemplated = "holds a ${{ }} expression no allow-list entry pins"
+
+	// ruleLegacyName refuses the legacy job's name anywhere but on ci.yml's
+	// coauthor-trailers job, and ruleLegacyJobID its id anywhere but in ci.yml: the
+	// rollout keeps one legacy job and no second way to report it.
+	ruleLegacyName  = "is the legacy check's name outside ci.yml's coauthor-trailers job"
+	ruleLegacyJobID = "is the legacy job's id outside ci.yml"
+)
+
+// coAuthorTemplatedJobNames is the allow list of job names that may hold a
+// ${{ }} expression: today's only one, ci.yml's lint matrix entry, whose name
+// GitHub expands once per target. A templated name added to a workflow is a
+// decision this test asks for, and a name on this list is pinned as it stands.
+var coAuthorTemplatedJobNames = []string{
+	"Lint ${{ matrix.goos }}/${{ matrix.goarch }} cgo=${{ matrix.cgo }}",
+}
+
+// coAuthorJobName is one job of a workflow: the file it sits in, its id, the line
+// its name: sits on (0 when the job holds none) and the value as the workflow
+// writes it.
+type coAuthorJobName struct {
+	path string
+	id   string
+	line int
+	raw  string
+}
+
+// value returns the name the job's check run reports: a single- or
+// double-quoted scalar unquoted, a plain value as it stands, and a job without a
+// name: named by its id, which is the name GitHub reports for it.
+func (n coAuthorJobName) value() string {
+	if n.line == 0 {
+		return n.id
+	}
+
+	return unquoteYAMLScalar(n.raw)
+}
+
+// unquoteYAMLScalar returns the text a single- or double-quoted YAML scalar
+// holds and a plain value unchanged. A quoted spelling of a name is the same
+// name to GitHub, so the guard reads it as one: `name: "Co-author trailers
+// (base)"` may not slip past a comparison the plain spelling alone meets.
+func unquoteYAMLScalar(raw string) string {
+	if len(raw) < 2 {
+		return raw
+	}
+
+	if (raw[0] == '"' && raw[len(raw)-1] == '"') || (raw[0] == '\'' && raw[len(raw)-1] == '\'') {
+		return raw[1 : len(raw)-1]
+	}
+
+	return raw
+}
+
+// workflowJobNames returns every job of the workflow document doc that path
+// names, in the order of its id, with the name: it reports as a check.
+func workflowJobNames(t *testing.T, path, doc string) []coAuthorJobName {
+	t.Helper()
+
+	jobs, err := workflowJobs(doc)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	names := make([]coAuthorJobName, 0, len(jobs))
+
+	for _, id := range jobIDs(jobs) {
+		name := coAuthorJobName{path: path, id: id}
+
+		if num, raw, ok := ciScalar(jobs[id], "name"); ok {
+			name.line, name.raw = num, raw
+		}
+
+		names = append(names, name)
+	}
+
+	return names
+}
+
+// coAuthorNameProblem is one job of a workflow that may report a status check
+// beside the co-author check's own, and the rule that refuses the name.
+type coAuthorNameProblem struct {
+	job  coAuthorJobName
+	rule string
+}
+
+// String renders the problem as the line its name: sits on, the job's id, the
+// name it reports and the rule that refuses it.
+func (p coAuthorNameProblem) String() string {
+	return fmt.Sprintf("%d: %s: %q: %s", p.job.line, p.job.id, p.job.value(), p.rule)
+}
+
+// coAuthorNameProblems returns one problem per job of names whose name may
+// report a check beside the co-author check's own. The caller reads every
+// workflow but coauthor-trailers.yml, the one file allowed to report the new
+// check, so ci.yml's legacy coauthor-trailers job is the one job the legacy name
+// and id are allowed on (issue #706).
+func coAuthorNameProblems(names []coAuthorJobName) []coAuthorNameProblem {
+	var problems []coAuthorNameProblem
+
+	for _, n := range names {
+		value := n.value()
+
+		if strings.Contains(value, "${{") {
+			if !slices.Contains(coAuthorTemplatedJobNames, value) {
+				problems = append(problems, coAuthorNameProblem{job: n, rule: ruleTemplated})
+			}
+
+			continue
+		}
+
+		if strings.Contains(value, "(base)") {
+			problems = append(problems, coAuthorNameProblem{job: n, rule: ruleBaseName})
+		}
+
+		if value == legacyCoAuthorCheckName && (n.path != ciWorkflowPath || n.id != legacyCoAuthorJobID) {
+			problems = append(problems, coAuthorNameProblem{job: n, rule: ruleLegacyName})
+		}
+
+		if n.id == legacyCoAuthorJobID && n.path != ciWorkflowPath {
+			problems = append(problems, coAuthorNameProblem{job: n, rule: ruleLegacyJobID})
+		}
+	}
+
+	return problems
+}
+
+// TestCICoAuthorTrailersNameGuardReadsEverySpelling pins the name guard's parser
+// and rules on small workflow snippets (issue #706, the auditor's finding F3).
+// The integration test above reads the repository's workflows, where a spelling
+// no workflow uses goes untested: here each quoted, plain and templated variant
+// of the refused names is read, and a name the guard must allow - the allow-listed
+// matrix name, ci.yml's legacy job, a quoted name holding no (base) - stays
+// allowed.
+func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
+	t.Parallel()
+
+	const otherWorkflowPath = ".github/workflows/other.yml"
+
+	tests := []struct {
+		name string
+		// path is the workflow file the snippet stands in, since the guard reads
+		// ci.yml's own job and no other as the legacy one.
+		path string
+		// doc is the YAML snippet of the workflow.
+		doc string
+		// wantNames is the name each job of the snippet reports, keyed by its id.
+		wantNames map[string]string
+		// wantProblems is the rendering of every problem the guard reports, in
+		// order, and nil when it reports none.
+		wantProblems []string
+	}{
+		{
+			name:      "a plain name that reports no (base) check",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Build"},
+		},
+		{
+			name:      "a double-quoted (base) name",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: \"Co-author trailers (base)\"\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Co-author trailers (base)"},
+			wantProblems: []string{
+				`3: build: "Co-author trailers (base)": ` + ruleBaseName,
+			},
+		},
+		{
+			name:      "a single-quoted (base) name",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: 'Co-author trailers (base)'\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Co-author trailers (base)"},
+			wantProblems: []string{
+				`3: build: "Co-author trailers (base)": ` + ruleBaseName,
+			},
+		},
+		{
+			name:      "a plain (base) name",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: Co-author trailers (base)\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Co-author trailers (base)"},
+			wantProblems: []string{
+				`3: build: "Co-author trailers (base)": ` + ruleBaseName,
+			},
+		},
+		{
+			name:      "a (base) name spliced from an expression",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: ${{ 'Co-author trailers (base)' }}\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "${{ 'Co-author trailers (base)' }}"},
+			wantProblems: []string{
+				`3: build: "${{ 'Co-author trailers (base)' }}": ` + ruleTemplated,
+			},
+		},
+		{
+			name:      "a templated name no allow-list entry pins",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  deploy:\n    name: Deploy ${{ github.ref }}\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"deploy": "Deploy ${{ github.ref }}"},
+			wantProblems: []string{
+				`3: deploy: "Deploy ${{ github.ref }}": ` + ruleTemplated,
+			},
+		},
+		{
+			name:      "the allow-listed matrix name",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  lint-target:\n    name: Lint ${{ matrix.goos }}/${{ matrix.goarch }} cgo=${{ matrix.cgo }}\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"lint-target": "Lint ${{ matrix.goos }}/${{ matrix.goarch }} cgo=${{ matrix.cgo }}"},
+		},
+		{
+			name:      "a quoted name holding no (base)",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: \"Build (linux)\"\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Build (linux)"},
+		},
+		{
+			name:      "ci.yml's legacy job reports Co-author trailers",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  coauthor-trailers:\n    name: Co-author trailers\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"coauthor-trailers": "Co-author trailers"},
+		},
+		{
+			name:      "ci.yml's legacy job id with no name:",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"coauthor-trailers": "coauthor-trailers"},
+		},
+		{
+			name:      "the legacy name on another job of ci.yml",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  lint:\n    name: Co-author trailers\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"lint": "Co-author trailers"},
+			wantProblems: []string{
+				`3: lint: "Co-author trailers": ` + ruleLegacyName,
+			},
+		},
+		{
+			name:      "the legacy name in another workflow",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  coauthor-trailers:\n    name: Co-author trailers\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"coauthor-trailers": "Co-author trailers"},
+			wantProblems: []string{
+				`3: coauthor-trailers: "Co-author trailers": ` + ruleLegacyName,
+				`3: coauthor-trailers: "Co-author trailers": ` + ruleLegacyJobID,
+			},
+		},
+		{
+			name:      "the legacy job id with no name: in another workflow",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"coauthor-trailers": "coauthor-trailers"},
+			wantProblems: []string{
+				`0: coauthor-trailers: "coauthor-trailers": ` + ruleLegacyJobID,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			names := workflowJobNames(t, tc.path, tc.doc)
+
+			gotNames := make(map[string]string, len(names))
+			for _, n := range names {
+				gotNames[n.id] = n.value()
+			}
+
+			if diff := cmp.Diff(tc.wantNames, gotNames); diff != "" {
+				t.Errorf("workflowJobNames(%q) reports the jobs' names (-want +got):\n%s\nWant each name as a check run reports it, a quoted scalar unquoted and a job without a name: named by its id", tc.doc, diff)
+			}
+
+			var got []string
+
+			for _, problem := range coAuthorNameProblems(names) {
+				got = append(got, problem.String())
+			}
+
+			if diff := cmp.Diff(tc.wantProblems, got); diff != "" {
+				t.Errorf("coAuthorNameProblems(%q) (-want +got):\n%s\nWant every name that could report a check beside Co-author trailers (base) refused, however it is quoted or templated, and the allowed ones alone reported by none", tc.doc, diff)
+			}
+		})
 	}
 }
 
