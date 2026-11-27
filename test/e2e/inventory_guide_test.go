@@ -1622,6 +1622,68 @@ func TestInventoryGuidePrograms(t *testing.T) {
 	}
 }
 
+// TestInventoryGuideAWSRoute53PrivateZoneKeepsNoCapability pins the gate the
+// recorded fixtures cannot (PRD #581, *What does not, and why*): the guide's
+// per-zone loops ask about public zones only (`select(.PrivateZone == false)`),
+// so no recorded fixture names a private zone in get-dnssec's or the record-set
+// call's output, and a program that dropped its own `if $public` gate would give
+// a private zone dnssec or dns-routing while every fixture-driven assertion still
+// passed. The inputs below are built here rather than recorded: they stand for a
+// collect run that named a private zone anyway (a merged or hand-edited file, or
+// a guide whose loop lost its filter), which the program has to survive with the
+// zone unclassified and bare.
+func TestInventoryGuideAWSRoute53PrivateZoneKeepsNoCapability(t *testing.T) {
+	t.Parallel()
+
+	// One private and one public zone, both signed and both holding routed record
+	// sets, so the public gate is the only thing that can tell them apart: the
+	// public zone gains both capabilities, the private one neither.
+	inputs := map[string]string{
+		"route53-hosted-zones.json": `[
+  {"Id": "/hostedzone/Z0000000000000000PRIV", "Name": "corp.example.com.", "PrivateZone": true},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "Name": "example.com.", "PrivateZone": false}
+]`,
+		"route53-dnssec.json": `[
+  {"Id": "/hostedzone/Z0000000000000000PRIV", "ServeSignature": "SIGNING"},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "ServeSignature": "SIGNING"}
+]`,
+		"route53-routed-record-sets.json": `[
+  {"Id": "/hostedzone/Z0000000000000000PRIV", "RoutedRecordSets": 3},
+  {"Id": "/hostedzone/Z0123456789ABCDEFGHIK", "RoutedRecordSets": 3}
+]`,
+	}
+
+	dir := t.TempDir()
+
+	var recorded []string
+
+	for _, name := range slices.Sorted(maps.Keys(inputs)) {
+		path := filepath.Join(dir, name)
+
+		if err := os.WriteFile(path, []byte(inputs[name]), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+
+		recorded = append(recorded, path)
+	}
+
+	doc := decodeInventory(t, runJQ(t, jqPath(t), "aws", recorded))
+
+	// The public zone is the control: the capabilities of the inputs are read, so a
+	// private zone that holds none holds none because of the gate and not because
+	// the program read no signed state and no count at all.
+	assertPresent(t, "aws", doc, []resourceFact{
+		{
+			id: "corp.example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "unclassified", capabilities: []string{},
+		},
+		{
+			id: "example.com.", rawType: "AWS::Route53::HostedZone",
+			category: "network.dns", capabilities: []string{"dnssec", "dns-routing"},
+		},
+	})
+}
+
 // TestInventoryGuideDomainNamesListEveryDomainOnRecord pins what the guide's two
 // OpenSearch calls promise about each other (review finding N1): the guide asks
 // opensearch describe-domains for the names list-domain-names returned, so a
