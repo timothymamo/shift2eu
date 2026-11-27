@@ -474,7 +474,7 @@ def zone_count: (.zones // []) | length;
             | ($worker.dataDisksGroups[0]? // {}) as $disks
             | $base + {category: "messaging.kafka", capabilities: [
                 "encryption-at-rest",
-                cap("node-high-availability"; ($worker.targetInstanceCount // 0) >= 3)
+                cap("node-high-availability"; ($worker.targetInstanceCount | type == "number" and . >= 3))
               ],
               size: size_of(($worker.hardwareProfile.vmSize? | vm_size($vmsizes) // {})
                 + {count: ($worker.targetInstanceCount | if type == "number" and . >= 1 then . else null end),
