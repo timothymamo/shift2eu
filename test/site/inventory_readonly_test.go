@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 )
 
 // This file holds the guide-wide read-only check of the inventory guide (issue
@@ -18,31 +16,44 @@ import (
 // credentials, so a `create`, `delete` or `set` no check catches would be a write
 // this project tells its readers to make.
 //
-// Each milestone's review held its new commands to a read verb by hand, and the
-// inventory page's checks pin single commands by name. This check holds all of
-// them at once, and it reads the whole guide rather than a list of sections: every
-// fenced block whose language is a shell one, every inline code span of the prose,
-// every prose line that starts with a CLI name, and the comments of the programs
-// the guide ships. A block whose language is neither a shell one nor on the closed
-// list of prose languages fails the check, so no block of commands goes unread.
+// One mechanism decides it, and it trusts no Markdown and no shell reading: a field
+// scan of every line of the guide and of every program it ships. The scan joins the
+// lines a trailing `\` continues, splits every other line into fields on white
+// space and shell punctuation, takes each field's last path element, and holds every
+// field that is one of the three names to account. A name is either a bare mention
+// (the next field is one of guideBareMentions' words), or it starts a field sequence
+// that is a read: one of the exact command paths cloudCLIs lists for the CLI, with
+// no denied flag, and `az rest` as one GET of the management endpoint. Every other
+// field sequence fails the check, wherever it sits: in a shell fence, in a ```text
+// or ```json sample, in prose, in a heading, in a blockquote, in an indented block,
+// in an HTML block, in a code span over two lines, or in a heredoc body.
+//
+// A line that ends at its last field is continued by the next line's fields, so a
+// command the text wraps — after the CLI's name in a code span, a prose line, a
+// fence body or a heredoc body, or in the middle of a program's comment table — is
+// read whole. The guard is the line's last character: the guide's JSON writes
+// `"source": "aws",`, whose comma ends the mention, not the `"resources"` array that
+// follows it, while a name that ends its line does take the next line's fields.
 //
 // An invocation's command path is held to the exact list of read commands its CLI
 // has in cloudCLIs, not to a verb: a new command is a deliberate edit of that list.
 // The words after the command path are the command's positional arguments, so
 // `gcloud compute instances delete list` reads nothing and fails, and a read that
-// returns a secret (`aws secretsmanager get-secret-value`) is no read the guide
-// may run. A flag that points the CLI elsewhere or turns its checks off
-// (`--endpoint-url`, `--no-verify-ssl`, `--ca-bundle`, `--impersonate-service-
-// account`) fails even on a path that reads, and `az rest` reads only as one GET
-// of the management endpoint, with no resource, headers or body, and with its
-// method flag spelt out.
+// returns a secret (`aws secretsmanager get-secret-value`) is no read the guide may
+// run. A flag that points the CLI elsewhere, feeds it input of the caller's
+// choosing or turns its checks off (`--endpoint-url`, `--no-verify-ssl`,
+// `--ca-bundle`, `--cli-input-json`, `--impersonate-service-account`,
+// `--flags-file`) fails even on a path that reads, and so does the flag's prefix,
+// which the CLIs' parsers complete (`--endpoint`, `--impersonate`). A shell
+// variable the CLIs read in a denied flag's place (`AWS_ENDPOINT_URL`,
+// `AWS_CA_BUNDLE`, `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`) fails on any line
+// that names the CLI. `az rest` reads only as one GET of the management endpoint,
+// with no resource, headers or body, and with its method flag spelt out.
 //
-// Nothing here is trusted on its own. unplacedCLINames is the fail-closed backstop:
-// it splits every line of the guide and of every program into fields on white space
-// and shell punctuation, whatever the Markdown says the line is, and holds every
-// field that is one of the three names to account, so a `bash -c` argument, a
-// heredoc body, a blockquoted or indented block, an HTML block, a double-backtick
-// or wrapped code span, and a write in a ```text fence are all reported.
+// A global flag before the command path (`aws --output json ec2 describe-instances`)
+// is no read on purpose: the command path is the words up to the first flag, so the
+// check fails closed rather than parse a path past a flag a future denied one could
+// hide behind.
 //
 // Residuals, the escapes this check knowingly leaves, named here in one place:
 //
@@ -51,28 +62,26 @@ import (
 //   - A command run by something the guide does not ship: a downloaded script, an
 //     alias an earlier command defined, a `make` target whose recipe lives in a
 //     Makefile. The check reads the guide's text and its programs.
-//   - A redirect target: `> "$out/x.json"` stands where a program's name stands in
-//     shell, so the check reads it as a file and never as a variable that could
-//     name a CLI.
+//   - A CLI's name a variable holds: `cli=aws` on one line and `"$cli" ec2
+//     create-tags` on the next names no field the scan sees as a CLI. The same line
+//     is caught, since the assignment's value is a field of it.
 //   - An `az rest` that gives no address: the guide's prose names `az rest
-//     --method get --url` with no value, and the programs' comment table names
-//     `az rest --method get .../queues`, so only an address that is given is held
-//     to the management endpoint, and the one method, get, is what decides.
-//   - The backstop counts per line and in the line's order: a start is credited to
-//     the first CLI name on its line, and a field sequence that reads accounts for
-//     a name the extraction could not place, so a read named inside a `bash -c`
-//     argument passes (it is a read) and a bare mention needs no start.
-//   - Variable indirection is refused only where a program's name stands: `"$cli"
-//     ec2 create-tags` fails, while `xargs "$cli" ec2 create-tags` is an argument,
-//     and a `$`-word that expands to `aws` from a variable the guide never sets is
-//     invisible to the check.
-//   - CommonMark's indentation is counted in spaces: a tab before a fence counts as
-//     one space here and as up to four columns there, and a fence inside a list
-//     item is read at the guide's own indentation.
-//   - A fence labelled with a prose language is read for CLI names alone, by the
-//     backstop: a CLI name in one must be a bare mention, an invocation of the
-//     extraction, or a read, so a write in a ```json sample fails while the
-//     sample's other words are no shell the check reads.
+//     --method get --url` with no value, so a `--url` whose next word is no address
+//     (it starts with no scheme or `$`, and holds no `.` or `/`) and is followed by
+//     more words counts as no address given, and the one method, get, is what
+//     decides.
+//   - A flag written after the closing quote of an argument that spans physical
+//     lines without a trailing `\`: the scan reads each logical line, so the flag
+//     belongs to no name's field sequence and a denied one there is not seen.
+//   - A redirect target: `> "$out/x.json"` holds no CLI's name, and a target that
+//     named one is read as a field like any other, not as the file shell writes.
+//   - CommonMark's indentation and info strings, read by the fence label guard: a
+//     fence opens with at most three spaces of indent and, when it is a backtick
+//     fence, with no backtick in its info string. The scan reads every line of every
+//     fence whatever its label, so the guard only makes a new language deliberate.
+//   - The bare mentions are the words today's text uses after a name: a guide that
+//     writes the CLI and then prose fails the check until its word is listed, which
+//     is the point — an unlisted word could be a command's first word.
 //
 // The check is a function over text rather than over the file, so
 // TestReadOnlyCheckFlagsPlantedWrites can plant a write into a copy of the guide
@@ -95,10 +104,10 @@ const methodFlag = "--method"
 const azManagementAPI = "https://management.azure.com"
 
 // cloudCLIs are the three cloud CLIs the guide tells a visitor to run, each with
-// the exact command paths its invocations may name, the flags no read may pass, and
-// the command reference those paths come from, the source of every read command the
-// list holds (issue #716's review: a verb rule let a write whose last word was a
-// read verb through).
+// the exact command paths its invocations may name, the flags and variables no read
+// may use, and the command reference those paths come from, the source of every
+// read command the list holds (issue #716's review: a verb rule let a write whose
+// last word was a read verb through).
 var cloudCLIs = []cloudCLI{{
 	name: "aws",
 	// AWS CLI version 2's command reference, service by service: the guide reads
@@ -143,10 +152,16 @@ var cloudCLIs = []cloudCLI{{
 		"sqs get-queue-attributes",
 		"sqs list-queues",
 	},
-	// --endpoint-url sends the request to a host of the caller's choosing, and
+	// --endpoint-url sends the request to a host of the caller's choosing,
 	// --no-verify-ssl and --ca-bundle turn off the check that the answer comes from
-	// AWS: a read that passes either reads something else's account.
-	deniedFlags: []string{"--ca-bundle", "--endpoint-url", "--no-verify-ssl"},
+	// AWS, and --cli-input-json and --cli-input-yaml read the call's parameters from
+	// a file: a read that passes any of them reads something else's account. The
+	// variables are what the CLI reads in their place.
+	deniedFlags: []string{"--ca-bundle", "--cli-input-json", "--cli-input-yaml", "--endpoint-url", "--no-verify-ssl"},
+	deniedEnv: []deniedEnv{
+		{variable: "AWS_CA_BUNDLE", flag: "--ca-bundle"},
+		{variable: "AWS_ENDPOINT_URL", flag: "--endpoint-url"},
+	},
 }, {
 	name: "az",
 	// The Azure CLI's reference index: `az rest` reads only with one GET method on
@@ -203,8 +218,13 @@ var cloudCLIs = []cloudCLI{{
 		"storage buckets list",
 	},
 	// --impersonate-service-account makes the call as a service account the
-	// visitor may not own a read of.
-	deniedFlags: []string{"--impersonate-service-account"},
+	// visitor may not own a read of, --flags-file reads the flags from a file the
+	// check does not read, --access-token-file takes the token from a file, and
+	// --configuration runs another named configuration's credentials.
+	deniedFlags: []string{"--access-token-file", "--configuration", "--flags-file", "--impersonate-service-account"},
+	deniedEnv: []deniedEnv{
+		{variable: "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT", flag: "--impersonate-service-account"},
+	},
 }}
 
 // cloudCLI is one of the cloud CLIs the guide runs.
@@ -219,9 +239,23 @@ type cloudCLI struct {
 	// none is no read.
 	readCommands []string
 	// deniedFlags are the flags no invocation of the CLI may pass, whatever its
-	// command path: a read that points the CLI elsewhere or turns its checks off is
-	// no read the guide may run.
+	// command path: a read that points the CLI elsewhere, feeds it input of the
+	// caller's choosing or turns its checks off is no read the guide may run. A
+	// flag's prefix is one of them too, since the CLI's parser completes it.
 	deniedFlags []string
+	// deniedEnv are the environment variables the CLI reads in a denied flag's
+	// place: a line that sets one and names the CLI is no read either.
+	deniedEnv []deniedEnv
+}
+
+// deniedEnv is an environment variable that does what a denied flag does: the CLI
+// reads it in the flag's place.
+type deniedEnv struct {
+	// variable is the variable's name; one of its per-service spellings, such as
+	// AWS_ENDPOINT_URL_S3, starts with it and an underscore.
+	variable string
+	// flag is the flag the variable stands in for.
+	flag string
 }
 
 // cloudCLIByName returns the CLI the name stands for, and whether there is one. It
@@ -237,18 +271,18 @@ func cloudCLIByName(name string) (cloudCLI, bool) {
 	return cloudCLI{}, false
 }
 
-// reads returns the command path an invocation names, as the guide writes it, and
-// whether the invocation is a read: the path must start with one of the CLI's read
+// reads returns the command path a field sequence names, as the guide writes it,
+// and whether the sequence is a read: the path must start with one of the CLI's read
 // commands, no word may name a flag the CLI denies, and `az rest`, the one command
 // whose read depends on flags, must be one GET of the management endpoint. The path
-// it returns holds the word that made the invocation no read, so the message says
+// it returns holds the word that made the sequence no read, so the message says
 // where the check stopped.
 func (c cloudCLI) reads(words []string) (string, bool) {
 	commandPath := subcommandPath(words)
 	held := strings.Join(commandPath, " ")
 
 	for _, word := range words {
-		if slices.Contains(c.deniedFlags, flagName(word)) {
+		if c.denies(flagName(word)) {
 			return strings.TrimSpace(held + " " + flagName(word)), false
 		}
 	}
@@ -265,11 +299,49 @@ func (c cloudCLI) reads(words []string) (string, bool) {
 	return held, true
 }
 
-// azRestReads returns what an `az rest` invocation is held to, and whether it
-// reads: exactly one method, get, and, when it gives an address, one on the
-// management endpoint. An invocation that abbreviates the method flag — `-mpost`,
-// `-m=post`, `--meth put` — is refused rather than read, since the check would
-// otherwise take it for one with no method at all and let the write through.
+// denies reports whether a flag's name is one of the CLI's denied flags, in full or
+// as a truncation of one that the CLI's parser completes: --endpoint for
+// --endpoint-url, --head for --headers. Nothing shorter than the two dashes and a
+// letter is a truncation.
+func (c cloudCLI) denies(flag string) bool {
+	for _, denied := range c.deniedFlags {
+		if flag == denied {
+			return true
+		}
+
+		if strings.HasPrefix(flag, "--") && len(flag) > 2 && strings.HasPrefix(denied, flag) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// environmentOverride returns the assignment on a line that sets one of the CLI's
+// denied variables, the flag the variable stands in for, and whether there is one.
+// A variable's per-service spelling (`AWS_ENDPOINT_URL_S3`) sets it too.
+func (c cloudCLI) environmentOverride(line string) (assignment, flag string, found bool) {
+	for _, word := range strings.Fields(line) {
+		name, _, assigned := strings.Cut(strings.TrimLeft(word, "'\"`$()[]{};&|<>\\"), "=")
+		if !assigned {
+			continue
+		}
+
+		for _, denied := range c.deniedEnv {
+			if name == denied.variable || strings.HasPrefix(name, denied.variable+"_") {
+				return word, denied.flag, true
+			}
+		}
+	}
+
+	return "", "", false
+}
+
+// azRestReads returns what an `az rest` sequence is held to, and whether it reads:
+// exactly one method, get, and, when it gives an address, one on the management
+// endpoint. An invocation that abbreviates the method flag — `-mpost`, `-m=post`,
+// `--meth put` — is refused rather than read, since the check would otherwise take
+// it for one with no method at all and let the write through.
 func azRestReads(words []string) (string, bool) {
 	var (
 		methods []string
@@ -290,12 +362,27 @@ func azRestReads(words []string) (string, bool) {
 		case strings.HasPrefix(words[i], methodFlag+"="):
 			methods = append(methods, value)
 		case name == "--url" || name == "--uri" || name == "-u":
-			if !inline && i+1 < len(words) {
+			switch {
+			case inline:
+				address, urlFlag = value, name
+			case i+1 == len(words):
+				// No value at all: the guide's prose ends a code span at `--url`.
+				address, urlFlag = "", name
+			case looksLikeAddress(words[i+1]) || i+2 == len(words):
+				// The value is the next word: an address, or a word the check
+				// cannot tell from prose that ends the sequence, which the
+				// endpoint check then refuses unless it is the management
+				// endpoint's.
 				i++
-				value = words[i]
-			}
 
-			address, urlFlag = value, name
+				address, urlFlag = words[i], name
+			default:
+				// The next word is prose and the sequence goes on after it: the
+				// guide's sentence continues after a code span that ended at
+				// `--url`, and no address is given. A write that gives none is
+				// held to its method alone.
+				address, urlFlag = "", name
+			}
 		case isMethodAbbreviation(words[i]):
 			return azREST + " " + words[i], false
 		}
@@ -319,6 +406,15 @@ func azRestReads(words []string) (string, bool) {
 	}
 
 	return held, false
+}
+
+// looksLikeAddress reports whether a word can be the address `az rest --url` is
+// given: a scheme, a `$` substitution or a path, rather than the prose the guide's
+// sentence puts after a code span that ends at `--url`.
+func looksLikeAddress(word string) bool {
+	return strings.HasPrefix(word, "http://") || strings.HasPrefix(word, "https://") ||
+		strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/") ||
+		strings.ContainsAny(word, "./")
 }
 
 // isMethodAbbreviation reports whether a word spells the method flag in a shape az
@@ -378,97 +474,40 @@ func (c cloudCLI) readPrefix(commandPath []string) (string, bool) {
 	return longest, longest != ""
 }
 
-// cloudCommand is one invocation of a cloud CLI in a text: the CLI, the words it
-// is given, where it was found, and the line of that text its CLI's name is on.
-type cloudCommand struct {
-	// cli is the CLI's name: "aws", "az" or "gcloud".
-	cli string
-	// words are the words of the invocation, the CLI's own name left out.
-	words []string
-	// where names the file and the place in it the invocation was found.
-	where string
-	// line is the 1-based line of the text the CLI's name is on, in the file:
-	// unplacedCLINames credits each of a line's invocations to that line.
-	line int
-}
-
-// String renders the invocation as the guide writes it.
-func (c cloudCommand) String() string {
-	return strings.TrimSpace(c.cli + " " + strings.Join(c.words, " "))
-}
-
-// write is one cloud CLI invocation the read-only check refuses: where it was
-// found, the command itself, and the words the check held to the read commands.
-type write struct {
-	where   string
-	cli     string
-	command string
-	path    string
-}
-
-// String renders the write with where the read commands it should have used come
-// from, for a failure message.
-func (w write) String() string {
-	cli, known := cloudCLIByName(w.cli)
-	if !known {
-		return fmt.Sprintf("%s: %s names the CLI %q, which this check does not know, so it cannot say it reads (CLAUDE.md rule 1)",
-			w.where, w.command, w.cli)
-	}
-
-	return fmt.Sprintf("%s: %s is no read command: %q is neither one of the %d command paths cloudCLIs lists for %s, nor a flag it reads with (CLAUDE.md rule 1, the guide may only read): %s",
-		w.where, w.command, w.path, len(cli.readCommands), cli.name, cli.reference)
-}
-
 // TestInventoryGuideCommandsAreReadOnly holds every `aws`, `az` and `gcloud`
 // command of the inventory guide, and of the programs it ships, to its CLI's read
 // commands (issue #716, CLAUDE.md rule 1). The floors below are what keeps the
-// check from passing over an extraction that found nothing: each CLI's commands
-// are in the guide today, and a parser that quietly lost them fails here.
+// check from passing over a scan that found nothing: each CLI's commands are in the
+// guide today, and a splitter that quietly lost them fails here.
 func TestInventoryGuideCommandsAreReadOnly(t *testing.T) {
 	t.Parallel()
 
-	guide := string(readRepositoryFile(t, inventoryGuidePath))
-
-	commands, problems := guideTextFindings(guide)
-	for _, problem := range problems {
+	guide := scanText(inventoryGuidePath, string(readRepositoryFile(t, inventoryGuidePath)))
+	for _, problem := range guide.problems {
 		t.Error(problem)
 	}
 
 	programs := shippedPrograms(t)
 
-	for _, program := range programs {
-		commands = append(commands, program.commands...)
-	}
-
-	// The guide holds 36 aws, 21 az and 25 gcloud invocations today, and the
-	// programs' comments name 10 az (azure.jq's header table) and 1 gcloud
-	// (gcp.jq's first paragraph); aws.jq's header names the operations without the
-	// CLI's name, so it adds none. The check therefore holds 36 aws, 31 az and 26
-	// gcloud invocations. They include the one aws command the guide has twice:
-	// `ec2 describe-instance-types`, which it splits by `xargs -n 100` and
-	// `xargs -n 1`. The floors are below those counts, so the guide may lose a
-	// command without failing here, while an extraction that broke fails at once.
-	floors := []struct {
+	// The guide's text holds 36 aws, 21 az and 25 gcloud field sequences that read
+	// today, and the programs' comments add 13 az (azure.jq's header table and its
+	// prose) and 1 gcloud (gcp.jq's first paragraph); aws.jq's comments name the
+	// operations without the CLI's name, so they add none. The floors are below those
+	// counts, so the guide may lose a command without failing here, while a splitter
+	// that broke fails at once.
+	guideFloors := []struct {
 		cli     string
 		atLeast int
 	}{
 		{cli: "aws", atLeast: 33},
-		{cli: "az", atLeast: 28},
+		{cli: "az", atLeast: 19},
 		{cli: "gcloud", atLeast: 23},
 	}
 
-	for _, floor := range floors {
-		found := 0
-
-		for _, command := range commands {
-			if command.cli == floor.cli {
-				found++
-			}
-		}
-
-		if found < floor.atLeast {
-			t.Errorf("%s holds %d %s invocations, want at least %d, so this check read something: the extraction reads the guide's shell blocks, its prose and its programs, and a parser that finds nothing would pass every check below over an empty list",
-				inventoryGuidePath, found, floor.cli, floor.atLeast)
+	for _, floor := range guideFloors {
+		if guide.accepted[floor.cli] < floor.atLeast {
+			t.Errorf("%s holds %d %s reads, want at least %d, so this check read something: the field scan reads every line of the guide, and a splitter that finds nothing would pass every check over an empty list",
+				inventoryGuidePath, guide.accepted[floor.cli], floor.cli, floor.atLeast)
 		}
 	}
 
@@ -480,7 +519,7 @@ func TestInventoryGuideCommandsAreReadOnly(t *testing.T) {
 		atLeast int
 	}{
 		{program: guideProgramsDirectory + "aws.jq", atLeast: 0},
-		{program: guideProgramsDirectory + "azure.jq", atLeast: 8},
+		{program: guideProgramsDirectory + "azure.jq", atLeast: 11},
 		{program: guideProgramsDirectory + "gcp.jq", atLeast: 1},
 	}
 
@@ -489,7 +528,7 @@ func TestInventoryGuideCommandsAreReadOnly(t *testing.T) {
 
 		for _, program := range programs {
 			if program.path == floor.program {
-				found = len(program.commands)
+				found = totalReads(program.scan.accepted)
 			}
 		}
 
@@ -500,40 +539,39 @@ func TestInventoryGuideCommandsAreReadOnly(t *testing.T) {
 		}
 
 		if found < floor.atLeast {
-			t.Errorf("%s's comments name %d cloud CLI invocations, want at least %d: the extraction reads a comment line that holds a CLI name anywhere, and one that stopped reading them would pass every check below",
+			t.Errorf("%s holds %d reads, want at least %d: a program the guide ships names commands too, and a scan that stopped reading them would pass every check over an empty list",
 				floor.program, found, floor.atLeast)
 		}
 	}
+}
 
-	for _, w := range notReadOnly(commands) {
-		t.Error(w.String())
+// totalReads returns how many read sequences a field scan accepted, all CLIs
+// together: the count a program's floor holds.
+func totalReads(accepted map[string]int) int {
+	total := 0
+
+	for _, found := range accepted {
+		total += found
 	}
+
+	return total
 }
 
 // TestReadOnlyCheckFlagsPlantedWrites shows the check bites (issue #716): a write
 // planted into a copy of the guide, in memory, is reported and the rest of the
-// guide is not. Each case plants its command in one of the shapes the extraction
-// must read — a duplicate heading, before the first heading, a ```sh fence, a
-// ~~~bash fence, an inline code span of the prose, a prose line of its own — so a
-// shape the extraction skipped is a case that reports no write. The cases after
-// them plant the shapes the backstop and the flag rules must catch: a command
-// hidden from the extraction, and a read that a flag turns into a write. The last
-// case plants a fence label the check does not know, which must fail the reading
-// rather than hide its block.
+// guide is not. Each case plants its command in a shape the text can take — a
+// fence of a shell language, a ```text or ```json sample, an inline code span, a
+// prose line, a blockquote, an indented block, an HTML block, a heredoc body, a
+// line the text wraps after the CLI's name, a variable that names a denied flag —
+// and names the problem the field scan must report for it: the line, and the
+// command it read there. The case of a variable that holds the CLI's name plants
+// what the scan does see of that residual — the assignment's value on the same line
+// — while a variable set on another line stays the escape the header names.
 func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 	t.Parallel()
 
 	guide := string(readRepositoryFile(t, inventoryGuidePath))
 
-	const (
-		// A planted block lands in the guide's last section, which is this one.
-		lastSection      = "Validate the result"
-		lastSectionWhere = inventoryGuidePath + `, section "` + lastSection + `"`
-		// A block above the guide's first heading has no section.
-		beforeTheFirstHeadingWhere = inventoryGuidePath + ", before the first heading"
-	)
-
-	// The aws write every shape of fence and prose plants.
 	const awsWrite = "aws ec2 create-tags --resources i-0123456789abcdef0 --tags Key=Name,Value=shop-web"
 
 	fence := func(open, close, command string) string {
@@ -541,438 +579,310 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 	}
 
 	// plantedLine is the line the text appended below starts on, and appended
-	// returns the guide with lines of text of its own after its last section.
+	// returns the guide with lines of text of its own after it.
 	plantedLine := len(strings.Split(guide, "\n")) + 2
 
 	appended := func(lines ...string) string {
 		return guide + "\n\n" + strings.Join(lines, "\n") + "\n"
 	}
 
-	// at names the backstop's problem for a line: the check that does not depend on
-	// the Markdown or the shell reading names the line and the CLI it cannot place.
-	at := func(line int, cli string) string {
-		return fmt.Sprintf("line %d names the CLI %q", line, cli)
+	// at names a problem by the file line it reports and a substring it must hold:
+	// the command the scan read there.
+	at := func(line int, holds string) string {
+		return fmt.Sprintf(":%d: %s", line, holds)
 	}
 
 	tests := []struct {
 		name string
 		// mutated is the guide with the case's plant.
 		mutated string
-		// want is the reading's whole set of writes.
-		want []write
-		// wantProblems are the substrings the reading must report among its
-		// problems: a plant the reading itself must refuse.
-		wantProblems []string
+		// want are the substrings of the problems the scan must report, one per
+		// problem.
+		want []string
 	}{{
 		name:    "a planted aws write",
-		mutated: fence("```bash", "```", "aws ec2 create-tags --resources i-0123456789abcdef0 --tags Key=Name,Value=shop-web"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		mutated: fence("```bash", "```", awsWrite),
+		want:    []string{at(plantedLine+1, "aws ec2 create-tags")},
 	}, {
 		name:    "a planted az write",
 		mutated: fence("```bash", "```", "az group delete --name shop-web --yes"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az group delete --name shop-web --yes",
-			path:    "group delete",
-		}},
+		want:    []string{at(plantedLine+1, "az group delete")},
 	}, {
 		name:    "a planted gcloud write",
 		mutated: fence("```bash", "```", "gcloud compute instances delete shop-web --zone=europe-west1-b --quiet"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "gcloud",
-			command: "gcloud compute instances delete shop-web --zone=europe-west1-b --quiet",
-			path:    "compute instances delete shop-web",
-		}},
+		want:    []string{at(plantedLine+1, "gcloud compute instances delete")},
 	}, {
 		name:    "a planted az rest that is no GET",
 		mutated: fence("```bash", "```", "az rest --method post --url https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/shop-web"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az rest --method post --url https://management.azure.com/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/shop-web",
-			path:    "rest --method post",
-		}},
+		want:    []string{at(plantedLine+1, "az rest --method")},
 	}, {
 		name:    "a planted az rest that passes two methods",
 		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --method post"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az rest --method get --url https://management.azure.com/x --method post",
-			path:    "rest --method get post",
-		}},
+		want:    []string{at(plantedLine+1, "az rest --method")},
 	}, {
 		name:    "a write under a duplicate heading",
-		mutated: guide + "\n\n## " + lastSection + "\n\n```bash\n" + awsWrite + "\n```\n",
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		mutated: guide + "\n\n## Validate the result\n\n```bash\n" + awsWrite + "\n```\n",
+		want:    []string{at(plantedLine+3, "aws ec2 create-tags")},
 	}, {
 		name:    "a write before the first heading",
 		mutated: "```bash\n" + awsWrite + "\n```\n\n" + guide,
-		want: []write{{
-			where:   beforeTheFirstHeadingWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		want:    []string{at(2, "aws ec2 create-tags")},
 	}, {
 		name:    "a write in a sh fence",
 		mutated: fence("```sh", "```", awsWrite),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		want:    []string{at(plantedLine+1, "aws ec2 create-tags")},
 	}, {
 		name:    "a write in a tilde fence",
 		mutated: fence("~~~bash", "~~~", awsWrite),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		want:    []string{at(plantedLine+1, "aws ec2 create-tags")},
 	}, {
 		name:    "a write in an inline code span",
-		mutated: guide + "\n\nTag the instance by hand: `" + awsWrite + "`.\n",
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		mutated: appended("Tag the instance by hand: `" + awsWrite + "`."),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
 		name:    "a write in a prose line",
-		mutated: guide + "\n\n" + awsWrite + "\n",
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		mutated: appended(awsWrite),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
 		name:    "a gcloud positional argument that ends in a read word",
 		mutated: fence("```bash", "```", "gcloud compute instances delete list"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "gcloud",
-			command: "gcloud compute instances delete list",
-			path:    "compute instances delete list",
-		}},
+		want:    []string{at(plantedLine+1, "gcloud compute instances delete list")},
 	}, {
 		name:    "an az positional argument that ends in a read word",
 		mutated: fence("```bash", "```", "az vm delete show --name shop-web"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az vm delete show --name shop-web",
-			path:    "vm delete show",
-		}},
+		want:    []string{at(plantedLine+1, "az vm delete show")},
 	}, {
 		name:    "an aws read that returns a secret",
 		mutated: fence("```bash", "```", "aws secretsmanager get-secret-value --secret-id shop-db"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: "aws secretsmanager get-secret-value --secret-id shop-db",
-			path:    "secretsmanager get-secret-value",
-		}},
+		want:    []string{at(plantedLine+1, "aws secretsmanager get-secret-value")},
 	}, {
-		// The plants below are for the backstop: a CLI name the Markdown and shell
-		// reading cannot place fails the check wherever it sits, so no shape of the
-		// guide can hide a write behind one the extraction skipped.
-		name:         "a write in a bash -c argument",
-		mutated:      appended(`bash -c 'aws --region eu-west-1 ec2 create-tags --resources i-0123456789abcdef0'`),
-		wantProblems: []string{at(plantedLine, "aws")},
+		// A CLI's name wherever it stands: a quoted argument, a heredoc body, an
+		// indented or blockquoted line, an HTML block, a code span over two lines,
+		// a sample in a fence of any language.
+		name:    "a write in a bash -c argument",
+		mutated: appended(`bash -c 'aws --region eu-west-1 ec2 create-tags --resources i-0123456789abcdef0'`),
+		want:    []string{at(plantedLine, "aws --region eu-west-1 ec2 create-tags")},
 	}, {
-		name:         "a write in a bash -c argument a path names",
-		mutated:      appended(`bash -c '/usr/local/bin/aws ec2 create-tags --resources i-0123456789abcdef0'`),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in a bash -c argument a path names",
+		mutated: appended(`bash -c '/usr/local/bin/aws ec2 create-tags --resources i-0123456789abcdef0'`),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a bash -c argument after two spaces",
-		mutated:      appended(`bash -c 'aws  ec2 create-tags --resources i-0123456789abcdef0'`),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in a bash -c argument after two spaces",
+		mutated: appended(`bash -c 'aws  ec2 create-tags --resources i-0123456789abcdef0'`),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a bash -c argument after a tab",
-		mutated:      appended("bash -c 'aws\tec2 create-tags --resources i-0123456789abcdef0'"),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in a bash -c argument after a tab",
+		mutated: appended("bash -c 'aws\tec2 create-tags --resources i-0123456789abcdef0'"),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a bash -c argument that quotes its command group",
-		mutated:      appended(`bash -c 'aws "ec2" create-tags --resources i-0123456789abcdef0'`),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in a bash -c argument that quotes its command group",
+		mutated: appended(`bash -c 'aws "ec2" create-tags --resources i-0123456789abcdef0'`),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in the body of a bash heredoc",
-		mutated:      appended("```bash", "bash <<'EOF'", awsWrite, "EOF", "```"),
-		wantProblems: []string{at(plantedLine+2, "aws")},
+		name:    "a write in the body of a bash heredoc",
+		mutated: appended("```bash", "bash <<'EOF'", awsWrite, "EOF", "```"),
+		want:    []string{at(plantedLine+2, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in the body of a heredoc piped to sh",
-		mutated:      appended("```bash", "cat <<EOF | sh", awsWrite, "EOF", "```"),
-		wantProblems: []string{at(plantedLine+2, "aws")},
+		name:    "a write in the body of a heredoc piped to sh",
+		mutated: appended("```bash", "cat <<EOF | sh", awsWrite, "EOF", "```"),
+		want:    []string{at(plantedLine+2, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a blockquoted fence",
-		mutated:      appended("> ```bash", "> "+awsWrite, "> ```"),
-		wantProblems: []string{at(plantedLine+1, "aws")},
+		name:    "a write in a blockquoted fence",
+		mutated: appended("> ```bash", "> "+awsWrite, "> ```"),
+		want:    []string{at(plantedLine+1, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in an indented block behind sudo",
-		mutated:      appended("    sudo " + awsWrite),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in an indented block behind sudo",
+		mutated: appended("    sudo " + awsWrite),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in an indented block behind an environment assignment",
-		mutated:      appended("    AWS_PROFILE=shop " + awsWrite),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in an indented block behind an environment assignment",
+		mutated: appended("    AWS_PROFILE=shop " + awsWrite),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in an HTML block",
-		mutated:      appended("<pre><code>" + awsWrite + "</code></pre>"),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in an HTML block",
+		mutated: appended("<pre><code>" + awsWrite + "</code></pre>"),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a text fence",
-		mutated:      appended("```text", awsWrite, "```"),
-		wantProblems: []string{at(plantedLine+1, "aws")},
+		name:    "a write in a text fence",
+		mutated: appended("```text", awsWrite, "```"),
+		want:    []string{at(plantedLine+1, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a json fence",
-		mutated:      appended("```json", awsWrite, "```"),
-		wantProblems: []string{at(plantedLine+1, "aws")},
+		name:    "a write in a json fence",
+		mutated: appended("```json", awsWrite, "```"),
+		want:    []string{at(plantedLine+1, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a code span of two backticks",
-		mutated:      appended("Tag it by hand: ``" + awsWrite + "``."),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in a code span of two backticks",
+		mutated: appended("Tag it by hand: ``" + awsWrite + "``."),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a code span that spans two lines",
-		mutated:      appended("Tag it by hand: `aws ec2 create-tags --resources", "  i-0123456789abcdef0`."),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in a code span that spans two lines",
+		mutated: appended("Tag it by hand: `aws ec2 create-tags --resources", "  i-0123456789abcdef0`."),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
-		name:         "a write in a code span of a heading",
-		mutated:      appended("## Tag it with `" + awsWrite + "`"),
-		wantProblems: []string{at(plantedLine, "aws")},
+		name:    "a write in a code span of a heading",
+		mutated: appended("## Tag it with `" + awsWrite + "`"),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
 		// CommonMark: a fence opens with at most three spaces of indent, and a
 		// backtick fence's info string holds no backtick, so neither line opens a
 		// fence that could swallow the block of commands after it.
 		name:    "a fence indented four spaces swallows no write",
 		mutated: appended("    ```text", "```bash", awsWrite, "```"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		want:    []string{at(plantedLine+2, "aws ec2 create-tags")},
 	}, {
 		name:    "a fence whose info string holds a backtick swallows no write",
 		mutated: appended("```text `x`", "```bash", awsWrite, "```"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: awsWrite,
-			path:    "ec2 create-tags",
-		}},
+		want:    []string{at(plantedLine+2, "aws ec2 create-tags")},
+	}, {
+		// A command the text wraps after the CLI's name: the name is the line's
+		// last field, and the words that make it a write are on the next line.
+		name:    "a write a code span wraps after the CLI's name",
+		mutated: appended("Tag it by hand with `aws", "ec2 create-tags --resources i-0123456789abcdef0`."),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
+	}, {
+		name:    "a write prose wraps after the CLI's name",
+		mutated: appended("Tag it by hand: aws", "ec2 create-tags --resources i-0123456789abcdef0"),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
+	}, {
+		name:    "a write a text fence wraps after the CLI's name",
+		mutated: appended("```text", `aws \`, " ec2 create-tags --resources i-0123456789abcdef0", "```"),
+		want:    []string{at(plantedLine+1, "aws ec2 create-tags")},
+	}, {
+		name:    "a write a heredoc wraps after the CLI's name",
+		mutated: appended("```bash", "cat <<EOF | sh", `aws \`, " ec2 create-tags --resources i-0123456789abcdef0", "EOF", "```"),
+		want:    []string{at(plantedLine+2, "aws ec2 create-tags")},
+	}, {
+		// A read and a write on one line: the read's words pay for no write.
+		name:    "a write before a read on one line",
+		mutated: appended(`bash -c 'aws ec2 create-tags --resources i-0123456789abcdef0' && aws ec2 describe-instances`),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
+	}, {
+		name:    "a write in an eval argument",
+		mutated: appended(`eval "aws ec2 create-tags --resources i-0123456789abcdef0"`),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
+	}, {
+		name:    "a write an xargs argument runs",
+		mutated: appended(`xargs -r sh -c 'aws ec2 create-tags --resources i-0123456789abcdef0'`),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
+	}, {
+		// A shell variable names what a denied flag names: the read passes no such
+		// flag, but the CLI reads the variable in its place.
+		name:    "a read whose endpoint a variable names",
+		mutated: appended("AWS_ENDPOINT_URL=https://example.com aws ec2 describe-instances"),
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL=https://example.com")},
+	}, {
+		name:    "a read whose certificate bundle a variable names",
+		mutated: appended("AWS_CA_BUNDLE=./ca.pem aws ec2 describe-instances"),
+		want:    []string{at(plantedLine, "AWS_CA_BUNDLE=./ca.pem")},
+	}, {
+		name:    "a read whose impersonation a variable names",
+		mutated: appended("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com gcloud compute instances list"),
+		want:    []string{at(plantedLine, "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com")},
+	}, {
+		name:    "a variable after the read it changes",
+		mutated: appended("aws ec2 describe-instances AWS_ENDPOINT_URL=https://example.com"),
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL=https://example.com")},
 	}, {
 		// az rest: one GET is what decides, and an address, a resource, a body or a
 		// method the check would not read hide a write in a read's clothes.
 		name:    "an az rest that addresses another API",
 		mutated: fence("```bash", "```", "az rest --method get --url https://example.com/x"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az rest --method get --url https://example.com/x",
-			path:    "rest --url https://example.com/x",
-		}},
+		want:    []string{at(plantedLine+1, "az rest")},
 	}, {
 		name:    "an az rest that passes a resource",
 		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --resource https://graph.microsoft.com"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az rest --method get --url https://management.azure.com/x --resource https://graph.microsoft.com",
-			path:    "rest --resource",
-		}},
+		want:    []string{at(plantedLine+1, "az rest")},
 	}, {
 		name:    "an az rest whose method is written as a short flag with its value",
 		mutated: fence("```bash", "```", "az rest -mpost --url https://management.azure.com/x"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az rest -mpost --url https://management.azure.com/x",
-			path:    "rest -mpost",
-		}},
+		want:    []string{at(plantedLine+1, "az rest -mpost")},
 	}, {
 		name:    "an az rest whose method flag is truncated",
 		mutated: fence("```bash", "```", "az rest --meth put --url https://management.azure.com/x"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "az",
-			command: "az rest --meth put --url https://management.azure.com/x",
-			path:    "rest --meth",
-		}},
+		want:    []string{at(plantedLine+1, "az rest --meth")},
 	}, {
-		// A read that points the CLI somewhere else or turns its checks off writes
-		// to a cloud even where its command path reads.
+		// A read that points the CLI somewhere else, feeds it input of the
+		// caller's choosing or turns its checks off writes to a cloud even where
+		// its command path reads — in full or as the prefix the parser completes.
 		name:    "an aws read that names another endpoint",
 		mutated: fence("```bash", "```", "aws ec2 describe-instances --endpoint-url https://example.com"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: "aws ec2 describe-instances --endpoint-url https://example.com",
-			path:    "ec2 describe-instances --endpoint-url",
-		}},
+		want:    []string{at(plantedLine+1, "aws ec2 describe-instances --endpoint-url")},
+	}, {
+		name:    "an aws read whose endpoint flag is truncated",
+		mutated: fence("```bash", "```", "aws ec2 describe-instances --endpoint https://example.com"),
+		want:    []string{at(plantedLine+1, "aws ec2 describe-instances --endpoint")},
 	}, {
 		name:    "an aws read that skips certificate verification",
 		mutated: fence("```bash", "```", "aws ec2 describe-instances --no-verify-ssl"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: "aws ec2 describe-instances --no-verify-ssl",
-			path:    "ec2 describe-instances --no-verify-ssl",
-		}},
+		want:    []string{at(plantedLine+1, "aws ec2 describe-instances --no-verify-ssl")},
 	}, {
 		name:    "an aws read that trusts another certificate bundle",
 		mutated: fence("```bash", "```", "aws ec2 describe-instances --ca-bundle ./ca.pem"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "aws",
-			command: "aws ec2 describe-instances --ca-bundle ./ca.pem",
-			path:    "ec2 describe-instances --ca-bundle",
-		}},
+		want:    []string{at(plantedLine+1, "aws ec2 describe-instances --ca-bundle")},
 	}, {
 		name:    "a gcloud read that impersonates a service account",
 		mutated: fence("```bash", "```", "gcloud compute instances list --impersonate-service-account sa@example-project.iam.gserviceaccount.com"),
-		want: []write{{
-			where:   lastSectionWhere,
-			cli:     "gcloud",
-			command: "gcloud compute instances list --impersonate-service-account sa@example-project.iam.gserviceaccount.com",
-			path:    "compute instances list --impersonate-service-account",
-		}},
+		want:    []string{at(plantedLine+1, "gcloud compute instances list --impersonate-service-account")},
 	}, {
-		name:         "a CLI a variable names",
-		mutated:      fence("```bash", "```", `cli=aws; "$cli" ec2 create-tags --resources i-0123456789abcdef0`),
-		wantProblems: []string{`"$cli"`},
+		name:    "a gcloud read whose impersonation flag is truncated",
+		mutated: fence("```bash", "```", "gcloud compute instances list --impersonate sa@example-project.iam.gserviceaccount.com"),
+		want:    []string{at(plantedLine+1, "gcloud compute instances list --impersonate")},
 	}, {
-		// A command the guide wraps after the CLI's name: the name is the line's
-		// last field, and the words that make it a write are on the next line.
-		name:         "a write a code span wraps after the CLI's name",
-		mutated:      appended("Tag it by hand with `aws", "ec2 create-tags --resources i-0123456789abcdef0`."),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
+		name:    "an az rest whose resource flag is truncated",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --resou https://graph.microsoft.com"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://management.azure.com/x --resou")},
 	}, {
-		name:         "a write prose wraps after the CLI's name",
-		mutated:      appended("Tag it by hand: aws", "ec2 create-tags --resources i-0123456789abcdef0"),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
+		name:    "an az rest whose headers flag is truncated",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --head x=y"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://management.azure.com/x --head")},
 	}, {
-		name:         "a write a text fence wraps after the CLI's name",
-		mutated:      appended("```text", `aws \`, " ec2 create-tags --resources i-0123456789abcdef0", "```"),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine+1)},
+		name:    "an az rest whose body flag is truncated",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --bod {}"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://management.azure.com/x --bod")},
 	}, {
-		name:         "a write a heredoc wraps after the CLI's name",
-		mutated:      appended("```bash", "cat <<EOF | sh", `aws \`, " ec2 create-tags --resources i-0123456789abcdef0", "EOF", "```"),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine+2)},
+		// A variable that holds the CLI's name, the residual: the scan sees the
+		// assignment's value on this line, and nothing on a line of its own.
+		name:    "a CLI a variable names",
+		mutated: fence("```bash", "```", `cli=aws; "$cli" ec2 create-tags --resources i-0123456789abcdef0`),
+		want:    []string{at(plantedLine+1, "aws cli ec2 create-tags")},
 	}, {
-		// A read and a write on one line: the read's words must not pay for the
-		// write, wherever either stands.
-		name:         "a write before a read on one line",
-		mutated:      appended(`bash -c 'aws ec2 create-tags --resources i-0123456789abcdef0' && aws ec2 describe-instances`),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
-	}, {
-		name:         "a write in an eval argument",
-		mutated:      appended(`eval "aws ec2 create-tags --resources i-0123456789abcdef0"`),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
-	}, {
-		name:         "a write an xargs argument runs",
-		mutated:      appended(`xargs -r sh -c 'aws ec2 create-tags --resources i-0123456789abcdef0'`),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 create-tags", plantedLine)},
-	}, {
-		// A shell variable names what a denied flag names: the read passes no such
-		// flag, but the CLI reads the variable in its place.
-		name:         "a read whose endpoint a variable names",
-		mutated:      appended("AWS_ENDPOINT_URL=https://example.com aws ec2 describe-instances"),
-		wantProblems: []string{fmt.Sprintf(":%d: AWS_ENDPOINT_URL=", plantedLine)},
-	}, {
-		name:         "a read whose certificate bundle a variable names",
-		mutated:      appended("AWS_CA_BUNDLE=./ca.pem aws ec2 describe-instances"),
-		wantProblems: []string{fmt.Sprintf(":%d: AWS_CA_BUNDLE=", plantedLine)},
-	}, {
-		name:         "a read whose impersonation a variable names",
-		mutated:      appended("CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com gcloud compute instances list"),
-		wantProblems: []string{fmt.Sprintf(":%d: CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=", plantedLine)},
-	}, {
-		name:         "a variable after the read it changes",
-		mutated:      appended("aws ec2 describe-instances AWS_ENDPOINT_URL=https://example.com"),
-		wantProblems: []string{fmt.Sprintf(":%d: AWS_ENDPOINT_URL=", plantedLine)},
-	}, {
-		// A denied flag spelt as the prefix az's and the CLIs' parsers complete.
-		name:         "an az rest whose resource flag is truncated",
-		mutated:      fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --resou https://graph.microsoft.com"),
-		wantProblems: []string{fmt.Sprintf(":%d: az rest", plantedLine+1), "--resou"},
-	}, {
-		name:         "an az rest whose headers flag is truncated",
-		mutated:      fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --head x=y"),
-		wantProblems: []string{fmt.Sprintf(":%d: az rest", plantedLine+1), "--head"},
-	}, {
-		name:         "an az rest whose body flag is truncated",
-		mutated:      fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --bod {}"),
-		wantProblems: []string{fmt.Sprintf(":%d: az rest", plantedLine+1), "--bod"},
-	}, {
-		name:         "an aws read whose endpoint flag is truncated",
-		mutated:      fence("```bash", "```", "aws ec2 describe-instances --endpoint https://example.com"),
-		wantProblems: []string{fmt.Sprintf(":%d: aws ec2 describe-instances", plantedLine+1), "--endpoint"},
-	}, {
-		name:         "a gcloud read whose impersonation flag is truncated",
-		mutated:      fence("```bash", "```", "gcloud compute instances list --impersonate sa@example-project.iam.gserviceaccount.com"),
-		wantProblems: []string{fmt.Sprintf(":%d: gcloud compute instances list", plantedLine+1), "--impersonate"},
-	}, {
-		name:         "a fence label the check does not know",
-		mutated:      fence("```powershell", "```", "Get-EC2Instance -Region eu-central-1"),
-		wantProblems: []string{`"powershell"`},
+		name:    "a fence label the check does not know",
+		mutated: fence("```powershell", "```", "Get-EC2Instance -Region eu-central-1"),
+		want:    []string{fmt.Sprintf(":%d: the fence is labelled %q", plantedLine, "powershell")},
 	}}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			commands, problems := guideTextFindings(tc.mutated)
+			scan := scanText(inventoryGuidePath, tc.mutated)
 
-			var gotProblems []string
+			if len(scan.problems) != len(tc.want) {
+				t.Errorf("the field scan of the guide with %s reports %d problems, want %d: %v",
+					tc.name, len(scan.problems), len(tc.want), scan.problems)
+			}
 
-			for _, want := range tc.wantProblems {
-				for _, problem := range problems {
-					if strings.Contains(problem, want) {
-						gotProblems = append(gotProblems, want)
-
-						break
-					}
+			for _, want := range tc.want {
+				if !slices.ContainsFunc(scan.problems, func(problem string) bool {
+					return strings.Contains(problem, want)
+				}) {
+					t.Errorf("the scan of the guide with %s reports no problem that holds %q: %v",
+						tc.name, want, scan.problems)
 				}
-			}
-
-			if diff := cmp.Diff(tc.wantProblems, gotProblems); diff != "" {
-				t.Errorf("the reading of the guide with %s reports problems other than the ones it must (-want +got):\n%s\nproblems: %v",
-					tc.name, diff, problems)
-			}
-
-			if diff := cmp.Diff(tc.want, notReadOnly(commands), cmp.AllowUnexported(write{})); diff != "" {
-				t.Errorf("the read-only check over the guide with %s differs from the writes it holds (-want +got):\n%s",
-					tc.name, diff)
 			}
 		})
 	}
 }
 
 // TestCloudReadDecisions pins the decision each CLI's read commands decide: the
-// words the check holds an invocation to and whether it reads. The lists
-// themselves are cloudCLIs, the one place a read command is written down, so a new
-// guide command is a single edit there. The cases around a read are the ones the
-// lists must refuse: a positional argument that ends in a read word, a read that
-// returns a secret, a flag that points the CLI elsewhere, and `az rest` with one
-// method, with GET, with two, with an abbreviated method flag and with an address
-// beyond the management endpoint.
+// words the check holds a sequence to and whether it reads. The lists themselves
+// are cloudCLIs, the one place a read command is written down, so a new guide
+// command is a single edit there. The cases around a read are the ones the lists
+// must refuse: a positional argument that ends in a read word, a read that returns
+// a secret, a flag that points the CLI elsewhere, a flag spelt as the prefix the
+// parser completes, `az rest` with one method, with GET, with two, with an
+// abbreviated method flag and with an address beyond the management endpoint, and a
+// global flag before the command path, which is no read on purpose.
 func TestCloudReadDecisions(t *testing.T) {
 	t.Parallel()
 
@@ -1007,6 +917,8 @@ func TestCloudReadDecisions(t *testing.T) {
 		{cli: "az", words: []string{"rest", "--method", "get", "-u", "https://management.azure.com/x"}, verb: "rest --method get", read: true},
 		{cli: "az", words: []string{"rest", "--method", "get"}, verb: "rest --method get", read: true},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url"}, verb: "rest --method get", read: true},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "as", "well."}, verb: "rest --method get", read: true},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "evil"}, verb: "rest --url evil"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://example.com/x"}, verb: "rest --url https://example.com/x"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--uri", "https://example.com/x"}, verb: "rest --uri https://example.com/x"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--resource", "https://graph.microsoft.com"}, verb: "rest --resource"},
@@ -1066,258 +978,108 @@ func TestCloudReadDecisions(t *testing.T) {
 	}
 }
 
-// TestCloudInvocationsFindEveryShape pins what the extraction finds (issue #716):
-// an invocation after a pipe or xargs, inside `$(...)`, after `&&`, in a line
-// joined by a line continuation, and in a quoted argument that spans lines, so a
-// write in any of those shapes reaches the check. It pins the lines the invocations
-// name — the backstop credits an invocation to the line its CLI's name is on — the
-// shapes the check must refuse to read, and the two places shell text holds a
-// program's name that are no command position: a redirect's target, and a word
-// behind a path.
-func TestCloudInvocationsFindEveryShape(t *testing.T) {
-	t.Parallel()
-
-	const where = "a command block"
-
-	tests := []struct {
-		name string
-		text string
-		want []cloudCommand
-		// wantProblem is the substring of the problem the reading must report,
-		// or "" for a text it reads.
-		wantProblem string
-	}{{
-		name: "a command in a list piped to xargs",
-		text: "jq -r '.DomainNames[].DomainName' \"$out/opensearch-domain-names.json\" |\n" +
-			"  xargs -r -n 5 aws opensearch describe-domains --output json --domain-names\n",
-		want: []cloudCommand{{cli: "aws", words: []string{"opensearch", "describe-domains", "--output", "json", "--domain-names"}, where: where, line: 2}},
-	}, {
-		name: "a command substitution inside a quoted word",
-		text: `subscription="$(az account show --query id --output tsv)"`,
-		want: []cloudCommand{{cli: "az", words: []string{"account", "show", "--query", "id", "--output", "tsv"}, where: where, line: 1}},
-	}, {
-		name: "a command in a backtick substitution inside a quoted word",
-		text: "volumes=\"`aws ec2 create-tags --resources i-0123456789abcdef0`\"",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "create-tags", "--resources", "i-0123456789abcdef0"}, where: where, line: 1}},
-	}, {
-		name: "a command in a backtick substitution outside quotes",
-		text: "out=`aws ec2 create-tags --resources i-0123456789abcdef0`",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "create-tags", "--resources", "i-0123456789abcdef0"}, where: where, line: 1}},
-	}, {
-		name: "a command reached through its path",
-		text: "/usr/bin/aws ec2 create-tags --resources i-0123456789abcdef0",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "create-tags", "--resources", "i-0123456789abcdef0"}, where: where, line: 1}},
-	}, {
-		name: "a heredoc body that is no command",
-		text: "cat > \"$out/notes.txt\" <<'EOF'\n" +
-			"the zone's name is the visitor domain\n" +
-			"EOF\n" +
-			"aws ec2 create-tags --resources i-0123456789abcdef0\n",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "create-tags", "--resources", "i-0123456789abcdef0"}, where: where, line: 4}},
-	}, {
-		name: "a redirect's target is no program's name",
-		text: "aws ec2 describe-volumes --output json > \"$out/ec2-volumes.json\"",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "describe-volumes", "--output", "json"}, where: where, line: 1}},
-	}, {
-		name:        "a shell text that ends inside a quote",
-		text:        "aws ec2 describe-volumes --query 'Volumes\n",
-		wantProblem: "ends inside a single quote",
-	}, {
-		name:        "a shell text that ends inside a command substitution",
-		text:        `out="$(aws ec2 describe-volumes`,
-		wantProblem: "ends inside a command substitution",
-	}, {
-		name:        "a program's name a variable holds",
-		text:        `cli=aws; "$cli" ec2 create-tags --resources i-0123456789abcdef0`,
-		wantProblem: `"$cli"`,
-	}, {
-		name: "two commands joined by &&",
-		text: "true && gcloud compute instances list --project=example-project && echo done",
-		want: []cloudCommand{{cli: "gcloud", words: []string{"compute", "instances", "list", "--project=example-project"}, where: where, line: 1}},
-	}, {
-		name: "two commands joined by a semicolon",
-		text: "aws ec2 describe-volumes; aws ec2 create-tags --resources i-0123456789abcdef0",
-		want: []cloudCommand{
-			{cli: "aws", words: []string{"ec2", "describe-volumes"}, where: where, line: 1},
-			{cli: "aws", words: []string{"ec2", "create-tags", "--resources", "i-0123456789abcdef0"}, where: where, line: 1},
-		},
-	}, {
-		name: "a command wrapped by a line continuation",
-		text: "aws ec2 describe-snapshots --owner-ids self --output json \\\n" +
-			"  --query '{Snapshots: Snapshots[].{VolumeId: VolumeId}}' > \"$out/ec2-snapshots.json\"",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "describe-snapshots", "--owner-ids", "self", "--output", "json", "--query", "{Snapshots: Snapshots[].{VolumeId: VolumeId}}"}, where: where, line: 1}},
-	}, {
-		name: "a quoted filter that spans lines",
-		text: "aws ec2 describe-volumes --output json --query '{Volumes: Volumes[].{\n" +
-			"  VolumeId: VolumeId, Size: Size}}' \\\n" +
-			"  > \"$out/ec2-volumes.json\"",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "describe-volumes", "--output", "json", "--query", "{Volumes: Volumes[].{\n  VolumeId: VolumeId, Size: Size}}"}, where: where, line: 1}},
-	}, {
-		name: "a double-quoted argument whose braces and pipes are no operator",
-		text: `az graph query --graph-query "Resources | where type =~ 'microsoft.compute/disks'"`,
-		want: []cloudCommand{{cli: "az", words: []string{"graph", "query", "--graph-query", "Resources | where type =~ 'microsoft.compute/disks'"}, where: where, line: 1}},
-	}, {
-		name: "a comment that names a command",
-		text: "# aws ec2 create-tags --resources i-0123456789abcdef0\naws ec2 describe-volumes\n",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "describe-volumes"}, where: where, line: 2}},
-	}}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, problems := invocationsIn(tc.text, true, where, 1)
-
-			joined := strings.Join(problems, "\n")
-
-			switch {
-			case tc.wantProblem == "" && joined != "":
-				t.Errorf("the reading of %q reports %q, want no problem: it reads the shape", tc.text, joined)
-			case tc.wantProblem != "" && !strings.Contains(joined, tc.wantProblem):
-				t.Errorf("the reading of %q reports %q, want a problem that holds %q: a command the check cannot place must not pass",
-					tc.text, joined, tc.wantProblem)
-			}
-
-			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(cloudCommand{})); diff != "" {
-				t.Errorf("the invocations of %q differ from the ones it holds (-want +got):\n%s", tc.text, diff)
-			}
-		})
-	}
+// fieldScan is what one text's field scan found: how many CLI-name fields each
+// CLI's read commands accepted, and a problem for every field sequence they
+// refused. The counts are what the floors hold.
+type fieldScan struct {
+	// accepted counts the CLI-name fields reads accepted, per CLI name.
+	accepted map[string]int
+	// problems are the lines the scan refuses, in the text's order.
+	problems []string
 }
 
-// TestProgramCommentsFindEveryShape pins what a program the guide ships is read
-// for (issue #716): the comments' invocations — a CLI name anywhere in a comment
-// line starts one, so `# then run: aws ec2 create-tags` is the write a line-start
-// rule would miss, while a CLI name that follows a word is the comment's prose —
-// and the backstop over every line of the program, which is what catches a command
-// outside a comment.
-func TestProgramCommentsFindEveryShape(t *testing.T) {
-	t.Parallel()
+// scanText runs the read-only check over every line of a text: the guide's, or a
+// program's. It is the check's one mechanism, and it trusts no Markdown and no
+// shell reading: every line is split into fields wherever it sits.
+func scanText(file, text string) fieldScan {
+	physical := strings.Split(text, "\n")
 
-	const program = "docs/guide/inventory/example.jq"
+	scan := fieldScan{accepted: make(map[string]int)}
+	scan.problems = fenceLabelProblems(file, physical)
 
-	tests := []struct {
-		name string
-		text string
-		want []cloudCommand
-		// wantWrites are the command paths the check refuses among want, nil
-		// for a comment whose commands all read.
-		wantWrites []string
-		// wantProblems are the substrings the backstop must report.
-		wantProblems []string
-	}{{
-		name: "a comment that starts with a command",
-		text: "# aws ec2 describe-instances --output json\n",
-		want: []cloudCommand{{cli: "aws", words: []string{"ec2", "describe-instances", "--output", "json"}, where: program + ", line 1", line: 1}},
-	}, {
-		name:       "a write a comment names after its prose",
-		text:       "# then run: aws ec2 create-tags --resources i-0123456789abcdef0\n",
-		want:       []cloudCommand{{cli: "aws", words: []string{"ec2", "create-tags", "--resources", "i-0123456789abcdef0"}, where: program + ", line 1", line: 1}},
-		wantWrites: []string{"ec2 create-tags"},
-	}, {
-		name: "a command a comment wraps across two lines",
-		text: "#   {\"data\": ...}   az servicebus topic\n#                    subscription list\n",
-		want: []cloudCommand{{cli: "az", words: []string{"servicebus", "topic", "subscription", "list"}, where: program + ", line 1", line: 1}},
-	}, {
-		name: "a command a comment follows with a comma and its prose",
-		text: "# The listing (az graph query, one page) is the list of resources\n",
-		want: []cloudCommand{{cli: "az", words: []string{"graph", "query"}, where: program + ", line 1", line: 1}},
-	}, {
-		name: "prose that names a CLI and no command",
-		text: "# as gcloud writes a string), and never a command\n",
-	}, {
-		name: "a shape line that names an operation without the CLI",
-		text: "#   {\"Buckets\": ...}   s3api list-buckets\n",
-	}, {
-		// azure.jq writes `az vm list-sizes` mid-prose three times today: no
-		// comment command starts there, and the backstop places the words because
-		// they read, so no list has to know the prose's command groups.
-		name: "a read a comment names mid-prose",
-		text: "# looked up in az vm list-sizes), a scale set's instance count\n",
-	}, {
-		name:         "a write a comment buries after a word",
-		text:         "# and then aws ec2 create-tags --resources i-0123456789abcdef0\n",
-		wantProblems: []string{fmt.Sprintf("line 1 names the CLI %q", "aws")},
-	}, {
-		name:         "a write outside a comment",
-		text:         "{\"cmd\": \"bash -c 'aws ec2 create-tags --resources i-0123456789abcdef0'\"}\n",
-		wantProblems: []string{fmt.Sprintf("line 1 names the CLI %q", "aws")},
-	}}
+	lines := joinContinuations(physical)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for at, line := range lines {
+		fields := lineFields(line.text)
 
-			got, problems := programFindings(program, tc.text)
+		for i, field := range fields {
+			name := cliNameField(field)
+			if name == "" {
+				continue
+			}
 
-			var gotProblems []string
+			cli, known := cloudCLIByName(name)
+			if !known {
+				continue
+			}
 
-			for _, want := range tc.wantProblems {
-				for _, problem := range problems {
-					if strings.Contains(problem, want) {
-						gotProblems = append(gotProblems, want)
+			if assignment, flag, found := cli.environmentOverride(line.text); found {
+				scan.problems = append(scan.problems, environmentRefusal(file, line.number, assignment, flag, name, cli))
 
-						break
+				continue
+			}
+
+			words := fields[i+1:]
+
+			// A line ends at its last field, and a line that does takes the next
+			// line's fields as the sequence's continuation: a comment table, a
+			// prose sentence or a fence body wraps a command there.
+			if at+1 < len(lines) && endsWithLastField(line.text, fields) {
+				switch {
+				case len(words) == 0:
+					words = continuationFields(lines[at+1].text)
+				default:
+					if _, read := cli.reads(words); !read {
+						words = append(slices.Clone(words), continuationFields(lines[at+1].text)...)
 					}
 				}
 			}
 
-			if diff := cmp.Diff(tc.wantProblems, gotProblems); diff != "" {
-				t.Errorf("the reading of the program %q reports problems other than the ones it must (-want +got):\n%s\nproblems: %v",
-					tc.text, diff, problems)
+			if len(words) == 0 {
+				// A bare mention: the name stands alone on its line, as the
+				// guide's JSON writes `"source": "aws",`, whose comma ends the
+				// mention rather than the array below it.
+				continue
 			}
 
-			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(cloudCommand{})); diff != "" {
-				t.Errorf("the invocations of the program %q differ from the ones it holds (-want +got):\n%s", tc.text, diff)
+			if slices.Contains(guideBareMentions, path.Base(words[0])) {
+				continue
 			}
 
-			var writes []string
+			held, read := cli.reads(words)
+			if read {
+				scan.accepted[name]++
 
-			for _, w := range notReadOnly(got) {
-				writes = append(writes, w.path)
+				continue
 			}
 
-			if diff := cmp.Diff(tc.wantWrites, writes); diff != "" {
-				t.Errorf("the read-only check over the program %q refuses %v, want %v: a program the guide ships may only read either",
-					tc.text, writes, tc.wantWrites)
-			}
-		})
-	}
-}
-
-// notReadOnly holds every invocation to its CLI's read commands and returns the
-// ones that are no read. An invocation of a CLI the check does not know is one of
-// them: it cannot say it reads.
-func notReadOnly(commands []cloudCommand) []write {
-	var writes []write
-
-	for _, command := range commands {
-		cli, known := cloudCLIByName(command.cli)
-		if !known {
-			writes = append(writes, write{where: command.where, cli: command.cli, command: command.String(), path: command.cli})
-
-			continue
+			scan.problems = append(scan.problems, refusal(file, line.number, name, words, held))
 		}
-
-		commandPath, read := cli.reads(command.words)
-		if read {
-			continue
-		}
-
-		writes = append(writes, write{
-			where:   command.where,
-			cli:     command.cli,
-			command: command.String(),
-			path:    commandPath,
-		})
 	}
 
-	return writes
+	return scan
 }
 
-// subcommandPath returns the words of an invocation that name its command groups
-// and its command, up to its first flag: `az servicebus queue list
-// --namespace-name x` has the path servicebus, queue, list.
+// refusal is the problem a CLI-name field and the fields after it get when they
+// are no read: the file and the line, the command as the scan read it, what the
+// check held it to, and the reference the CLI's read commands come from.
+func refusal(file string, number int, name string, fields []string, held string) string {
+	cli, _ := cloudCLIByName(name)
+
+	return fmt.Sprintf("%s:%d: %s is not a read the guide may name (CLAUDE.md rule 1): cloudCLIs holds it to %q, and of %s the check reads only an exact command path, `az rest` as one GET of the management endpoint, and no denied flag; cloudCLIs lists the read commands of %s, and their reference, at %s",
+		file, number, strings.TrimSpace(name+" "+strings.Join(fields, " ")), held, cli.name, cli.name, cli.reference)
+}
+
+// environmentRefusal is the problem a line that sets a denied variable gets when it
+// names the CLI whose variable it sets: the variable does what the flag does.
+func environmentRefusal(file string, number int, assignment, flag, name string, cli cloudCLI) string {
+	return fmt.Sprintf("%s:%d: %s sets in the environment what %s denies, on a line that names %s, so the line is no read the guide may name (CLAUDE.md rule 1); cloudCLIs lists the read commands of %s, and their reference, at %s",
+		file, number, assignment, flag, name, cli.name, cli.reference)
+}
+
+// subcommandPath returns the words of a sequence that name its command groups and
+// its command, up to its first flag: `az servicebus queue list --namespace-name x`
+// has the path servicebus, queue, list.
 func subcommandPath(words []string) []string {
 	for i, word := range words {
 		if strings.HasPrefix(word, "-") {
@@ -1328,156 +1090,70 @@ func subcommandPath(words []string) []string {
 	return words
 }
 
-// shippedProgram is one program in the guide's programs directory and the cloud
-// CLI invocations its comments name, with the program's path relative to the
-// repository root.
-type shippedProgram struct {
-	path     string
-	commands []cloudCommand
+// logicalLine is one line of a text after the lines a trailing `\` continues have
+// been joined onto it, with the 1-based number of the physical line it starts on.
+type logicalLine struct {
+	number int
+	text   string
 }
 
-// shippedPrograms returns the programs the guide ships, each read from its text. It
-// fails the test for a file beside them that is no `.jq` program: a script added
-// there — a shell helper, for example — holds commands this check must read, so it
-// has to be read here on purpose rather than skipped.
-func shippedPrograms(t *testing.T) []shippedProgram {
-	t.Helper()
+// joinContinuations joins every line a trailing `\` continues onto the line it
+// continues: a denied flag or a second `az rest --method` on a continuation line
+// then stands in the sequence it belongs to.
+func joinContinuations(lines []string) []logicalLine {
+	var joined []logicalLine
 
-	matches, err := filepath.Glob(filepath.Join(theRepositoryRoot(t), filepath.FromSlash(guideProgramsDirectory), "*"))
-	if err != nil {
-		t.Fatalf("glob %s: %v", guideProgramsDirectory, err)
-	}
+	for at := 0; at < len(lines); at++ {
+		line := logicalLine{number: at + 1, text: lines[at]}
 
-	var programs []shippedProgram
+		for endsWithContinuation(line.text) {
+			line.text = strings.TrimSuffix(strings.TrimRight(line.text, " \t"), "\\")
+			at++
 
-	for _, match := range matches {
-		name := filepath.Base(match)
-
-		if filepath.Ext(name) != ".jq" {
-			t.Errorf("%s holds %s, which is no .jq program: a script beside the programs holds cloud CLI commands this check does not read, so extend shippedPrograms to read it", guideProgramsDirectory, name)
-
-			continue
-		}
-
-		programPath := guideProgramsDirectory + name
-		commands, problems := programFindings(programPath, string(readRepositoryFile(t, programPath)))
-
-		for _, problem := range problems {
-			t.Error(problem)
-		}
-
-		programs = append(programs, shippedProgram{path: programPath, commands: commands})
-	}
-
-	return programs
-}
-
-// programFindings returns the cloud CLI invocations a program the guide ships
-// names in its comments, and the problems of the backstop over every line of it: a
-// name the comments' reading cannot place fails the check wherever the program
-// writes it.
-func programFindings(programPath, text string) ([]cloudCommand, []string) {
-	lines := strings.Split(text, "\n")
-	commands := scriptInvocations(programPath, text)
-
-	return commands, unplacedCLINames(programPath, lines, commands)
-}
-
-// guideTextFindings returns the cloud CLI invocations a guide text holds — in its
-// shell blocks, in the inline code spans of its prose and in the prose lines that
-// start with a CLI name — and the problems that keep the check from reading it: a
-// fence label that is neither a shell language nor on the closed list of prose
-// languages, a fence that never closes, a shell text it cannot read to its end or
-// that names its program through a variable, and every CLI name the backstop cannot
-// place. A problem is a failure: a text the check could not read is no text it may
-// pass.
-//
-// It walks the guide once rather than section by section, so it reads every block
-// wherever it sits: under a heading that repeats, above the guide's first heading,
-// and in a fence the guide labels by hand.
-func guideTextFindings(guide string) ([]cloudCommand, []string) {
-	var (
-		commands []cloudCommand
-		problems []string
-		section  string
-	)
-
-	lines := strings.Split(guide, "\n")
-
-	for i := 0; i < len(lines); i++ {
-		trimmed := strings.TrimSpace(lines[i])
-
-		// Only a `#` line outside a fence is a heading: the command blocks hold
-		// comments too, and a comment is no section of the guide.
-		if heading := headingText(trimmed); heading != "" {
-			section = heading
-
-			continue
-		}
-
-		// open is the line the fence opens on: a fence problem names it, not the
-		// line the body ends on, so the reader finds the block.
-		if marker, info, opens := fenceOpen(lines[i]); opens {
-			open := i + 1
-
-			body, last, closed := fenceBody(lines, i, marker)
-			if !closed {
-				problems = append(problems, fmt.Sprintf("%s, the fence that opens at line %d: it never closes, so the check cannot see where what it holds ends",
-					guideLocation(section), open))
+			if at == len(lines) {
+				break
 			}
 
-			i = last
-
-			shell, err := fenceLanguage(leadingWord(info))
-
-			switch {
-			case err != nil:
-				problems = append(problems, fmt.Sprintf("%s, the fence that opens at line %d: %v", guideLocation(section), open, err))
-			case shell:
-				// The body's first line is the file's line open+1, and
-				// invocationsIn counts from the text's first line.
-				found, refused := invocationsIn(strings.Join(body, "\n"), true, guideLocation(section), open+1)
-				commands = append(commands, found...)
-				problems = append(problems, refused...)
-			}
-
-			continue
+			line.text += " " + lines[at]
 		}
 
-		where := guideLocation(section)
-
-		for _, span := range codeSpans(lines[i]) {
-			found, refused := invocationsIn(span, true, where, i+1)
-			commands = append(commands, found...)
-			problems = append(problems, refused...)
-		}
-
-		if startsWithCloudCLI(trimmed) {
-			found, refused := invocationsIn(trimmed, true, where, i+1)
-			commands = append(commands, found...)
-			problems = append(problems, refused...)
-		}
+		joined = append(joined, line)
 	}
 
-	return commands, append(problems, unplacedCLINames(inventoryGuidePath, lines, commands)...)
+	return joined
 }
 
-// guideShellLanguages are the languages of a fence the check reads for commands:
-// the shell languages the guide's command blocks are written in, and no label at
-// all, since a fence of bare commands is bash.
-var guideShellLanguages = []string{"bash", "console", "sh", "shell", "zsh"}
+// endsWithContinuation reports whether a line ends with the backslash that
+// continues it on the next one, white space aside.
+func endsWithContinuation(line string) bool {
+	return strings.HasSuffix(strings.TrimRight(line, " \t"), "\\")
+}
 
-// guideProseLanguages are the languages of a fence that holds no command, a closed
-// list: the JSON samples the guide prints and its plain text. A fence with any
-// other language fails the check, so a block it does not read is a deliberate
-// addition to this list rather than a block that slipped past.
-var guideProseLanguages = []string{"json", "text"}
+// continuationFields returns the fields of a line that continues the one above it:
+// its blockquote marker, its comment marker and its indentation are no part of the
+// command the line goes on with.
+func continuationFields(line string) []string {
+	return lineFields(strings.TrimLeft(line, " \t>#"))
+}
+
+// endsWithLastField reports whether a line's text ends at its last field, rather
+// than in punctuation or a closing quote: it is the guard a wrapped command needs,
+// so the guide's `"source": "aws",` does not read the array below it as a command,
+// while a line that ends at `az servicebus topic` reads `subscription list` as its
+// continuation.
+func endsWithLastField(text string, fields []string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+
+	return strings.HasSuffix(strings.TrimRight(text, " \t\\"), fields[len(fields)-1])
+}
 
 // guideBareMentions are the words today's guide and programs write after a cloud
 // CLI's name when they name the CLI and run no command. A bare mention is narrow on
 // purpose: a CLI name followed by any other word fails the check rather than passing
-// as prose, so a command the extraction could not read cannot hide behind one. Each
-// word is here for a line of today's text:
+// as prose, so a command the scan could not read cannot hide behind one. Each word
+// is here for a line of today's text:
 //
 //   - ".", the full stop after the directory the guide empties: `rm -r inventories/aws`.
 //   - "CLI", aws.jq's first line: "the read-only aws CLI calls".
@@ -1487,72 +1163,17 @@ var guideProseLanguages = []string{"json", "text"}
 //   - "calls", azure.jq's and gcp.jq's first lines: "the read-only az calls".
 //   - "gcp", the guide's source table: "`aws`, `gcp` or `azure` here".
 //   - "or", the guide's requirements: "the provider's CLI (`aws` version 2, `gcloud`, or `az` …)".
+//   - "pages", the note on the regions: "the gcloud" (inventory.md:1119) "pages
+//     document no "all regions" value" (inventory.md:1120).
 //   - "so", the note on the projections: "for `gcloud`), so it runs once".
 //   - "version", the requirements line: "`aws` version 2".
 //   - "with", the requirements line: "`az` with the `resource-graph` extension".
 //   - "writes", gcp.jq's last comment: "as gcloud writes a string".
 var guideBareMentions = []string{
-	".", "CLI", "a", "and", "call", "calls", "gcp", "or", "so", "version", "with", "writes",
+	".", "CLI", "a", "and", "call", "calls", "gcp", "or", "pages", "so", "version", "with", "writes",
 }
 
-// unplacedCLINames returns a problem for every line of a text that names a cloud
-// CLI where the check can neither see an invocation the extraction found nor a bare
-// mention of the CLI: the fail-closed backstop of the whole check (issue #716).
-//
-// It trusts no Markdown and no shell reading at all. It splits every line — inside a
-// fence of any language, in prose, in a heading, in a blockquote, in an indented
-// block, in HTML, in a heredoc body — into fields on white space and shell
-// punctuation, takes each field's last path element, and holds every field that is
-// one of the three names to account, in the line's order: a bare mention, then one of
-// the line's invocation starts (each start once), then a field sequence that reads
-// as one of the CLI's read commands — a read named in text the extraction does not
-// parse, as azure.jq's prose writes "from az vm list-sizes", breaks no rule.
-// Anything else is a command the check cannot read, and that fails.
-func unplacedCLINames(file string, lines []string, commands []cloudCommand) []string {
-	starts := make(map[int]int, len(commands))
-
-	for _, command := range commands {
-		starts[command.line]++
-	}
-
-	var problems []string
-
-	for at, line := range lines {
-		number := at + 1
-		budget := starts[number]
-		fields := lineFields(line)
-
-		for i, field := range fields {
-			name := cliNameField(field)
-			if name == "" {
-				continue
-			}
-
-			if i+1 == len(fields) || slices.Contains(guideBareMentions, path.Base(fields[i+1])) {
-				continue
-			}
-
-			if budget > 0 {
-				budget--
-
-				continue
-			}
-
-			if cli, known := cloudCLIByName(name); known {
-				if _, read := cli.reads(fields[i+1:]); read {
-					continue
-				}
-			}
-
-			problems = append(problems, fmt.Sprintf("%s: line %d names the CLI %q, and the check cannot place it: no invocation the extraction finds starts on that line, the word after it is no bare mention guideBareMentions lists, and the words after it read nothing, so it could be a command the extraction cannot read — a `bash -c` argument, a heredoc body, an indented block, an HTML block, a code span over two lines, a fence it skipped (CLAUDE.md rule 1, the guide may only read)",
-				file, number, name))
-		}
-	}
-
-	return problems
-}
-
-// lineFieldSeparators are the characters unplacedCLINames splits a line into fields
+// lineFieldSeparators are the characters the field scan splits a line into fields
 // on: white space, the double quote, the backtick, `$`, the shell's braces,
 // parentheses and operators, `=` and `,`, and the backslash. A single quote is no
 // separator: the guide's programs write a possessive through one — gcp.jq's
@@ -1586,29 +1207,67 @@ func cliNameField(field string) string {
 	return name
 }
 
-// fenceLanguage returns whether a fence's language is a shell one, and an error for
-// a language that is neither a shell one nor on the closed list of prose languages.
-func fenceLanguage(label string) (bool, error) {
-	if label == "" || slices.Contains(guideShellLanguages, label) {
-		return true, nil
-	}
-
-	if slices.Contains(guideProseLanguages, label) {
-		return false, nil
-	}
-
-	return false, fmt.Errorf("a fence is labelled %q, which is no shell language (%s) and on no closed list of prose languages (%s), so the check reads no command in it: label it as the shell text it is, or add its language to guideProseLanguages on purpose",
-		label, strings.Join(guideShellLanguages, ", "), strings.Join(guideProseLanguages, ", "))
+// isCloudCLIName reports whether the word is one of the three cloud CLIs' names.
+func isCloudCLIName(word string) bool {
+	return slices.ContainsFunc(cloudCLIs, func(cli cloudCLI) bool { return cli.name == word })
 }
 
-// guideLocation names where in the guide a text sits: its section, or the part
-// above the guide's first heading.
-func guideLocation(section string) string {
-	if section == "" {
-		return inventoryGuidePath + ", before the first heading"
+// guideFenceLanguages are the labels the guide's fences may carry: the shell
+// languages its command blocks are written in, the prose languages of its samples,
+// and no label at all. A label on neither list fails the check, so a block in a
+// language the scan knows nothing of is a deliberate edit here — the scan reads
+// every fence's lines whatever the label, but a new language is worth a look.
+var guideFenceLanguages = []string{"", "bash", "console", "json", "sh", "shell", "text", "zsh"}
+
+// fenceLabelProblems returns a problem for every fence opener whose label is on no
+// list of the guide's fence languages.
+func fenceLabelProblems(file string, lines []string) []string {
+	var problems []string
+
+	for at, line := range lines {
+		label, opens := fenceLabel(line)
+		if !opens || slices.Contains(guideFenceLanguages, label) {
+			continue
+		}
+
+		problems = append(problems, fmt.Sprintf("%s:%d: the fence is labelled %q, which is on no list of the guide's fence languages (%s), so a block the scan knows no language of could hold commands: label it as the shell text it is, or add its language to guideFenceLanguages on purpose",
+			file, at+1, label, strings.Join(guideFenceLanguages, ", ")))
 	}
 
-	return fmt.Sprintf("%s, section %q", inventoryGuidePath, section)
+	return problems
+}
+
+// fenceLabel returns the first word of a fence's info string and whether the line
+// opens a fence: a run of at least three backticks or tildes, indented by at most
+// three spaces, and — for a backtick fence — an info string with no backtick, as
+// CommonMark has it.
+func fenceLabel(line string) (string, bool) {
+	if len(line)-len(strings.TrimLeft(line, " ")) > 3 {
+		return "", false
+	}
+
+	line = strings.TrimRight(line, " \t\r")
+
+	if len(line) < 3 || (line[0] != '`' && line[0] != '~') {
+		return "", false
+	}
+
+	run := 0
+
+	for run < len(line) && line[run] == line[0] {
+		run++
+	}
+
+	if run < 3 {
+		return "", false
+	}
+
+	info := strings.TrimSpace(line[run:])
+	if line[0] == '`' && strings.ContainsRune(info, '`') {
+		return "", false
+	}
+
+	return leadingWord(info), true
 }
 
 // leadingWord returns the first word of a text, "" for a text with no word.
@@ -1621,361 +1280,45 @@ func leadingWord(text string) string {
 	return fields[0]
 }
 
-// fenceOpen reports whether a line opens a fenced block — CommonMark's opener: a run
-// of at least three backticks or tildes, indented by at most three spaces, so an
-// indented code block whose text happens to be ``` opens none — and returns the
-// fence's marker, the character it is made of repeated its length, and its info
-// string, so a `~~~bash title="x"` fence is as much a fence as a ```bash one. A
-// backtick fence whose info string holds a backtick is no fence either, as
-// CommonMark says: it opens nothing, so the block after it is read on its own.
-func fenceOpen(line string) (marker, info string, ok bool) {
-	indent := len(line) - len(strings.TrimLeft(line, " "))
-	if indent > 3 {
-		return "", "", false
-	}
-
-	line = strings.TrimRight(line[indent:], " \t\r")
-
-	if len(line) < 3 || (line[0] != '`' && line[0] != '~') {
-		return "", "", false
-	}
-
-	length := 0
-
-	for length < len(line) && line[length] == line[0] {
-		length++
-	}
-
-	if length < 3 {
-		return "", "", false
-	}
-
-	info = strings.TrimSpace(line[length:])
-	if line[0] == '`' && strings.ContainsRune(info, '`') {
-		return "", "", false
-	}
-
-	return strings.Repeat(line[:1], length), info, true
+// shippedProgram is one program in the guide's programs directory, with its field
+// scan and its path relative to the repository root.
+type shippedProgram struct {
+	path string
+	scan fieldScan
 }
 
-// fenceClose reports whether a trimmed line closes a fence with the marker: the
-// marker's character alone, at least as many times as it opens with.
-func fenceClose(line, marker string) bool {
-	if len(line) < len(marker) {
-		return false
-	}
+// shippedPrograms returns the programs the guide ships, each scanned for cloud CLI
+// names. It fails the test for a file beside them that is no `.jq` program: a
+// script added there — a shell helper, for example — holds commands this check must
+// read, so it has to be read here on purpose rather than skipped.
+func shippedPrograms(t *testing.T) []shippedProgram {
+	t.Helper()
 
-	for i := 0; i < len(line); i++ {
-		if line[i] != marker[0] {
-			return false
-		}
-	}
-
-	return true
-}
-
-// fenceBody returns the lines of the fenced block that opens at the line index, the
-// index of the line that closes it, and whether one does.
-func fenceBody(lines []string, open int, marker string) (body []string, last int, closed bool) {
-	for i := open + 1; i < len(lines); i++ {
-		if fenceClose(strings.TrimSpace(lines[i]), marker) {
-			return body, i, true
-		}
-
-		body = append(body, lines[i])
-	}
-
-	return body, len(lines) - 1, false
-}
-
-// codeSpans returns the text of the inline code spans of a Markdown line: the text
-// between pairs of backticks, in the line's order. A backtick with no pair is no
-// span, so a line that happens to hold one is read as the prose it is.
-func codeSpans(line string) []string {
-	var (
-		spans []string
-		runes = []rune(line)
-		open  = -1
-	)
-
-	for i, r := range runes {
-		if r != '`' {
-			continue
-		}
-
-		if open < 0 {
-			open = i
-
-			continue
-		}
-
-		spans = append(spans, string(runes[open+1:i]))
-		open = -1
-	}
-
-	return spans
-}
-
-// startsWithCloudCLI reports whether a line's first word is a CLI name.
-func startsWithCloudCLI(line string) bool {
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
-		return false
-	}
-
-	_, ok := cloudCLIName(shellToken{text: fields[0]})
-
-	return ok
-}
-
-// invocationsIn returns every cloud CLI invocation of a shell text, and where it
-// found them: from the token that names a CLI to the operator or the CLI that
-// ends it, so an invocation after a pipe, inside `$(...)` or a backtick, after
-// `&&` or after xargs is found like one that starts a line, and a flag's quoted
-// argument is one word however many lines it spans. firstLine is the line of the
-// file the text's first line is, so each invocation names the line its CLI's name
-// is on.
-//
-// It reports the texts the check may not pass: one it cannot read to its end — an
-// unbalanced quote or substitution, a heredoc with no delimiter line — and one that
-// names its program through a variable, as `cli=aws; "$cli" ec2 create-tags` does,
-// which runs for the visitor as surely as a command of its own.
-func invocationsIn(text string, newlineEndsCommand bool, where string, firstLine int) ([]cloudCommand, []string) {
-	tokens, err := shellTokens(text, newlineEndsCommand)
+	matches, err := filepath.Glob(filepath.Join(theRepositoryRoot(t), filepath.FromSlash(guideProgramsDirectory), "*"))
 	if err != nil {
-		return nil, []string{fmt.Sprintf("%s: %v", where, err)}
+		t.Fatalf("glob %s: %v", guideProgramsDirectory, err)
 	}
 
-	var (
-		commands []cloudCommand
-		problems []string
-		// commandPosition is where a program's name stands: at the text's start and
-		// after every operator. A redirect's target is a file, so it is no program
-		// position, and neither is a word behind one.
-		commandPosition = true
-		redirectTarget  = false
-	)
+	var programs []shippedProgram
 
-	for i, token := range tokens {
-		if token.operator {
-			commandPosition = token.text != "<" && token.text != ">"
-			// A redirect's next word is the file it reads or writes, not a
-			// program: a `<<` heredoc's delimiter is no token, so the word
-			// after its operator is a command again.
-			redirectTarget = !commandPosition
+	for _, match := range matches {
+		name := filepath.Base(match)
+
+		if filepath.Ext(name) != ".jq" {
+			t.Errorf("%s holds %s, which is no .jq program: a script beside the programs holds cloud CLI commands this check does not read, so extend shippedPrograms to read it", guideProgramsDirectory, name)
 
 			continue
 		}
 
-		if redirectTarget {
-			redirectTarget = false
+		programPath := guideProgramsDirectory + name
+		scan := scanText(programPath, string(readRepositoryFile(t, programPath)))
 
-			continue
+		for _, problem := range scan.problems {
+			t.Error(problem)
 		}
 
-		cli, invocation := cloudCLIName(token)
-		if !invocation {
-			if commandPosition && strings.HasPrefix(token.text, "$") {
-				problems = append(problems, fmt.Sprintf("%s, line %d: %q stands where a program's name goes and begins with $, so a variable could name any program — these three among them: the check reads the guide's own words, not the visitor's environment (CLAUDE.md rule 1, the guide may only read)",
-					where, firstLine+token.line-1, token.text))
-			}
-
-			commandPosition = false
-
-			continue
-		}
-
-		var words []string
-
-		for _, next := range tokens[i+1:] {
-			if next.operator {
-				break
-			}
-
-			if _, another := cloudCLIName(next); another {
-				break
-			}
-
-			words = append(words, next.text)
-		}
-
-		if len(words) == 0 {
-			// A bare mention of a CLI, as the guide's prose writes `aws` alone,
-			// runs no command.
-			commandPosition = false
-
-			continue
-		}
-
-		commands = append(commands, cloudCommand{
-			cli:   cli,
-			words: words,
-			where: where,
-			line:  firstLine + token.line - 1,
-		})
-		commandPosition = false
+		programs = append(programs, shippedProgram{path: programPath, scan: scan})
 	}
 
-	return commands, problems
-}
-
-// scriptInvocations returns the cloud CLI invocations a program the guide ships
-// names in its comments: a comment line that holds a CLI name anywhere starts one —
-// `# then run: aws ec2 create-tags` is such a line — and the following comment
-// lines that read as a subcommand continuation (a subcommand group, a flag) go on
-// with it, so a command the program wraps across two lines is read whole. A CLI
-// name that follows a word, as `as gcloud writes a string` writes it, is the
-// comment's prose about the CLI and starts none.
-func scriptInvocations(programPath, text string) []cloudCommand {
-	var (
-		commands []cloudCommand
-		open     *cloudCommand
-	)
-
-	closeOpen := func() {
-		if open != nil {
-			commands = append(commands, *open)
-			open = nil
-		}
-	}
-
-	for number, line := range strings.Split(text, "\n") {
-		content, isComment := strings.CutPrefix(strings.TrimSpace(line), "#")
-		if !isComment {
-			closeOpen()
-
-			continue
-		}
-
-		content = strings.TrimSpace(content)
-
-		fields := strings.Fields(content)
-		start := commandStart(content)
-
-		switch {
-		case len(fields) == 0:
-			closeOpen()
-		case start >= 0:
-			closeOpen()
-
-			// A comment wraps a command in prose, and a comma ends it there:
-			// no CLI command path holds one.
-			command := content[start:]
-			if comma := strings.IndexByte(command, ','); comma >= 0 {
-				command = command[:comma]
-			}
-
-			name := path.Base(leadingWord(command))
-
-			open = &cloudCommand{
-				cli:   name,
-				words: wordTokens(strings.TrimSpace(strings.TrimPrefix(command, leadingWord(command)))),
-				where: fmt.Sprintf("%s, line %d", programPath, number+1),
-				line:  number + 1,
-			}
-		case open != nil && continuesSubcommand(content):
-			open.words = append(open.words, wordTokens(content)...)
-		default:
-			closeOpen()
-		}
-	}
-
-	closeOpen()
-
-	return commands
-}
-
-// commandStart returns where in a comment's text the command it names starts, or -1
-// for a text that names none: the first word that is a CLI name and that begins a
-// command — at the start of the comment, or after a character that no word ends,
-// such as `(`, `}` or `:`. A CLI name that follows a word is the comment's prose
-// about the CLI and starts no command, so `the read-only aws CLI calls` and `as
-// gcloud writes a string` name none.
-func commandStart(content string) int {
-	for at := 0; at < len(content); at++ {
-		// A word starts after white space or after a character no word is made
-		// of, such as the `(` and `}` a comment puts beside a command.
-		if at > 0 && isWordByte(content[at-1]) {
-			continue
-		}
-
-		if content[at] == ' ' || content[at] == '\t' {
-			continue
-		}
-
-		end := at
-		for end < len(content) && content[end] != ' ' && content[end] != '\t' {
-			end++
-		}
-
-		if _, ok := cloudCLIName(shellToken{text: content[at:end]}); !ok {
-			continue
-		}
-
-		before := strings.TrimRight(content[:at], " \t")
-		if before != "" && isWordByte(before[len(before)-1]) {
-			continue
-		}
-
-		return at
-	}
-
-	return -1
-}
-
-// continuesSubcommand reports whether a comment line goes on with the invocation
-// above it: it starts with a lower-case word, as `subscription list` and
-// `blob-service-properties show` do, or with a flag. A line that starts with
-// anything else, such as the JSON shape a program's comment puts beside a
-// command, is its own text and ends the invocation.
-func continuesSubcommand(content string) bool {
-	if content == "" {
-		return false
-	}
-
-	first := content[0]
-
-	return first == '-' || (first >= 'a' && first <= 'z')
-}
-
-// wordTokens returns the words of a text, its operators left out. A comment line is
-// prose, so a quote it leaves open is no problem to report here.
-func wordTokens(text string) []string {
-	tokens, _ := shellTokens(text, false)
-
-	var words []string
-
-	for _, token := range tokens {
-		if !token.operator {
-			words = append(words, token.text)
-		}
-	}
-
-	return words
-}
-
-// cloudCLIName returns the CLI the token names, and whether it names one: its last
-// path element, so `/usr/bin/aws` is aws and `aws.jq` is no invocation.
-func cloudCLIName(token shellToken) (string, bool) {
-	if token.operator {
-		return "", false
-	}
-
-	name := cliNameField(token.text)
-	if name == "" {
-		return "", false
-	}
-
-	return name, true
-}
-
-// isCloudCLIName reports whether the word is one of the three cloud CLIs' names.
-func isCloudCLIName(word string) bool {
-	return slices.ContainsFunc(cloudCLIs, func(cli cloudCLI) bool { return cli.name == word })
-}
-
-// isWordByte reports whether the byte can be part of a shell word: a letter, a
-// digit, or one of the characters a program's name and arguments are made of.
-func isWordByte(b byte) bool {
-	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '_' || b == '-' || b == '.' || b == '/'
+	return programs
 }
