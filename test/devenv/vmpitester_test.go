@@ -336,7 +336,7 @@ func TestVMPiTesterScriptRunsNothingOnATruncatedStream(t *testing.T) {
 	}{
 		{
 			name:   "inside the here-document that carries the wrapper",
-			cutAt:  `allowlisted exec "${pi}" --extension "${extension}" "$@"`,
+			cutAt:  vmPiTesterHereDocuments[0].marker,
 			reason: "the here-document the wrapper travels in never reaches its delimiter",
 		},
 		{
@@ -388,6 +388,106 @@ func TestVMPiTesterScriptRunsNothingOnATruncatedStream(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestVMPiTesterScriptInstallsOnlyAWrapperEndingWithItsExecLine pins the second half of ADR 0044's amendment (issue
+// #702): the printed script accepts a wrapper only when its last line is the new exec line, and refuses a wrapper
+// whose last line is the one from before (`--extension` and pi's own discovery, with project trust) or that lost its
+// exec line, like any other stream cut short. A VM never installs a wrapper that loads the unit folder's extensions
+// or trusts its settings.
+func TestVMPiTesterScriptInstallsOnlyAWrapperEndingWithItsExecLine(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// lastLine is what the case's wrapper ends with; empty drops the wrapper's last line.
+		lastLine string
+		refuses  bool
+	}{
+		{name: "the wrapper ends with the new exec line", lastLine: piTesterExecLine},
+		{name: "the wrapper ends with the line from before issue #702", lastLine: piTesterOldExecLine, refuses: true},
+		{name: "the wrapper's exec line is gone", refuses: true},
+	}
+
+	const truncation = "does not end with its exec line, so it arrived cut short; nothing installed"
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			sb.useFakeVMSudo(t)
+
+			root := filepath.Join(sb.root, "pi-tester-root")
+			if err := os.MkdirAll(root, 0o700); err != nil {
+				t.Fatalf("create %s: %v", root, err)
+			}
+
+			wrapper := piTesterWrapperWithLastLine(t, tc.lastLine)
+			stream := vmPiTesterStream(t, sb, wrapper, denyExtensionFile, denyListFile)
+
+			env := sb.baseEnv()
+			env[piTesterRootHook] = root
+
+			stdout, stderr, err := sb.runStream(t, env, stream)
+
+			script, extension, list := piTesterRootInstalled(root)
+
+			if tc.refuses {
+				if err == nil {
+					t.Fatalf("the script %s prints exited 0 with %s: the wrapper's last line is the one check that tells a whole wrapper from a stream cut short, and the VM's installation then starts a pi that trusts the project (ADR 0044, issue #702)\nstdout: %s\nstderr: %s",
+						vmPiTesterGenerator, tc.name, stdout, stderr)
+				}
+
+				if !strings.Contains(stdout+stderr, truncation) {
+					t.Errorf("the script %s prints did not say %q with %s, so a maintainer whose update stopped reads no reason and cannot tell it from a broken transfer (issue #702):\nstdout: %s\nstderr: %s",
+						vmPiTesterGenerator, truncation, tc.name, stdout, stderr)
+				}
+
+				for _, path := range []string{script, extension, list} {
+					if _, statErr := os.Stat(path); statErr == nil {
+						t.Errorf("the script %s prints installed %s although %s: an installation refused at the wrapper's last line installs nothing (issue #702)\nstdout: %s\nstderr: %s",
+							vmPiTesterGenerator, path, tc.name, stdout, stderr)
+					}
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("the script %s prints exited non-zero with the wrapper ending in its exec line: %v\nstdout: %s\nstderr: %s", vmPiTesterGenerator, err, stdout, stderr)
+			}
+
+			got, err := os.ReadFile(script)
+			if err != nil {
+				t.Fatalf("the script %s prints installed no wrapper at %s: %v\nstdout: %s\nstderr: %s", vmPiTesterGenerator, script, err, stdout, stderr)
+			}
+
+			if want := readRepoFile(t, piTesterScript); string(got) != want {
+				t.Errorf("the script %s prints installed the wrapper as %q, want %s byte for byte (issue #702)", vmPiTesterGenerator, string(got), piTesterScript)
+			}
+		})
+	}
+}
+
+// piTesterWrapperWithLastLine writes dev/pi-tester.sh into a file of its own with its last line replaced by line, or
+// with its last line dropped when line is empty, and returns the path: a wrapper whose last line is the one from
+// before issue #702, and one whose exec line is gone, are the two shapes the installer has to refuse.
+func piTesterWrapperWithLastLine(t *testing.T, line string) string {
+	t.Helper()
+
+	body := strings.Split(strings.TrimSuffix(readRepoFile(t, piTesterScript), "\n"), "\n")
+
+	if line == "" {
+		body = body[:len(body)-1]
+	} else {
+		body[len(body)-1] = line
+	}
+
+	path := filepath.Join(t.TempDir(), "pi-tester.sh")
+	writeFileMode(t, path, []byte(strings.Join(body, "\n")+"\n"), 0o600)
+
+	return path
 }
 
 // makefileAssignmentWords returns the words of a makefile's `NAME := ...` assignment, joining its
