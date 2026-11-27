@@ -218,8 +218,8 @@ values), taints, subnet ID and node image version. It also holds the names of yo
 zones, which are your domains, public and private, and their zone IDs, and the names of your Cloud
 DNS managed zones, public and private, which often spell your domains, and the names of your Azure DNS
 zones, public and private, which are your domains, with their resource groups; of a zone's records
-(none on Azure, where no command reads one), only a
-count of routed record sets per zone, never a record's name or value, and of its DNSSEC configuration
+only a count of routed record sets per zone (on AWS and GCP; no Azure command reads a record), never
+a record's name or value, and of its DNSSEC configuration
 only whether it is signed, never a key. Share only the reviewed inventory file, never the
 directory, and delete the directory once the inventory is built (see [Privacy](#privacy)).
 
@@ -1486,7 +1486,7 @@ jq -r '.data[] | select(.type == "microsoft.network/dnszones"
     and ((.properties.zoneType // "Public") | ascii_downcase) != "private")
   | [(.id | split("/")[4]), .name] | @tsv' "$out"/graph-*.json |
   while read -r rg zone; do
-    az network dns dnssec-config show --resource-group "$rg" --zone-name "$zone" \
+    az network dns dnssec-config show --resource-group="$rg" --zone-name="$zone" \
       --query "{id: id, type: type, provisioningState: provisioningState || properties.provisioningState}" \
       --output json || :
   done > "$out/dns-dnssec.json"
@@ -1527,13 +1527,17 @@ public, the API's default), never its name servers, its record set counts or its
 the zone resource carries. Resource Graph does not list a zone's DNSSEC configuration, hence the
 DNSSEC loop: it runs only for the public zones of the Resource Graph pages, as only a public zone can
 be signed, reads each zone's resource group (from its resource ID) and name from one line, separated
-by a tab (neither holds one), and asks for that zone's configuration. The `--query` keeps its ID, its
+by a tab (neither holds one), and asks for that zone's configuration. It passes both values in the
+attached form (`--resource-group="$rg"`), as a resource group's name may start with `-`, which the CLI
+would read as an option if it came as a separate word. The `--query` keeps its ID, its
 type and its `provisioningState` (the program reads `Succeeded` as signed), never a key or the
 delegation signer data. An unsigned zone has no configuration: its call prints
 `(NotFound) DNSSEC is not enabled for DNS zone ...` on stderr and writes nothing, and `|| :` lets the
 loop go on and end with status 0 whatever the last zone is (a shell running with `set -e` would stop
 there otherwise). The CLI also warns that the `dnssec-config` command group is experimental. Both
-messages are expected. No command reads a zone's record sets.
+messages are expected. Any other error on stderr (such as `AuthorizationFailed`, throttling or a
+network error) means that zone's signed state was not read, as `|| :` hides every failure: run the
+loop again, or add `dnssec` to that zone by hand. No command reads a zone's record sets.
 
 ### Build the Azure inventory
 
@@ -1748,7 +1752,7 @@ holds data, and stays; so does a share of such a FileStorage account, a persiste
 | `storage.file` (`Microsoft.FileShares`) | `zone-high-availability` | `redundancy` `Zone` |
 | `messaging.kafka` (HDInsight) | `encryption-at-rest` | always: Azure encrypts the cluster's managed disks |
 | `messaging.kafka` (HDInsight) | `node-high-availability` | the worker role's `targetInstanceCount` is 3 or more |
-| `network.dns` (public zone) | `dnssec` | its DNSSEC configuration's `provisioningState` is `Succeeded` (any casing); a zone with no configuration, or one in another state (such as `Creating` or `Deleting`), gets none |
+| `network.dns` (public zone) | `dnssec` | its DNSSEC configuration's `provisioningState` is `Succeeded` (any casing): the zone is signed, whether or not the parent zone holds its DS record yet (`Succeeded` means signed, not delegated); a zone with no configuration, or one in another state (such as `Creating` or `Deleting`), gets none |
 | `messaging.kafka` (HDInsight) | `zone-high-availability` | never: a cluster with `zones` set is zonal, every node in the one zone chosen, not zone redundant, and does not survive that zone's loss (Microsoft Learn, *Create an Azure HDInsight cluster that uses Availability Zones*) |
 
 A frontend is IPv6 when its `privateIPAddressVersion` or its public IP address's

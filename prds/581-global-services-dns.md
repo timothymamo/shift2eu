@@ -228,7 +228,9 @@ asset type on GCP, the Resource Manager type on Azure. Every zone is written wit
 **The per-zone loops** (milestones 2 to 4) read the zone list the first call wrote with
 `while IFS= read -r id; do ...; done`, pass a zone's ID wherever the API accepts one (Route 53's
 `--hosted-zone-id`; Cloud DNS and Azure take the zone name, with the project or resource group), quote
-every variable (`"$id"`, `"$zone"`, `"$project"`, `"$rg"`), and never use `eval`. The `test/site`
+every variable (`"$id"`, `"$zone"`, `"$project"`, `"$rg"`), and never use `eval`. Azure passes its
+values in the attached form (`--resource-group="$rg" --zone-name="$zone"`), as a resource group's name
+may start with `-` (milestone 4). The `test/site`
 check of the guide's commands asserts that no command holds an unquoted `$zone` or `$id`.
 
 **The record-set permissions.** `route53:ListResourceRecordSets`, and `dns.resourceRecordSets.list` in
