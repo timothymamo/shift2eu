@@ -7,12 +7,12 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 
 - **Retrieved on:** 2026-11-27, the date every plan and price was last read (PRD #571 milestone 7,
   below; before it 2026-11-26 for PRD #552 milestone 6, and first read on 2026-11-13 for PRD #190
-  milestone 4, ADR 0024). The snapshot's `retrievedOn` and
-  `sourceURL` name the prices, the facts most likely to change. The regions and capabilities were
-  compiled and verified on 2026-11-10 and re-verified on 2026-11-11 for PRD #14 (below); the prices
-  changed no offering, capability or region. *Kubernetes Kapsule Dedicated*'s regions, and its plans'
-  price regions, were re-checked on 2026-11-19 for issue #211 (below), which added `it-mil`, and again on
-  2026-11-26. The availability page was last read in full on 2026-11-26.
+  milestone 4, ADR 0024). The snapshot's `retrievedOn` and `sourceURL` name the prices, the facts most
+  likely to change. The regions and capabilities were compiled and verified on 2026-11-10 and
+  re-verified on 2026-11-11 for PRD #14 (below); the prices changed no offering, capability or region.
+  *Kubernetes Kapsule Dedicated*'s regions, and its plans' price regions, were re-checked on 2026-11-19
+  for issue #211 (below), which added `it-mil`, and again on 2026-11-26. The availability page was last
+  read in full on 2026-11-26.
 - **Compiled, then verified against the live pages.** The snapshot was first compiled from Scaleway's
   documentation source and Go SDK at the commits below, because `www.scaleway.com` then answered HTTP 403.
   On the same date every region and capability was checked against the live public pages cited below
@@ -590,10 +590,11 @@ Category `messaging.kafka` (PRD #571 milestone 7, read 2026-11-27). Pages: the s
 <https://www.scaleway.com/en/docs/clusters-for-kafka/quickstart/>,
 <https://www.scaleway.com/en/docs/clusters-for-kafka/concepts/>,
 <https://www.scaleway.com/en/docs/clusters-for-kafka/faq/> and
-<https://www.scaleway.com/en/docs/clusters-for-kafka/how-to/create-cluster/>, read 2026-11-27 (each
-"Reviewed on June 19, 2026"), and the same files under `pages/clusters-for-kafka/` in
-`scaleway/docs-content` at commit `839dd366846140226cd50a0b9d10aea20959e514`, with the changelog entries
-*Multi-AZ clusters are now available* (2026-07-01) and *Update storage* (2026-10-28).
+<https://www.scaleway.com/en/docs/clusters-for-kafka/how-to/create-cluster/>, read 2026-11-27 (the
+four subpages "Reviewed on June 19, 2026"; the index page carries no review date), and the same files
+under `pages/clusters-for-kafka/` in `scaleway/docs-content` at commit
+`839dd366846140226cd50a0b9d10aea20959e514`, with the changelog entries *Multi-AZ clusters are now
+available* (2026-07-01) and *Support for resizing Kafka cluster storage* (2026-10-28).
 
 - **General availability:** the maintainer, 2026-11-27, issue #571 (decided question 2 of PRD #571):
   the product reached general availability in June 2026. As for OpenSearch, every node type on the price
@@ -649,8 +650,13 @@ Category `messaging.kafka` (PRD #571 milestone 7, read 2026-11-27). Pages: the s
 - **Estimate effect: an over-estimate for a replicated Single-AZ cluster.** A Kafka resource with
   `node-high-availability` (three or more brokers that replicate data) maps `direct` to *Clusters for
   Apache Kafka Multi-AZ* only and is priced at the Multi-AZ per-node price, about 10 % above a
-  three-node Single-AZ cluster, which the pages say is replicated and fault tolerant too. The snapshot
-  cannot price that cluster on this tier without listing the capability for a single node as well.
+  three-node Single-AZ cluster, which the pages say is replicated and fault tolerant too: the create page
+  offers Single-AZ "without compromising on fault-tolerance and replication" and, for the node count,
+  says "For highly‑available clusters enabling data replication: use at least 3 nodes." (the saved
+  create page, and `pages/clusters-for-kafka/how-to/create-cluster.mdx` line 36 at `839dd366`). The
+  snapshot cannot price that cluster on this tier without listing the capability for a single node as
+  well, so the Single-AZ tier lists no capability and a node-HA Kafka resource prices on Multi-AZ; this
+  reading awaits the maintainer's accept-or-follow-up.
 
 ### Clusters for Apache Kafka Multi-AZ
 
@@ -1713,4 +1719,6 @@ Prices and plans left out (PRD #571 milestone 7, read 2026-11-27):
   in `it-mil` alone, with no Multi-AZ price; the Paris table shows them "Not available in this region".
   Milan is not a region of either Kafka offering (regions rule), so none of these is recorded.
 - **Kafka's three-node Single-AZ cluster priced on Multi-AZ** when it lists `node-high-availability`
-  (*Clusters for Apache Kafka*, **Estimate effect**): an over-estimate of about 10 %.
+  (*Clusters for Apache Kafka*, **Estimate effect**): an over-estimate of about 10 %, though the create
+  page says "For highly‑available clusters enabling data replication: use at least 3 nodes." of the node
+  count in either configuration. The reading awaits the maintainer's accept-or-follow-up.
