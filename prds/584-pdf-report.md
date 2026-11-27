@@ -159,8 +159,8 @@ then add the detail sections. With the layout of today's reports:
   - the plan (name, vCPUs, memory, included storage, plan price), or "no plan large enough" with the
     largest plan;
   - the plan, storage and fixed-fee parts and the monthly total;
-  - the count, marked "assumed" when the resource gives none, and the hours, marked "assumed" (730) or
-    "given", plus any billing cap; as in the Markdown report, the PDF does not print the hours an
+  - the count, marked "assumed" when the resource gives none, and the hours, marked `"assumed" (730)` or
+    `as the inventory gives them`; as in the Markdown report, the PDF does not print the hours an
     inventory gives, because `HoursPerMonth` is a float and pdfreport has no floating point (ADR 0049);
   - the plan's billing cap, if any (ADR 0029), and "storage not included" when it applies (ADR 0032);
   - otherwise "not estimated" and the reason in plain words, as in the Markdown report.
