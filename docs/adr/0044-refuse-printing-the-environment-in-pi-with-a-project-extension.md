@@ -8,6 +8,9 @@
 - Amended: 2026-11-27, the tester starts from a root-owned copy of the wrapper and the refusal installed at
   VM provisioning, and does not use the unit folder's copies for its checks or `--extension` (issue #692; see "Amendment: the tester starts
   from a root-owned installed copy")
+- Amended: 2026-11-27, the tester's pi trusts no project and loads no discovered extension: only the
+  installed refusal, the deck's own extension and the skills, by explicit paths (issue #702; see
+  "Amendment: the tester loads no project extension or setting")
 
 ## Context
 
@@ -426,7 +429,7 @@ Consequences of this amendment:
   discovery (explicit `--extension` paths still load), which would close it but also stop the global
   extensions under `~/.pi/agent`, the deck's own pi extension among them, from loading; that needs its own
   check and is left for a later decision: issue #702 (start pi with `--no-extensions` and explicit
-  extension paths).
+  extension paths). The amendment below closes it.
 - The tester `command` itself lives in the project's `.dot-agent-deck.toml`, so a branch could point it
   elsewhere; that is the same same-uid residual, and the deck's trust approval (`dot-agent-deck trust
   approve`) is what makes a changed command visible.
@@ -436,3 +439,108 @@ Consequences of this amendment:
   above (same uid, lexical patterns) stand.
 - The one line costs nothing when the copies agree, which they do after `make vm-pi-tester` on a VM whose
   host clone is at the merged `main`.
+
+## Amendment: the tester loads no project extension or setting
+
+After the amendment above, pi (1.6.1, `--approve`) still loaded the unit folder's `.pi/extensions/`, which a
+branch can change, in the same node process as the installed refusal (issue #702). Before deciding, three
+points were checked against pi 1.6.1's own package (`@earendil-works/pi-coding-agent` 1.6.1, installed
+under `~/.local/lib/node_modules/`; paths below are relative to that package) and the deck's own
+documentation (`dot-agent-deck docs`, 0.51.4). pi was not run for this.
+
+- **Skills do not depend on extensions.** `--no-extensions` (`-ne`) only narrows the extension list:
+  `dist/core/resource-loader.js` builds it as `this.noExtensions ? cliEnabledExtensions : mergePaths(cli,
+  configured)`, so discovered, configured (settings `extensions`), package and built-in extensions drop and
+  explicit `--extension` paths stay (`docs/cli.md`, Resources: "Explicit `-e` paths still load";
+  `docs/settings.md`: "`--no-extensions` disables them too"). Skills come from a separate list that only
+  `--no-skills` narrows, so `.pi/settings.json`'s `skills` would still load. Skill paths given with
+  `--skill` are added in every case, trusted project or not (`additionalSkillPaths`, resolved against the
+  working directory in `dist/main.js`), and go through the same loader (`loadSkills`) as the settings' list.
+- **A trusted `.pi/settings.json` is a second branch-writable load path, and `--no-extensions` does not
+  close it.** Under `--approve` the project's settings are merged over the user's (`docs/settings.md`:
+  "Project settings override agent-directory settings"; `SettingsManager`'s merged `this.settings`), and
+  three of those settings run commands with no extension involved:
+  - `shellCommandPrefix` is prepended to every bash tool command inside the tool's own `execute`
+    (`dist/core/tools/bash.js`: `` `${commandPrefix}\n${command}` ``), after the `tool_call` event the
+    refusal checks, so the refusal never sees it: a prefix that prints the environment would run before every
+    command the tester makes. `shellPath` picks the shell that runs them.
+  - `packages` are resolved by `PackageManager.resolve()` on every start whatever `--no-extensions` says
+    (`dist/core/package-manager.js`), and a missing npm or git package is installed then
+    (`docs/packages.md`: "Project packages are installed and loaded only after project trust is resolved"),
+    which runs the package's install or prepare scripts.
+  - `npmCommand` is the command that install runs (`getNpmCommand()`), any program the branch names.
+  The trust decision itself is no help on its own: without a command-line override pi falls back to
+  `~/.pi/agent/trust.json`, a saved decision for that folder (`dist/main.js`; `docs/security.md`). So the
+  wrapper passes `--no-approve`, which overrides any saved decision (`docs/cli.md`: "Ignores trust-gated
+  project-local configuration and resources"): pi then reads none of `.pi/settings.json`, `.pi/mcp.json`,
+  `.pi/extensions`, `.pi/skills`, `.pi/SYSTEM.md` or `.pi/APPEND_SYSTEM.md` (`docs/security.md`, Resources
+  protected by project trust), installs no project package and runs no project `npmCommand`. The skills
+  `.pi/settings.json` loaded come in by `--skill` instead.
+- **The deck's pi extension sits at one fixed place, which the deck rewrites.** The deck's daemon writes its
+  pi extension to `$PI_CODING_AGENT_DIR/extensions/dot-agent-deck` (default
+  `~/.pi/agent/extensions/dot-agent-deck`) when it starts, and again each time it starts an agent it knows
+  is pi, which `agent = "pi"` on the tester role declares; `dot-agent-deck orchestrator setup` does the same
+  by hand (`dot-agent-deck docs troubleshooting`, Pi; `orchestrator --help`). It writes no symbolic link
+  and does not write through one. On this VM the directory holds `index.ts` and the modules it imports,
+  which pi loads as a directory extension (`docs/extensions.md`, Extension Locations: `*/index.ts`;
+  `resolveLocalExtensionSource` in `dist/core/package-manager.js` loads a directory without a package
+  manifest as one extension). A deck upgrade rewrites the files in that directory, not its path. The
+  wrapper does not pass `PI_CODING_AGENT_DIR` to pi, so pi's agent directory is `$HOME/.pi/agent`, and
+  the wrapper names the same directory.
+
+Decision:
+
+- **pi starts with no project trust and no discovered extension.** The wrapper's last line becomes
+  `allowlisted exec "${pi}" --no-approve --no-extensions --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"`:
+  `extension` the installed refusal, as before; `deck` the deck's extension directory,
+  `${HOME}/.pi/agent/extensions/dot-agent-deck`; `skills` the unit's `${PWD}/.claude/skills`, the
+  directory `.pi/settings.json` named. Its own flags come before the deck's arguments, so a `--` among
+  those cannot turn them into a message.
+- **`--approve` is refused.** An argument `--approve` or `-a` would undo `--no-approve` (pi keeps the
+  last), so the wrapper exits 1 before anything else starts and names `.dot-agent-deck.toml`'s tester
+  command; that command drops `--approve` in the same change.
+- **The deck's extension is checked, and a missing one fails closed.** The wrapper requires `HOME` to be
+  an absolute path, the deck's directory not to lie in the working directory, not to be a symbolic link,
+  to be a directory, and to hold a regular `index.ts`, `index.js` or `package.json`; otherwise it exits 1
+  with a message that names the directory and `dot-agent-deck orchestrator setup`. Without that extension
+  the pane would start but never receive a task or deliver a work-done (the deck's notice "this agent's
+  deck integration has not connected yet"), a silent stall; failing names the cause in the pane, where the
+  dispatcher sees an exited agent instead. The deck writes the directory before it starts a pi agent, so a
+  missing one is a fault, not a normal state. Its content is not checked or loaded beforehand: it is not
+  part of the refusal, and the deck replaces it on upgrade.
+- **The installer accepts only the new line.** `dev/vm-pi-tester.sh`'s check that the wrapper arrived
+  whole compares its last line with exactly the new exec line, and `dev/lima.yaml`'s embedded copy follows
+  the wrapper.
+
+Alternatives considered for this amendment:
+
+- **`--no-extensions` with `--approve`, as the issue first proposed.** It drops the project's extensions
+  but keeps the project's settings, whose `shellCommandPrefix`, `packages` and `npmCommand` run a branch's
+  commands outside the refusal's view (above).
+- **Start without the deck's extension when it is missing.** The refusal would still hold, but the pane
+  would wait for tasks it never gets, with nothing in it to say why.
+- **Pass the deck's `index.ts` file instead of its directory.** It ties the wrapper to the deck's current
+  file layout, which an upgrade may change; the directory is what pi's own discovery loaded.
+- **Silently drop `--approve` from the arguments.** It keeps a stale tester command working but hides that
+  the command asks for something the wrapper will not do.
+
+Consequences of this amendment:
+
+- No file under the unit folder's `.pi/` is code pi runs or a setting pi reads; the residual of the
+  amendment above (a project extension in pi's process) is closed, and so is the one the issue's question
+  found (a project setting that runs commands). The project's `.pi/extensions/deny-env-printing.ts` and
+  `.pi/deny-env-printing.json` stay as the source the installed copies are made from, and the wrapper's
+  one line still names them when they differ.
+- What is left:
+  - pi reads the project's `sessionDir` setting before trust is resolved, so `--no-approve` does not stop
+    it (`docs/security.md`, Understand project trust): a branch can choose where pi writes the tester's
+    session files, which could be a path in the worktree a later commit picks up.
+  - Context files (`AGENTS.md`, `CLAUDE.md`) and the skills under `.claude/skills` still come from the unit
+    folder, as instructions to the model, not code in pi's process; they were never inside this guard.
+  - The deck's extension directory is under `HOME`, writable by the VM's one user, so a program the tester
+    runs could change it for its next start; the same-uid limit stated above.
+  - `.dot-agent-deck.toml`'s tester command can still add `--extension` or point elsewhere; the deck's trust
+    approval is what shows that, as above.
+- A unit whose folder still has the old tester command (with `--approve`) gets the refusal once the
+  maintainer installs the new wrapper; merging `main` into its branch fixes it.
+- `.pi/settings.json` no longer matters to the tester; it stays for a pi run by hand with `--approve`.
