@@ -155,8 +155,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # The check that runs is the base commit's copy, never the pull request's own (issue #689): a pull
+      # request that changes test/lint is checked by the old check, and its change counts once merged. A
+      # detached worktree of the base shares the checkout's objects, so the copy reads the pull request's
+      # commits too. On a push to main there is no base, and the worktree is of the pushed commit, whose
+      # check skips without a range.
+      - name: The base commit's copy of the co-author check
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.sha }}
+        run: git worktree add --detach "$RUNNER_TEMP/coauthor-base" "$BASE_SHA"
       - name: The branch's co-author trailers name the project's addresses
-        run: go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
+        run: |
+          cd "$RUNNER_TEMP/coauthor-base"
+          go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
         env:
           SHIFT2EU_COAUTHOR_RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '' }}
           SHIFT2EU_COAUTHOR_CHECK: ${{ github.event_name == 'pull_request' && 'require' || '' }}

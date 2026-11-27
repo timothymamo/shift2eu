@@ -306,23 +306,30 @@
 // the colon, as git accepts them) and carries an address
 // .github/co-author-addresses.txt does not list, or a malformed one, the list
 // read with git show from the range's base commit, never from the working tree,
-// so a pull request that changes only the list is checked against the old one
-// (a change to the check itself is for the maintainer's code-owner review to
-// catch), git runs with --no-replace-objects, and a base
+// so a pull request that changes only the list is checked against the old one,
+// git runs with --no-replace-objects and with GIT_CONFIG_GLOBAL=/dev/null and
+// GIT_CONFIG_NOSYSTEM=1, so no global or system git configuration changes what
+// it reads (issue #689), and a base
 // without a readable list is an error (coAuthorRangeFindings, issue #672): GitHub
 // credits that address's account, and a squash merge copies the trailers onto
 // main. A commit's author and committer address must be on the list too, since
 // a squash merge credits every distinct author, so a commit authored with a
 // third-party address fails with no trailer at all. CI's coauthor-trailers
-// job, part of the Lint check, passes the pull request's base..head over a full
+// job, part of the Lint check, runs the base commit's copy of this check, a
+// detached git worktree of the base, so a pull request that changes the check
+// is checked by the old one and its change counts once merged (issue #689); it
+// passes the pull request's base..head over a full
 // clone with SHIFT2EU_COAUTHOR_CHECK=require, so it never skips there and fails
 // a range that reads no commit (coAuthorCommitCount); every other run on a pull
 // request's shallow checkout skips. TestCoAuthorFindings,
 // TestParseCoAuthorAllowList, TestCoAuthorRange, TestCoAuthorCommitCount and
 // TestCoAuthorAllowListFile pin its helpers and the list;
-// TestCoAuthorRangeFindingsReadTheBaseAllowList and
-// TestCoAuthorRangeFindingsFailClosedOnTheBaseList (coauthortrailer_base_test.go)
-// pin the base commit's list on fixture repositories.
+// TestCoAuthorRangeFindingsReadTheBaseAllowList,
+// TestCoAuthorRangeFindingsFailClosedOnTheBaseList,
+// TestCoAuthorRangeFindingsIgnoreReplaceRefs and
+// TestCoAuthorRangeFindingsIsolateTheGitConfig (coauthortrailer_base_test.go)
+// pin the base commit's list, the replace refs and the git configuration the
+// check ignores on fixture repositories.
 //
 // TestOpenTofuRequiredVersionRuleStripsTheV (renovateopentofu_test.go, issue
 // #434) reads .github/renovate.json5 as JSON5, with the reader of
