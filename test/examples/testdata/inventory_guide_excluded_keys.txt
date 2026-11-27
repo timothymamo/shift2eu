@@ -35,5 +35,11 @@ key: dashboardEndpoint
 key: bootstrapAddress
 key: osProfile
 key: connectivityEndpoints
+# An HDInsight cluster's worker role carries the scripts the cluster runs and
+# their parameters (scriptActions) and the subnet it sits in
+# (virtualNetworkProfile), as it carries osProfile: PRD #571 keeps none of the
+# four, and the guide's query packs the worker role field by field.
+key: scriptActions
+key: virtualNetworkProfile
 prefix: ZookeeperConnectString
 prefix: BootstrapBroker

@@ -1163,7 +1163,10 @@ func inventoryGuides() []inventoryGuideCase {
 					capabilities: []string{"encryption-at-rest", "node-high-availability", "zone-high-availability"},
 				},
 				// A cluster of two worker nodes in no zone keeps serving through the
-				// loss of no node and no zone: only the encryption at rest is left.
+				// loss of no node and no zone: only the encryption at rest is left. Its
+				// kind is recorded as `Kafka` rather than `KAFKA`, the casing an ARM
+				// template writes and Azure returns as stored, so a program that compared
+				// the kind as it comes would leave this cluster unclassified.
 				{
 					id: "kafka-shop-audit", rawType: "Microsoft.HDInsight/clusters", category: "messaging.kafka",
 					capabilities: []string{"encryption-at-rest"},

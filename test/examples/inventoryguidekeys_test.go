@@ -108,11 +108,12 @@ const azureResourceGraphFixtures = "test/e2e/testdata/inventory-guide/azure/grap
 // azureHDInsightFixtureKeys are the fields the guide's Resource Graph projection
 // keeps of an HDInsight cluster (PRD #571, *Only the fields the program reads*):
 // the columns every row of the export carries, and the properties azure.jq reads
-// to recognise a cluster of kind KAFKA, to count its worker nodes and to size
-// them. The worker role is read out of the computeProfile.roles array, which
-// Resource Graph cannot trim inside, so that array is kept whole: the role's
-// name, its targetInstanceCount, its hardwareProfile.vmSize and its
-// dataDisksGroups are what the program reads of it.
+// to recognise a cluster of kind Kafka, to count its worker nodes and to size
+// them. The query expands the computeProfile.roles array, which Resource Graph
+// cannot trim inside, and packs the worker role back alone, so the fixture holds
+// one role per cluster: its name, its targetInstanceCount, its
+// hardwareProfile.vmSize and its dataDisksGroups, and no osProfile, scriptActions
+// or virtualNetworkProfile with them.
 var azureHDInsightFixtureKeys = []string{
 	"id", "name", "type", "kind", "location", "zones", "sku", "properties",
 	"clusterDefinition",
@@ -121,14 +122,16 @@ var azureHDInsightFixtureKeys = []string{
 	"dataDisksGroups", "disksPerNode", "diskSizeGB",
 }
 
-// hdInsightExcludedFixtureKeys are the two properties of an HDInsight cluster
-// PRD #571 excludes outright (*Only the fields the program reads*, *No
-// data-plane or configuration access*): osProfile holds the cluster's admin user,
-// its SSH key and its domain-join credentials, and connectivityEndpoints the
-// hosts it answers on. The guide reads an HDInsight cluster through Resource
-// Graph alone, never through a configuration call, so neither field reaches the
-// export in any row of it.
-var hdInsightExcludedFixtureKeys = []string{"osProfile", "connectivityEndpoints"}
+// hdInsightExcludedFixtureKeys are the properties of an HDInsight cluster PRD
+// #571 excludes from the guide's export (*Only the fields the program reads*,
+// *No data-plane or configuration access*): osProfile holds the cluster's admin
+// user, its SSH key and its domain-join credentials, connectivityEndpoints the
+// hosts it answers on, scriptActions the scripts the cluster runs with their
+// parameters, and virtualNetworkProfile the subnet it sits in. The guide reads an
+// HDInsight cluster through Resource Graph alone, and the query projects the
+// fields the program reads out of the cluster's roles rather than passing the
+// array whole, so none of the four reaches the export in any row of it.
+var hdInsightExcludedFixtureKeys = []string{"osProfile", "connectivityEndpoints", "scriptActions", "virtualNetworkProfile"}
 
 // excludedFixtureKeysPath is the one list of the fields PRD #571 excludes from
 // every projection and fixture of the guide's search and messaging calls, shared
@@ -785,6 +788,56 @@ func TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads(
 
 	if clusters == 0 {
 		t.Fatalf("%s holds no resource of type microsoft.hdinsight/clusters, so this check read nothing: PRD #571's milestone 4 records an HDInsight Kafka cluster in the export", azureResourceGraphFixtures)
+	}
+}
+
+// TestInventoryGuideAzureHDInsightFixtureCheckFindsAPlantedRoleField pins that
+// the check above fails an HDInsight fixture whose worker role carries a field
+// PRD #571 keeps out of the export. The query packs the worker role field by
+// field, so a role recorded whole is what the check has to catch, at the depth
+// the role sits at rather than at the row's top level.
+func TestInventoryGuideAzureHDInsightFixtureCheckFindsAPlantedRoleField(t *testing.T) {
+	t.Parallel()
+
+	planted := map[string]any{
+		"id":       "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.HDInsight/clusters/kafka-shop-audit",
+		"name":     "kafka-shop-audit",
+		"type":     "microsoft.hdinsight/clusters",
+		"location": "westeurope",
+		"properties": map[string]any{
+			"clusterDefinition": map[string]any{"kind": "Kafka"},
+			"connectivityEndpoints": []any{map[string]any{
+				"name": "gateway",
+				"host": "kafka-shop-audit.azurehdinsight.net",
+			}},
+			"computeProfile": map[string]any{
+				"roles": []any{map[string]any{
+					"name":                "workernode",
+					"targetInstanceCount": 2,
+					"hardwareProfile":     map[string]any{"vmSize": "Standard_D2s_v3"},
+					"osProfile": map[string]any{
+						"linuxOperatingSystemProfile": map[string]any{"username": "sshuser"},
+					},
+					"scriptActions": []any{map[string]any{
+						"name": "install-kafka",
+						"uri":  "https://example.com/install-kafka.sh",
+					}},
+					"virtualNetworkProfile": map[string]any{
+						"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/virtualNetworks/vnet-shop",
+					},
+				}},
+			},
+		},
+	}
+
+	problems := fixtureKeyProblems(planted, azureHDInsightFixtureKeys, readExcludedFixtureKeys(t))
+
+	for _, key := range hdInsightExcludedFixtureKeys {
+		want := "the fixture holds the key " + quotedKey(key) + ", which PRD #571 excludes from every projection"
+
+		if !slices.Contains(problems, want) {
+			t.Errorf("fixtureKeyProblems reported the keys of a planted HDInsight role as %v, want %q among them: an excluded field inside a worker role has to fail the fixture's check, not pass it", problems, want)
+		}
 	}
 }
 

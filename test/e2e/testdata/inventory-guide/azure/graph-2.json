@@ -1117,7 +1117,7 @@
       "zones": null,
       "properties": {
         "clusterDefinition": {
-          "kind": "KAFKA"
+          "kind": "Kafka"
         },
         "computeProfile": {
           "roles": [

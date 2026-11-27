@@ -1878,21 +1878,53 @@ const azureResourceGraphQueryMarker = `query="Resources`
 // a `="`, and the query's first pipe-less line.
 const azureResourceGraphQueryPrefix = `query="`
 
-// azureHDInsightProjectionFields are the HDInsight properties the guide's
-// Resource Graph projection may name (PRD #571, *Only the fields the program
-// reads*): the cluster's kind, which classifies it as messaging.kafka, and its
-// compute profile, whose worker roles the program counts and sizes. The roles
-// array is named whole because Resource Graph cannot trim inside an array, so
-// the role's name, its targetInstanceCount, its hardwareProfile.vmSize and its
-// dataDisksGroups reach the file with it.
-var azureHDInsightProjectionFields = []string{
+// azureHDInsightSourceFields are the fields of an HDInsight cluster the guide's
+// Resource Graph branch may name as the source of the properties it packs (PRD
+// #571, *Only the fields the program reads*): the cluster's kind, which
+// classifies it as messaging.kafka, and the worker role's name, count, size and
+// disks, which the program counts and sizes. Every other field of a cluster
+// stays out of the branch, osProfile (the admin user, its SSH key and its
+// domain-join credentials), scriptActions (the scripts and their parameters),
+// virtualNetworkProfile and connectivityEndpoints first among them.
+var azureHDInsightSourceFields = []string{
 	"properties.clusterDefinition.kind",
-	"properties.computeProfile.roles",
+	"role.name",
+	"role.targetInstanceCount",
+	"role.hardwareProfile.vmSize",
+	"role.dataDisksGroups[0].disksPerNode",
+	"role.dataDisksGroups[0].diskSizeGB",
 }
 
-// azurePropertyPath matches one property path of the guide's Resource Graph
-// query: `properties.` and one or more dotted segments.
-var azurePropertyPath = regexp.MustCompile(`properties(?:\.[A-Za-z0-9_]+)+`)
+// azureHDInsightRolesPath is the one field the branch may name only as the
+// source of an `mv-expand`: Resource Graph cannot trim inside an array, so the
+// branch expands the roles into one row per role, keeps the worker role and
+// packs that role back as a one-element array. Named as a value of bag_pack, or
+// projected as a column, the array would reach the file whole, every role's
+// osProfile, scriptActions and virtualNetworkProfile with it.
+const azureHDInsightRolesPath = "properties.computeProfile.roles"
+
+// azureHDInsightExcludedNames are the names the part of the query that reads an
+// HDInsight cluster must hold nowhere, whatever the projection: PRD #571
+// excludes osProfile and connectivityEndpoints outright (the cluster's admin
+// user, its SSH key, the hosts it answers on), and scriptActions and
+// virtualNetworkProfile carry the scripts the cluster runs and the network it
+// sits in, which the program reads no field of.
+var azureHDInsightExcludedNames = []string{"osProfile", "connectivityEndpoints", "scriptActions", "virtualNetworkProfile"}
+
+// azureFieldPath matches one field path of the guide's Resource Graph query: the
+// name `properties` or a role, then one or more dotted segments, each optionally
+// indexed, so that properties.clusterDefinition.kind and
+// role.dataDisksGroups[0].disksPerNode are each one path. White space around the
+// dots and the index is part of the match, so a path the query breaks over two
+// lines is still read as one.
+var azureFieldPath = regexp.MustCompile(`(?i)\b(?:properties|role)(?:\s*\.\s*[A-Za-z0-9_]+(?:\s*\[\s*\d+\s*\])?)+`)
+
+// azureExpandSource matches the `mv-expand <role> =` the branch must write before
+// the roles array it expands.
+var azureExpandSource = regexp.MustCompile(`(?i)\bmv-expand\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*$`)
+
+// azureBareProperties matches the name `properties` wherever a query writes it.
+var azureBareProperties = regexp.MustCompile(`(?i)\bproperties\b`)
 
 // azureResourceGraphQuery returns the KQL the guide's Azure section builds for
 // its Resource Graph call.
@@ -1926,28 +1958,180 @@ func azureResourceGraphQuery(t *testing.T, guide string) string {
 	return rest[:end]
 }
 
-// azureHDInsightBranch returns the case branch of the Resource Graph query that
-// projects an HDInsight cluster's properties: the text from the cluster's type
-// to the next branch, or to the query's closing `dynamic(null)`. It reports
+// azureHDInsightBranch returns the part of the Resource Graph query that reads an
+// HDInsight cluster: the text from the cluster's type filter to the end of that
+// branch. A branch ends at the next one's type filter, at the `case(...)`'s
+// closing `dynamic(null)`, at the line that closes the `union(...)` the branch
+// sits in, and at the query's last `| project` line, which names the reduced
+// properties column of every type and so is no branch's own text. It reports
 // false when the query holds no such branch.
+//
+// This reads the query's shape rather than parsing KQL: a branch written in
+// another shape may end elsewhere, and the review of the guide's change has to
+// weigh that. What this cannot decide is left to the review rather than guessed
+// at here.
 func azureHDInsightBranch(query string) (string, bool) {
 	const marker = "microsoft.hdinsight/clusters"
 
-	at := strings.Index(strings.ToLower(query), marker)
+	lowered := strings.ToLower(query)
+
+	at := strings.Index(lowered, marker)
 	if at < 0 {
 		return "", false
 	}
 
-	rest := query[at+len(marker):]
-	end := len(rest)
+	start := at + len(marker)
+	end := len(query)
 
 	for _, terminator := range []string{"type =~", "type in~", "dynamic(null)"} {
-		if i := strings.Index(strings.ToLower(rest), terminator); i >= 0 && i < end {
-			end = i
+		if i := strings.Index(lowered[start:], terminator); i >= 0 {
+			end = min(end, start+i)
 		}
 	}
 
-	return rest[:end], true
+	for _, offset := range azureBranchEnds(query) {
+		if offset > start {
+			end = min(end, offset)
+		}
+	}
+
+	return query[start:end], true
+}
+
+// azureBranchEnds returns the offsets of the lines that end a branch of a union:
+// a line opening with the parenthesised union's closing `)`, and the query's
+// last `| project` line, which every branch of the union is fed through.
+func azureBranchEnds(query string) []int {
+	var ends []int
+
+	lastProject := -1
+
+	for offset := 0; offset < len(query); {
+		line := query[offset:]
+		if i := strings.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+		}
+
+		switch trimmed := strings.TrimSpace(line); {
+		case strings.HasPrefix(trimmed, ")"):
+			ends = append(ends, offset)
+		case strings.HasPrefix(trimmed, "| project"):
+			lastProject = offset
+		}
+
+		offset += len(line) + 1
+	}
+
+	if lastProject >= 0 {
+		ends = append(ends, lastProject)
+	}
+
+	return ends
+}
+
+// azureHDInsightBranchProblems returns what is wrong with the part of the query
+// that reads an HDInsight cluster, one sentence per problem and no problem for a
+// branch that keeps only the fields the program reads (PRD #571).
+func azureHDInsightBranchProblems(branch string) []string {
+	var problems []string
+
+	expansions := 0
+
+	named := map[string]bool{}
+
+	for _, loc := range azureFieldPath.FindAllStringIndex(branch, -1) {
+		path := withoutSpace(branch[loc[0]:loc[1]])
+		named[path] = true
+
+		if strings.EqualFold(path, azureHDInsightRolesPath) {
+			if !azureExpandsInPlace(branch, loc[0]) {
+				problems = append(problems, fmt.Sprintf("names %q as a value or a column, want it only as the source of an `mv-expand`: the array passed whole carries every role's osProfile, scriptActions and virtualNetworkProfile into the file the program reads", path))
+
+				continue
+			}
+
+			expansions++
+
+			continue
+		}
+
+		if !slices.Contains(azureHDInsightSourceFields, path) {
+			problems = append(problems, fmt.Sprintf("names %q, want only the fields the program reads of a cluster (%s): a field the program does not read would keep a property the guide's raw output should drop",
+				path, strings.Join(azureHDInsightSourceFields, ", ")))
+		}
+	}
+
+	if expansions == 0 {
+		problems = append(problems, "never expands the roles array with an `mv-expand`, want one naming properties.computeProfile.roles: Resource Graph cannot trim inside an array, so the branch expands it and packs the worker role back alone")
+	}
+
+	for _, field := range azureHDInsightSourceFields {
+		if !named[field] {
+			problems = append(problems, fmt.Sprintf("names no %q, want it: the program reads the cluster's kind to classify it and its worker role to count and size it", field))
+		}
+	}
+
+	if !strings.Contains(strings.ToLower(branch), "workernode") {
+		problems = append(problems, "keeps no worker role, want the branch to filter one by name (`where role.name =~ 'workernode'`): a cluster's worker count and size are its workers' alone, not its head nodes'")
+	}
+
+	for _, excluded := range azureHDInsightExcludedNames {
+		if strings.Contains(strings.ToLower(branch), strings.ToLower(excluded)) {
+			problems = append(problems, fmt.Sprintf("names %q, want it nowhere: PRD #571 excludes it from every projection of an HDInsight cluster, and the program reads no field of it", excluded))
+		}
+	}
+
+	for _, loc := range azureBareProperties.FindAllStringIndex(branch, -1) {
+		if azurePropertiesPathKeyOrTarget(branch, loc[0], loc[1]) {
+			continue
+		}
+
+		problems = append(problems, "names `properties` whole, want the branch to build it with bag_pack from the fields the program reads: a cluster's properties bag passed on as it comes carries osProfile and connectivityEndpoints with it")
+	}
+
+	return problems
+}
+
+// azureExpandsInPlace reports whether the path at offset at is the source of an
+// `mv-expand <role> =`, the only way the branch may name the roles array.
+func azureExpandsInPlace(branch string, at int) bool {
+	before := branch[:at]
+
+	if i := strings.LastIndexAny(before, "\n|;"); i >= 0 {
+		before = before[i+1:]
+	}
+
+	return azureExpandSource.MatchString(collapseSpace(before))
+}
+
+// azurePropertiesPathKeyOrTarget reports whether the name `properties` at a match
+// of azureBareProperties is no bare naming of the bag: the start of a property
+// path, the quoted key of a bag_pack, or the name the branch packs its reduced
+// properties into.
+func azurePropertiesPathKeyOrTarget(branch string, start, end int) bool {
+	after := strings.TrimLeft(branch[end:], " \t\r\n")
+	if strings.HasPrefix(after, ".") || strings.HasPrefix(after, "[") || strings.HasPrefix(after, "=") {
+		return true
+	}
+
+	before := strings.TrimRight(branch[:start], " \t\r\n")
+
+	return strings.HasSuffix(before, "'") || strings.HasSuffix(before, `"`)
+}
+
+// azurePacksProperties reports whether the query builds a reduced properties bag
+// at a `properties =` assignment of its own, as every shape of it has to.
+func azurePacksProperties(query string) bool {
+	for _, loc := range azureBareProperties.FindAllStringIndex(query, -1) {
+		assigned := strings.HasPrefix(strings.TrimLeft(query[loc[1]:], " \t\r\n"), "=")
+		quoted := strings.HasSuffix(strings.TrimRight(query[:loc[0]], " \t\r\n"), "'")
+
+		if assigned && !quoted {
+			return true
+		}
+	}
+
+	return false
 }
 
 // TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads
@@ -1992,30 +2176,126 @@ func TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads(
 		}
 	}
 
+	if !azurePacksProperties(query) {
+		t.Errorf("%s's Resource Graph query builds no reduced `properties` bag (`properties = bag_pack(...)`, or the `extend properties = case(...)` it has today), want one: without it the query writes every resource's properties whole, an HDInsight cluster's osProfile and connectivityEndpoints included\n%s",
+			guidePath, query)
+	}
+
 	branch, ok := azureHDInsightBranch(query)
 	if !ok {
-		t.Errorf("%s's Resource Graph query holds no `microsoft.hdinsight/clusters` branch, want one projecting only %s: an HDInsight cluster of kind KAFKA is messaging.kafka (PRD #571), and the program reads its kind, its worker count and its workers' size from that branch\n%s",
-			guidePath, strings.Join(azureHDInsightProjectionFields, ", "), query)
+		t.Errorf("%s's Resource Graph query holds no `microsoft.hdinsight/clusters` branch, want one that expands the cluster's worker roles and packs only %s: an HDInsight cluster of kind Kafka is messaging.kafka (PRD #571), and the program reads its kind, its worker count and its workers' size from that branch\n%s",
+			guidePath, strings.Join(azureHDInsightSourceFields, ", "), query)
 
 		return
 	}
 
-	named := azurePropertyPath.FindAllString(branch, -1)
-	slices.Sort(named)
-	named = slices.Compact(named)
-
-	for _, path := range named {
-		if !slices.Contains(azureHDInsightProjectionFields, path) {
-			t.Errorf("%s's Resource Graph query names %q in its HDInsight branch, want only the properties PRD #571 reads of a cluster (%s): a property the program does not read would keep a field the guide's raw output should drop, and osProfile (the admin user, the SSH key, the domain-join credentials) and connectivityEndpoints (the hosts the cluster answers on) are excluded outright\n%s",
-				guidePath, path, strings.Join(azureHDInsightProjectionFields, ", "), branch)
-		}
+	for _, problem := range azureHDInsightBranchProblems(branch) {
+		t.Errorf("%s's Resource Graph query's HDInsight branch %s\n%s", guidePath, problem, branch)
 	}
+}
 
-	for _, path := range azureHDInsightProjectionFields {
-		if !slices.Contains(named, path) {
-			t.Errorf("%s's Resource Graph query names no %q in its HDInsight branch, want it: the program reads the cluster's kind to classify it and its worker roles to count and size them, and Resource Graph cannot trim inside the roles array, so that array is the field to keep\n%s",
-				guidePath, path, branch)
-		}
+// TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch pins the branch
+// rules the check above applies: a branch that passes a field past PRD #571 is
+// reported, and the branch the guide has to write is not. The check above reads
+// the guide's own branch, which does not exist yet; this one holds the rules to
+// branches written here, so a rule that stopped reading a leak cannot pass on a
+// branch it never saw.
+func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T) {
+	t.Parallel()
+
+	const workerRole = `
+      'computeProfile', bag_pack('roles', pack_array(bag_pack(
+        'name', role.name,
+        'targetInstanceCount', role.targetInstanceCount,
+        'hardwareProfile', bag_pack('vmSize', role.hardwareProfile.vmSize),
+        'dataDisksGroups', pack_array(bag_pack(
+          'disksPerNode', role.dataDisksGroups[0].disksPerNode,
+          'diskSizeGB', role.dataDisksGroups[0].diskSizeGB)))))`
+
+	const kind = `'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind)`
+
+	tests := []struct {
+		name string
+		// branch is the part of the query that reads an HDInsight cluster, as
+		// azureHDInsightBranch hands it to the rules.
+		branch string
+		// want are the phrases each of which a reported problem has to hold.
+		want []string
+	}{{
+		name: "a branch that expands the worker role and packs only the fields the program reads",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, kind, location, zones, sku, properties = bag_pack(` + kind + `,` + workerRole + `)`,
+	}, {
+		name: "a branch that passes the roles array whole",
+		branch: `'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'computeProfile', bag_pack('roles', properties.computeProfile.roles))`,
+		want: []string{
+			`names "properties.computeProfile.roles" as a value or a column`,
+			"never expands the roles array",
+		},
+	}, {
+		name: "a branch that names a property the program does not read",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'securityProfile', properties.securityProfile,` + workerRole + `)`,
+		want: []string{`names "properties.securityProfile"`},
+	}, {
+		name: "a branch that names osProfile",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'osProfile', role.osProfile,` + workerRole + `)`,
+		want: []string{`names "osProfile"`},
+	}, {
+		name: "a branch that names scriptActions and virtualNetworkProfile",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'scriptActions', role.scriptActions,
+    'virtualNetworkProfile', role.virtualNetworkProfile,` + workerRole + `)`,
+		want: []string{`names "scriptActions"`, `names "virtualNetworkProfile"`},
+	}, {
+		name: "a branch that projects properties whole for the type",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, kind, location, zones, sku, properties`,
+		want: []string{"names `properties` whole"},
+	}, {
+		name: "a branch that keeps no worker role",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| project id, name, type, kind, location, zones, sku, properties = bag_pack(` + kind + `,` + workerRole + `)`,
+		want: []string{"keeps no worker role"},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := azureHDInsightBranchProblems(tc.branch)
+
+			for _, phrase := range tc.want {
+				if !slices.ContainsFunc(problems, func(problem string) bool {
+					return strings.Contains(problem, phrase)
+				}) {
+					t.Errorf("azureHDInsightBranchProblems reported no problem holding %q, want one: a branch that leaks a field past PRD #571 has to fail the guide's check, not pass it\nreported:\n%s\nbranch:%s",
+						phrase, strings.Join(problems, "\n"), tc.branch)
+				}
+			}
+
+			if len(tc.want) == 0 && len(problems) != 0 {
+				t.Errorf("azureHDInsightBranchProblems reported %d problem(s) for a branch that keeps only the fields the program reads, want none: this check would fail the branch the guide has to write\nreported:\n%s\nbranch:%s",
+					len(problems), strings.Join(problems, "\n"), tc.branch)
+			}
+		})
 	}
 }
 
