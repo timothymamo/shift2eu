@@ -315,6 +315,15 @@ func TestE2EExecExempt(t *testing.T) {
 			flags: []string{"-ldflags", "-X main.a=b\n-X main.c=d"},
 		},
 		{
+			// A carriage return is refused as well; the odd-field rule refuses
+			// it too, but this pins the refusal the comment above documents, not
+			// the mechanism that produces it.
+			name:  "an -ldflags value that separates two stamps with a carriage return takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\r-X main.c=d"},
+		},
+		{
 			// A stamp is an import path and a symbol, one = and a plain value: a
 			// second = is no value the linker takes as this pair.
 			name:  "an -ldflags value whose -X names a second = takes the exemption away",
