@@ -246,11 +246,14 @@ func TestE2EExecExempt(t *testing.T) {
 			flags: []string{"-ldflags", "-X example.com/pkg.version"},
 		},
 		// The go command does not split the value on whitespace alone: cmd/go
-		// splits it with cmd/internal/quoted.Split, where a quote opens a field
-		// that ends at the closing quote even mid-field, and a backslash escapes
-		// the next byte. A field the value writes as one word can therefore carry
-		// a second flag, so a value holding a quote or a backslash is no stamp set
-		// and the exemption is lost (issue #195).
+		// splits it with cmd/internal/quoted.Split, where a quote at the start of
+		// a field opens a field that runs to the matching quote and ends there,
+		// so the text right after the closing quote starts a new field. A field
+		// the value writes as one word can therefore carry a second flag. A quote
+		// further inside a field and a backslash are ordinary bytes that
+		// quoted.Split never unescapes; the checker refuses both anyway, so a
+		// value holding a quote or a backslash is no stamp set and the exemption
+		// is lost (issue #195).
 		{
 			name: "an -ldflags value with a single-quoted field that carries another flag takes the exemption away",
 			cmd:  "go",
