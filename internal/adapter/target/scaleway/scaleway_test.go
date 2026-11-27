@@ -1972,7 +1972,8 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 // availability alone. Nothing here lists zone-high-availability:
 // TestOpenSearchAndKafkaOfferingsAndPrices pins that neither Kafka tier claims
 // it, so a cluster that spans zones loses only that one against Multi-AZ and
-// both against Single-AZ.
+// both against Single-AZ, and a search cluster that spans zones, PRD #571's
+// acceptance example, is partial on both of Scaleway's OpenSearch offerings.
 func TestOpenSearchAndKafkaBestOfferingAndFit(t *testing.T) {
 	t.Parallel()
 
@@ -2029,6 +2030,16 @@ func TestOpenSearchAndKafkaBestOfferingAndFit(t *testing.T) {
 			want: []candidateExpectation{
 				{Name: openSearchStandalone, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Snapshots}},
 				{Name: openSearchHA, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.Snapshots}},
+			},
+		},
+		{
+			name:         "search.opensearch/zone-high-availability",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			wantFit:      mapping.Partial,
+			want: []candidateExpectation{
+				{Name: openSearchStandalone, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
+				{Name: openSearchHA, Fit: mapping.Partial, Missing: []taxonomy.Capability{taxonomy.ZoneHighAvailability}},
 			},
 		},
 		{
