@@ -165,24 +165,26 @@
 // a command reaches a struct field only through a use the check vouches for.
 // The proven Env values are a composite literal, a make, an append of one, and
 // a call to a helper of the same file, with no named result and no defer, that
-// returns one. The exemption the test declares (e2eToolchainCommands) is keyed on the
-// name and the subcommand, both literals: `go build` and `go list`, which need
-// that environment and print none of it, and only while every literal flag
-// after the subcommand is one of the allow-list e2eToolchainFlags (-trimpath,
-// -o, -deps, and -ldflags for a value of -X stamps alone, each an import path,
-// a symbol, one = and a plain value, with no quote, backslash or white space
-// but a space or a tab anywhere in the value: cmd/go splits it with
-// cmd/internal/quoted.Split, where a quote or a backslash can carry a second
-// linker flag inside what reads as one field, and which splits on other white
-// space than strings.Fields does). A
-// run chained to its construction is never exempt, and a spread argument and a Path or Args
-// assigned on the command take the exemption away too. Four gaps are accepted
-// and left to review: the rule
+// returns one. The exemption the test declares (e2eToolchainCommands) is keyed
+// on the name and the subcommand, both literals: `go build` and `go list`,
+// which need that environment and print none of it, and only while every
+// literal flag after the subcommand is one of the allow-list e2eToolchainFlags
+// (-trimpath, -o, -deps, and -ldflags for a value of -X stamps alone, each an
+// import path, a symbol, one = and a plain value, with no quote, no backslash
+// and no white space other than a space or a tab anywhere in the value: cmd/go
+// splits it with cmd/internal/quoted.Split, where a quote at the start of a
+// field opens a field that runs to the matching quote, spaces included, so one
+// quoted span can carry a second linker flag, a backslash is an ordinary byte
+// it never unescapes and is refused defensively, and which splits on fewer
+// characters than strings.Fields: space, tab, \n and \r, not all of Unicode's
+// white space). A run chained to its construction is never exempt, and a
+// spread argument and a Path or Args assigned on the command take the
+// exemption away too. Four gaps are accepted and left to review: the rule
 // follows the source, not the flow (an Env assigned in a branch that never
-// runs, or in a closure, counts); a path built at run time; a command built in,
-// or handed to, another file or package (a decoder such as json.Unmarshal, or
-// a helper of a sibling file that imports reflect but not os/exec, writing Env
-// through a command that escaped into it); and a non-literal toolchain
+// runs, or in a closure, counts); a path built at run time; a command built
+// in, or handed to, another file or package (a decoder such as json.Unmarshal,
+// or a helper of a sibling file that imports reflect but not os/exec, writing
+// Env through a command that escaped into it); and a non-literal toolchain
 // argument that holds a flag, alongside which a Dir set on an exempt command
 // keeps the exemption, the go command then reading that directory's go.mod
 // and go.work.

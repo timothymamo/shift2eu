@@ -70,18 +70,26 @@ var e2eLinkerStamp = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.[A-Za-z_][A-Za-z0-9_
 // differs from a plain split on whitespace in two ways, and a value that could
 // tell them apart is refused outright, so this check reads every value it
 // admits exactly as cmd/go does:
-//   - a quote (' or ") closes a field mid-word and a backslash escapes the
-//     next byte, so a field read as one stamp can hand the linker a second
-//     flag (-extld, which runs a named program with the go command's
-//     environment);
-//   - quoted.Split separates fields only on space, tab, \n and \r, where
-//     strings.Fields also splits on \v, \f, U+0085, U+00A0 and the rest of
-//     Unicode's white space. Any white space but a space or a tab is refused,
-//     \n and \r too, which quoted.Split would split on: a stricter choice, as a
-//     stamp set on one line is all the e2e tier writes.
+//   - a quote (' or ") at the start of a field opens a field that runs to the
+//     matching quote, spaces included, and ends there, so the text right after
+//     the closing quote starts a new field: 'main.a=b'-extld=x is two
+//     arguments, and one quoted span can carry a second linker flag (-extld,
+//     which runs a named program with the go command's environment). A quote
+//     further inside a field is an ordinary byte, and so is a backslash, which
+//     quoted.Split never unescapes; both are refused anyway, so no reading of
+//     either can matter;
+//   - quoted.Split separates fields only on space, tab, \n and \r, fewer
+//     characters than strings.Fields, which also splits on \v, \f, U+0085,
+//     U+00A0 and the rest of Unicode's white space. White space other than a
+//     space or a tab is refused, \n and \r too, which quoted.Split would split
+//     on: a stricter choice, as a stamp set on one line is all the e2e tier
+//     writes. Today the odd-field rule and e2eLinkerStamp would refuse such a
+//     value already; the guard stays on purpose, so the safety does not depend
+//     on that regexp staying strict.
 //
-// Each name=value field must match e2eLinkerStamp and may not start with "-",
-// and each field before it must be exactly -X.
+// So the value holds no quote, no backslash and no white space other than a
+// space or a tab. Each name=value field must match e2eLinkerStamp and may not
+// start with "-", and each field before it must be exactly -X.
 func e2eLinkerStamps(value string) bool {
 	if strings.ContainsAny(value, `'"\`) {
 		return false
@@ -262,8 +270,9 @@ func TestE2EExecExempt(t *testing.T) {
 			},
 		},
 		{
-			// A backslash escapes the next byte, so the value the linker reads is
-			// not the one the source wrote.
+			// quoted.Split reads a backslash as an ordinary byte, with no
+			// unescaping; the checker refuses it anyway, so its reading never
+			// matters.
 			name:  "an -ldflags value with a backslash takes the exemption away",
 			cmd:   "go",
 			sub:   "build",
