@@ -658,7 +658,11 @@ func checkCoAuthorBaseCopyStep(t *testing.T, item ciItem) {
 	// worktree add at all (issue #689).
 	wantKeys(t, "coauthor-trailers base-copy step", item.lines, "name", "env", "run")
 
-	script, ok := ciRunScript(item.lines)
+	script, ok, err := ciRunScript(item.lines)
+	if err != nil {
+		t.Fatalf("the coauthor-trailers base-copy step on line %d: %v", item.num, err)
+	}
+
 	if !ok {
 		t.Fatalf("line %d: the coauthor-trailers job's second step holds no run:, want the copy of the base commit's "+
 			"test/lint: a job that copies nothing runs the pull request's own check, which the pull request can weaken "+
@@ -748,7 +752,11 @@ func checkCoAuthorTestStep(t *testing.T, item ciItem) {
 	// those three byte-identical and still pass (issue #689).
 	wantKeys(t, "coauthor-trailers test step", item.lines, "name", "run", "env")
 
-	script, ok := ciRunScript(item.lines)
+	script, ok, err := ciRunScript(item.lines)
+	if err != nil {
+		t.Fatalf("the coauthor-trailers test step on line %d: %v", item.num, err)
+	}
+
 	if !ok {
 		t.Fatalf("line %d: the coauthor-trailers step that runs the check holds no run:, so CI checks no co-author trailer",
 			item.num)
@@ -778,17 +786,26 @@ func checkCoAuthorTestStep(t *testing.T, item ciItem) {
 
 // ciRunScript returns the lines a step's run: hands the shell: the value of a
 // `run: command` line as its one line, or the lines of a `run: |` block scalar.
-func ciRunScript(step []ciLine) ([]ciLine, bool) {
+// Any other block indicator is an error naming the style it found: a folded or
+// chomped block hands the shell other text than the lines it holds (issue #706).
+func ciRunScript(step []ciLine) (script []ciLine, ok bool, err error) {
 	num, value, ok := ciScalar(step, "run")
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 
-	if value != "|" && value != ">" {
-		return []ciLine{{num: num, indent: 0, text: value}}, true
+	if value == "|" {
+		script, _ = ciBlock(step, "run")
+
+		return script, true, nil
 	}
 
-	return ciBlock(step, "run")
+	if strings.HasPrefix(value, "|") || strings.HasPrefix(value, ">") {
+		return nil, true, fmt.Errorf("line %d: run: uses the block indicator %q, want a literal `run: |` block or a "+
+			"one-line command: any other style hands the shell other text than the lines it holds (issue #706)", num, value)
+	}
+
+	return []ciLine{{num: num, indent: 0, text: value}}, true, nil
 }
 
 // TestCIRunScriptAcceptsOnlyALiteralBlockScalar pins ciRunScript to the styles
