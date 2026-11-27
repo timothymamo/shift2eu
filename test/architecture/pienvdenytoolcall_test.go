@@ -183,6 +183,23 @@ func TestPiEnvDenyExtensionRefusesTheAppTokenFolderOfFileTools(t *testing.T) {
 			call:    piToolCall{ToolName: "read", Input: map[string]string{"path": filepath.Join(home, filepath.FromSlash(shift2euConfigFolder), "agents-app-identity")}},
 			refused: true,
 		},
+		// The folder refused by the spellings a path carries, wherever that path
+		// resolves (issue #662, finding S1; issue #691): these two are relative to the
+		// repository, so neither is the folder under the home directory, under
+		// anything in it or above it, and only a check of the path's text refuses
+		// them. A path naming the folder is refused as a path naming the home
+		// directory's folder is, since the two spell the same place to a reader and a
+		// path built at run time can carry either.
+		{
+			name:    "read the App's token file by a path spelling the folder with a doubled separator",
+			call:    piToolCall{ToolName: "read", Input: map[string]string{"path": "docs/x/.config//shift2eu/" + shift2euAppFile}},
+			refused: true,
+		},
+		{
+			name:    "read a path spelling the App's folder with a dot segment",
+			call:    piToolCall{ToolName: "read", Input: map[string]string{"path": "docs/x/.config/./shift2eu"}},
+			refused: true,
+		},
 		// grep and find read the contents of the tree they are pointed at, so the
 		// folder, an ancestor of it and a pattern that names it are each a way in.
 		{
