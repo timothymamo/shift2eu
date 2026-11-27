@@ -783,6 +783,82 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		mutated: appended("aws ec2 describe-instances AWS_ENDPOINT_URL=https://example.com"),
 		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL=https://example.com")},
 	}, {
+		// A denied variable set on a line of its own, the guide's own idiom for
+		// the region: no line of the sequence names the CLI, and the read below it
+		// still reads the variable's endpoint.
+		name:    "an endpoint exported on a line of its own",
+		mutated: appended("export AWS_ENDPOINT_URL=https://example.com", "aws ec2 describe-instances"),
+		want:    []string{at(plantedLine, "AWS_ENDPOINT_URL=https://example.com")},
+	}, {
+		name:    "a certificate bundle exported on a line of its own",
+		mutated: appended("export AWS_CA_BUNDLE=./corp.pem", "aws ec2 describe-instances"),
+		want:    []string{at(plantedLine, "AWS_CA_BUNDLE=./corp.pem")},
+	}, {
+		name:    "an impersonation exported on a line of its own",
+		mutated: appended("export CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com", "gcloud compute instances list"),
+		want:    []string{at(plantedLine, "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT=sa@example-project.iam.gserviceaccount.com")},
+	}, {
+		name:    "an active gcloud configuration exported on a line of its own",
+		mutated: appended("export CLOUDSDK_ACTIVE_CONFIG_NAME=shop", "gcloud compute instances list"),
+		want:    []string{at(plantedLine, "CLOUDSDK_ACTIVE_CONFIG_NAME=shop")},
+	}, {
+		name:    "an az connection verification disabled on a line of its own",
+		mutated: appended("export AZURE_CLI_DISABLE_CONNECTION_VERIFICATION=true", "az vm list-sizes"),
+		want:    []string{at(plantedLine, "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION=true")},
+	}, {
+		// A denied flag on a line of its own: the argument it follows spans
+		// physical lines without a trailing `\`, so the flag belongs to no CLI
+		// name's field sequence, and the text-wide rule is what refuses it.
+		name: "a denied flag after a multi-line quote",
+		mutated: appended("```bash",
+			"aws ec2 describe-instances --query '",
+			"  Reservations[].Instances[].InstanceId",
+			"}' --no-verify-ssl > \"$out/x.json\"",
+			"```"),
+		want: []string{at(plantedLine+3, "--no-verify-ssl")},
+	}, {
+		// A single quote is no field separator: the word a denied flag arrives
+		// with must be trimmed before the flag is read.
+		name:    "a denied flag in a bash -c argument that closes its quote",
+		mutated: appended(`sh -c 'aws ec2 describe-instances --no-verify-ssl'`),
+		want:    []string{at(plantedLine, "aws ec2 describe-instances --no-verify-ssl")},
+	}, {
+		name:    "a denied flag the invocation quotes",
+		mutated: appended(`aws ec2 describe-instances '--endpoint-url' https://example.com`),
+		want:    []string{at(plantedLine, "aws ec2 describe-instances '--endpoint-url'")},
+	}, {
+		name:    "an az rest whose url flag is quoted",
+		mutated: fence("```bash", "```", "az rest --method get '--url' https://example.com/x"),
+		want:    []string{at(plantedLine+1, "az rest")},
+	}, {
+		// A read that ends at its line's last field takes the next line's fields,
+		// even though the words so far already read: the words that make it no
+		// read may be on the line the text wraps onto.
+		name:    "a read whose denying flag a code span wraps",
+		mutated: appended("Point it at LocalStack: `aws ec2 describe-instances", "--endpoint-url http://localhost:4566`."),
+		want:    []string{at(plantedLine, "aws ec2 describe-instances --endpoint-url")},
+	}, {
+		name:    "an az rest whose second method a code span wraps",
+		mutated: appended("Or `az rest --method get --url https://management.azure.com/x", "--method post`."),
+		want:    []string{at(plantedLine, "az rest")},
+	}, {
+		name:    "an az rest whose address a code span wraps",
+		mutated: appended("Or `az rest --method get --url", "https://example.com/x`."),
+		want:    []string{at(plantedLine, "az rest")},
+	}, {
+		// A CRLF line break: the fields end at the name, and the write is on the
+		// carriage return's next line.
+		name:    "a crlf line break after the cli's name",
+		mutated: appended("Tag it by hand with `aws\r", "ec2 create-tags --resources i-0123456789abcdef0`."),
+		want:    []string{at(plantedLine, "aws ec2 create-tags")},
+	}, {
+		// The field scan splits `=` apart, so the scan refuses an inline method
+		// without azRestReads' inline branch; the branch is a defence for reads on
+		// unsplit words.
+		name:    "an az rest whose method is written with an equals sign",
+		mutated: fence("```bash", "```", "az rest --method=post --url https://management.azure.com/x"),
+		want:    []string{at(plantedLine+1, "az rest --method")},
+	}, {
 		// az rest: one GET is what decides, and an address, a resource, a body or a
 		// method the check would not read hide a write in a read's clothes.
 		name:    "an az rest that addresses another API",
@@ -947,6 +1023,12 @@ func TestCloudReadDecisions(t *testing.T) {
 		{cli: "aws", words: []string{"ec2", "describe-instances", "--endpoint", "https://example.com"}, verb: "ec2 describe-instances --endpoint"},
 		{cli: "aws", words: []string{"ec2", "describe-instances", "--cli-input-json", "./shop.json"}, verb: "ec2 describe-instances --cli-input-json"},
 		{cli: "aws", words: []string{"ec2", "describe-instances", "--cli-input-yaml", "./shop.yaml"}, verb: "ec2 describe-instances --cli-input-yaml"},
+		// A single quote is no field separator, so a denied flag or an az rest flag
+		// reaches reads with the quote still on it, and reads trims it.
+		{cli: "aws", words: []string{"ec2", "describe-instances", "--no-verify-ssl'"}, verb: "ec2 describe-instances --no-verify-ssl"},
+		{cli: "aws", words: []string{"ec2", "describe-instances", "'--endpoint-url'", "https://example.com"}, verb: "ec2 describe-instances --endpoint-url"},
+		{cli: "az", words: []string{"rest", "--method", "get", "'--url'", "https://example.com/x"}, verb: "rest --url https://example.com/x"},
+		{cli: "az", words: []string{"rest", "'--method'", "post", "--url", "https://management.azure.com/x"}, verb: "rest --method post"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--resou", "https://graph.microsoft.com"}, verb: "rest --resou"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--head", "x=y"}, verb: "rest --head"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--bod", "{}"}, verb: "rest --bod"},
