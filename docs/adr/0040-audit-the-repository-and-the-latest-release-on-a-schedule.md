@@ -165,7 +165,7 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 | 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
 | 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (`internal/adapter/report/htmlreport`'s `FuzzReportEscaping` and `FuzzInventoryDecoding` today, Decision 5; issue #661) | checks, container, `--network none`, `GOPROXY=off` | no |
-| 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments as the `release-tag` skill reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | GitHub reads |
+| 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments as the `release-tag` skill reads them, Renovate's state (its Dependency Dashboard issue, and its open pull requests through `repos/{owner}/{repo}/pulls?state=open`, `renovate[bot]`'s alone, up to ten pages of 100, issue #660), dependencies changed since the last report | checks, workflow step | GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | artifact upload |
 | 17 | Check the artifacts, download and decrypt `checks-result` into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight | model, workflow steps | tools, artifact download |
 | 18 | The `security-audit` checklist across the whole tree, a review of what the agents may run, triage of rows 3 to 15 with a PoC or precise trace for each finding, the status of the last report's public findings, the structured result | model, Claude Code, sandboxed | Bash: none (enforced); Claude Code: the model API only, by configuration, not enforced |
@@ -3017,6 +3017,9 @@ datasource, whose Go toolchain group moves it with go.mod's go line.
 15, and never in a step that runs release code or a container: `contents` (the checkout, the latest
 release's tag, the release download), `attestations` (`gh attestation verify`, row 7), `actions`
 (scorecard's reads of the workflows' runs, row 6) and `issues` (Renovate's Dependency Dashboard, row 15).
+No `pull-requests` scope: row 15's list of the open pull requests (issue #660) reads a public
+repository's pull requests, which GitHub answers without authentication; should the job's token be
+refused them, the refusal is recorded in `read-refused.txt` and the limits, never a silent miss.
 No `packages` scope: the image is public, and rows 7 and 8 read the registry anonymously, with
 `DOCKER_CONFIG` an empty directory of the job's own. No read needs admin: scorecard's `Branch-Protection`
 and `Webhooks` checks are left out of its run (`scorecard-admin`, "not run (needs admin read)"), and row
@@ -3066,7 +3069,12 @@ scope above should allow is a finding, and a scope no read used is dropped.
   its pull requests filtered out with `select(.pull_request == null)` on the client, after one page of
   100 items, newest first: the open Renovate pull requests share that page, so the dashboard is missed only
   past 99 of them, and the limits line below then says no dashboard was found; a read that succeeded with no such issue writes the limits line `supply-chain:
-  no open Renovate Dependency Dashboard issue was found`, review round N) and its open pull requests; and `git diff` of the
+  no open Renovate Dependency Dashboard issue was found`, review round N) and its open pull requests
+  (`repos/{owner}/{repo}/pulls?state=open&per_page=100&page=N`, issue #660: each page's unfiltered
+  `count` beside Renovate's own, `select(.user.login == "renovate[bot]")`, with the named fields alone:
+  `number`, `title`, `draft`, `created_at`, `updated_at`, the head ref and the label names; a page the
+  budget skipped, one refused and one of fewer than 100 end the pages, and past ten pages the limits line
+  `supply-chain: more than 1000 open pull requests: Renovate's past the tenth page were not read`); and `git diff` of the
   dependency files (`go.mod`, `go.sum`, `tools/`, `Dockerfile`, the workflows, the Claude Code pin,
   `dev/lima.yaml`, `infra/tofu.yaml`) from the commit of the last report under `docs/security/audits/`.
 
@@ -3531,6 +3539,12 @@ its step, and by a case of its test:
   once there were more than 100. The read is now `state=open` through `[.[] | select(.pull_request ==
   null)]`, and a read that exited 0 with an empty array writes `supply-chain: no open Renovate Dependency
   Dashboard issue was found` to the limits.
+  *Amended 2026-11-27 (issue #660):* row 15's open Renovate pull requests were read through
+  `search/issues?q=repo:...+is:pr+is:open+author:app/renovate`, which answered the first audit run with
+  the Dependency Dashboard issue and no pull request. They are now listed through the pulls endpoint,
+  `repos/{owner}/{repo}/pulls?state=open`, one page of 100 at a time, kept to `renovate[bot]`'s with the
+  named fields alone, for ten pages at most and a limits line past them; `check.AuditWorkflow` pins the
+  read, its stop condition and the ten-page limit whole-line, and refuses `search/issues` in the step.
 - **Point 10, row 9's failed unpack.** After a non-zero unpack the loop still counted and scanned the part
   of a member `head -c` had written, and a 124 was recorded as `tool-failed`. The branch now records 124
   as `timed-out` and any other exit as `tool-failed`, writes `binary-vulnerabilities: ${name} was not
