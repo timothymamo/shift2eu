@@ -43,9 +43,17 @@ var recordKeys = []string{
 	// the health check that routing answers on.
 	"rrdatas", "signatureRrdatas", "healthCheckedTargets", "ResourceRecords",
 	"AliasTarget", "SetIdentifier",
+	// The fields Route 53 writes a record set's routing with: a weight, a
+	// failover role, a geolocation or a geoproximity, an IP-based CIDR
+	// collection, the health check a routing answers on, a traffic policy and a
+	// multivalue answer, and the TTL the record set's values live for.
+	"HealthCheckId", "TrafficPolicyInstanceId", "MultiValueAnswer", "Weight",
+	"Failover", "GeoLocation", "GeoProximityLocation", "CidrRoutingConfig", "TTL",
 	// A signed zone's keys: Route 53's, Cloud DNS's and Azure DNS's spelling of
-	// them.
+	// them, and the capitalised spellings of a zone's key-signing keys, of its
+	// DNSKEY and of the delegation signer record its registrar publishes.
 	"KeySigningKeys", "signingKeys", "publicKey", "delegationSignerInfo",
+	"PublicKey", "DNSKEYRecord", "DSRecord", "DigestValue",
 }
 
 // recordValues are record names of the guide's synthetic zones (PRD #581's
@@ -276,6 +284,16 @@ func TestInventoryGuideRecordDataCheckFindsAPlantedRecord(t *testing.T) {
 			name:     "a signed zone's key material",
 			document: `{"Id": "Z0123456789ABCDEFGHIK", "Status": {"ServeSignature": "SIGNING", "KeySigningKeys": [{"PublicKey": "..."}]}}`,
 			want:     `"KeySigningKeys"`,
+		},
+		{
+			name:     "a record set's routing",
+			document: `{"Id": "/hostedzone/Z0123456789ABCDEFGHIJ", "HealthCheckId": "01234567-89ab-cdef-0123-456789abcdef", "Weight": 10}`,
+			want:     `"HealthCheckId"`,
+		},
+		{
+			name:     "a key-signing key's DNSSEC record",
+			document: `{"Id": "Z0123456789ABCDEFGHIK", "Status": {"ServeSignature": "SIGNING", "KeySigningKeys": [{"DNSKEYRecord": "257 3 13 ...", "DSRecord": "2371 13 2 ...", "DigestValue": "..."}]}}`,
+			want:     `"DNSKEYRecord"`,
 		},
 		{
 			name:     "a record's name as a value",
