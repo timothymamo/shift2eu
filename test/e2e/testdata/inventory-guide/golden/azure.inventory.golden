@@ -251,6 +251,22 @@
       }
     },
     {
+      "id": "kafka-shop-resizing",
+      "rawType": "Microsoft.HDInsight/clusters",
+      "category": "messaging.kafka",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability"
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 8,
+        "count": 3,
+        "storageGiB": 1023
+      }
+    },
+    {
       "id": "kafka-shop-streams",
       "rawType": "Microsoft.HDInsight/clusters",
       "category": "messaging.kafka",

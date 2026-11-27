@@ -771,10 +771,12 @@ text as the decision)
   - **Cluster states.** The portal's cluster properties name the STATUS values: "Aborted, Accepted,
     ClusterStorageProvisioned, AzureVMConfiguration, HDInsightConfiguration, Operational, Running,
     Error, Deleting, Deleted, Timeout, DeleteQueued, DeleteTimeout, DeleteError, PatchQueued,
-    CertRolloverQueued, ResizeQueued, or ClusterCustomization". The program leaves out a cluster whose
-    `clusterState` is `Deleting`, `Error` or `DeletionFailed` (any casing), as `aws.jq` leaves out an
-    MSK cluster `DELETING` or `FAILED`; the page names no `DeletionFailed`, and names `DeleteQueued`,
-    `DeleteTimeout`, `DeleteError` and `Deleted`, which the program keeps.
+    CertRolloverQueued, ResizeQueued, or ClusterCustomization". Decided in milestone 4: the program
+    leaves out a cluster whose `clusterState` is `Deleting`, `Deleted`, `DeleteQueued`,
+    `DeleteTimeout`, `DeleteError`, `Error`, `Aborted` or `Timeout` (compared in lower case), as
+    `aws.jq` leaves out an MSK cluster `DELETING` or `FAILED`, and keeps every other state (the
+    provisioning ones, `Operational`, `Running`, the queued patch, resize and certificate rollover
+    ones, `ClusterCustomization`). The page names no `DeletionFailed`, so none is matched.
     <https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-administer-use-portal-linux>
   - **Resource Graph limits.** `union`: "Limit of three `union` legs in a single query", and for
     `join`: "Limit of three `join` or `union` operations (or a combination of the two) in a single

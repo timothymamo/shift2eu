@@ -1472,9 +1472,11 @@ An HDInsight Kafka cluster's virtual machines and disks are not separate resourc
 the cluster stands for them, and its size is its worker nodes'. No cluster setting gives a topic's
 replication factor, which decides whether a topic survives the loss of a broker: three or more
 workers are counted as `node-high-availability`, so check the topics' replication factor (2 or
-more) and remove the capability by hand where it is lower. An HDInsight cluster being deleted or
-that failed (`clusterState` `Deleting`, `Error` or `DeletionFailed`, in any casing) is left out, as
-it is nothing to move.
+more) and remove the capability by hand where it is lower. An HDInsight cluster being deleted,
+deleted or that failed (`clusterState` `Deleting`, `Deleted`, `DeleteQueued`, `DeleteTimeout`,
+`DeleteError`, `Error`, `Aborted` or `Timeout`, in any casing) is left out, as it is nothing to
+move; a cluster in any other state (being provisioned, running, or queued for a patch, a resize or a
+certificate rollover) is kept.
 
 A Service Bus topic (where publishers write) and each of its subscriptions (where consumers read, a
 queue of their own with a dead-letter subqueue) are both listed, as both have to move. A subscription
