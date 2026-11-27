@@ -10,7 +10,7 @@
   from a root-owned installed copy")
 - Amended: 2026-11-27, the tester's pi trusts no project and loads no discovered extension: only the
   installed refusal, the deck's own extension and the skills, by explicit paths (issue #702; see
-  "Amendment: the tester loads no project extension or setting")
+  "Amendment: the tester loads no project extension and applies no trusted project setting")
 
 ## Context
 
@@ -440,7 +440,7 @@ Consequences of this amendment:
 - The one line costs nothing when the copies agree, which they do after `make vm-pi-tester` on a VM whose
   host clone is at the merged `main`.
 
-## Amendment: the tester loads no project extension or setting
+## Amendment: the tester loads no project extension and applies no trusted project setting
 
 After the amendment above, pi (1.6.1, `--approve`) still loaded the unit folder's `.pi/extensions/`, which a
 branch can change, in the same node process as the installed refusal (issue #702). Before deciding, three
@@ -514,7 +514,8 @@ Decision:
   prompt pi trusts whatever `--no-approve` and `--no-extensions` say, so neither `~/.pi` nor `~/.pi/agent`
   may be a symbolic link, it must be a directory, and its physical path (`cd -P`) must lie outside the
   working directory's (`pwd -P`); a path that cannot be resolved counts as inside. A string comparison
-  alone missed a `HOME` spelled `<unit>/./h` or `<unit>//h` and a unit folder reached through a link.
+  alone missed a `HOME` spelled `<parent>/./<unit>/h`, `<parent>//<unit>/h` or with a `..` (dots before
+  the unit folder's name), and one that reaches the unit folder through a symbolic link.
   Otherwise the wrapper exits 1 with `pi-tester: pi's agent directory <dir> <why>: the tester is not
   started, because pi trusts the settings and extensions it finds there (issue #702)`.
 - **The deck's extension is checked, and a missing one fails closed.** The wrapper requires `HOME` to be
@@ -582,4 +583,5 @@ Consequences of this amendment:
   (`dot-agent-deck trust approve`) and runs `make vm-pi-tester` after the merge.
 - The tester's processes still run as the VM's one user (the limit stated above): this amendment narrows
   what pi loads from the unit folder, not what a program the tester runs can reach.
-- `.pi/settings.json` no longer matters to the tester; it stays for a pi run by hand with `--approve`.
+- `.pi/settings.json` no longer configures the tester's trusted settings or extensions (pi still reads its
+  startup settings, What is left); it stays for a pi run by hand with `--approve`.

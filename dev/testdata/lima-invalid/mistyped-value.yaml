@@ -519,8 +519,8 @@ provision:
       #    (.pi/extensions/deny-env-printing.ts, .pi/deny-env-printing.json, dev/pi-tester.sh) is missing or not
       #    byte for byte the installed one, it is not used for the checks or for --extension: one line on stderr
       #    names the installed and the project paths and make vm-pi-tester, and pi starts with the installed files.
-      #    pi loads no extension and no trusted setting of the project (item 2). The line is expected on a branch that changes
-      #    one of the three files.
+      #    pi loads no extension and no trusted setting of the project (item 2). The line is expected on a branch
+      #    that changes one of the three files.
       # 1. Fails closed. pi logs an extension that fails to load and runs without it, so the env-printing refusal
       #    (ADR 0044) would fail open on its own. Before pi starts, the two installed files the refusal is made of
       #    are checked:
@@ -552,15 +552,16 @@ provision:
       #    Before the deck's extension, pi's agent directory ${HOME}/.pi/agent, whose settings, models and system
       #    prompt pi always trusts, is checked: neither ~/.pi nor ~/.pi/agent may be a symbolic link, it must be a
       #    directory, and its physical path (cd -P) must lie outside the working directory's physical path (pwd -P),
-      #    so a HOME spelled <unit>/./h or <unit>//h, or a unit folder reached through a link, is refused too.
+      #    so a HOME spelled <parent>/./<unit>/h, <parent>//<unit>/h or with a .. before the unit folder's name,
+      #    or reaching the unit folder through a symbolic link, is refused too.
       #    The deck's extension must lie under HOME (an absolute path), outside the working directory by its
       #    spelling and by its physical path, be a directory reached through no symbolic link (neither it nor
       #    ~/.pi/agent/extensions), and hold an index.ts, index.js or package.json that is a regular file and no
       #    symbolic link. Otherwise the wrapper exits 1 with one line naming the directory and why, and for the
       #    deck's extension the step that writes it (dot-agent-deck orchestrator setup). Everything else -
       #    a GitHub token, another agent's key (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN), the OpenTelemetry
-      #    headers that carry a backend's API key, any name this list does not know - is not in pi's environment, so printing it shows only the DeepSeek key and the pane's
-      #    variables. The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave
+      #    headers that carry a backend's API key, any name this list does not know - is not in pi's environment,
+      #    so printing it shows only the DeepSeek key and the pane's variables. The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave
       #    the agents' keys file unsourced, so a `bash -l` from the tester's bash tool does not put them back.
       #
       # What this does not do: the tester still runs as the VM's one user, so the keys file, the agents App's
@@ -839,8 +840,9 @@ provision:
       }
 
       # The agent directory must be a real directory reached through no link, and physically outside the working
-      # directory: a HOME spelled <unit>/./h or <unit>//h, or a unit folder reached through a link, passes a string
-      # comparison and is still the unit folder.
+      # directory: a HOME spelled <parent>/./<unit>/h, <parent>//<unit>/h or with a .. before the unit folder's
+      # name, or reaching the unit folder through a symbolic link, passes a string comparison and is still the unit
+      # folder.
       if [ -L "${HOME}/.pi" ] || [ -L "${agent}" ]; then
         refuse_agent "is reached through a symbolic link"
       fi

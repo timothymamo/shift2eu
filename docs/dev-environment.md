@@ -3257,7 +3257,8 @@ boundary against the VM user, who has sudo. The script:
 - refuses to start, exiting 1, when `HOME` is not an absolute path, and when pi's agent directory
   `~/.pi/agent`, whose settings pi always trusts, is reached through a symbolic link (`~/.pi` or itself),
   is no directory, or lies physically (`cd -P`, `pwd -P`) in the working directory, so a `HOME` spelled
-  `<unit>/./h` or a unit folder reached through a link is refused too;
+  `<parent>/./<unit>/h`, `<parent>//<unit>/h` or with a `..` before the unit folder's name, or one that
+  reaches the unit folder through a symbolic link, is refused too;
 - refuses to start, exiting 1, when the deck's pi extension `~/.pi/agent/extensions/dot-agent-deck` lies in
   the working directory by its spelling or its physical path, is reached through a symbolic link (itself or
   `~/.pi/agent/extensions`), is no directory or holds no `index.ts`, `index.js` or `package.json` that is a
