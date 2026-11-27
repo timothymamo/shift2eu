@@ -1180,7 +1180,8 @@ mkdir -p "$out"
 
 # Keep only the properties azure.jq reads, and only for the types it reads them from.
 # An HDInsight cluster has a branch of its own: its roles array is expanded and
-# only the worker role's count, VM size and disks are packed back, as each role
+# only its kind, its state and the worker role's count, VM size and disks are
+# packed back, as each role
 # also carries its admin user, SSH key, script actions and network.
 query="Resources
 | where type =~ 'microsoft.hdinsight/clusters'
@@ -1188,6 +1189,7 @@ query="Resources
 | where role.name =~ 'workernode'
 | extend properties = bag_pack(
     'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind),
+    'clusterState', properties.clusterState,
     'computeProfile', bag_pack('roles', pack_array(bag_pack(
       'name', role.name,
       'targetInstanceCount', role.targetInstanceCount,
@@ -1460,15 +1462,19 @@ Graph writes types in lower case).
 
 An Event Hubs namespace stays `unclassified` even when its Kafka endpoint is on: most Event Hubs
 clients use AMQP or the Event Hubs SDKs, and no read-only call says which protocol they use, so
-listing it as Kafka could hide a client rewrite. Change its category to `messaging.kafka` by hand
-only when every client of the namespace uses its Kafka endpoint. Azure AI Search is no OpenSearch
+listing it as Kafka could hide a client rewrite. Only a Standard, Premium or Dedicated namespace has
+a Kafka endpoint; a Basic namespace has none and stays `unclassified`. Change a Standard, Premium or
+Dedicated namespace's category to `messaging.kafka` by hand only when every client of the namespace
+uses its Kafka endpoint. Azure AI Search is no OpenSearch
 service, so it stays `unclassified`.
 
 An HDInsight Kafka cluster's virtual machines and disks are not separate resources in the listing:
 the cluster stands for them, and its size is its worker nodes'. No cluster setting gives a topic's
 replication factor, which decides whether a topic survives the loss of a broker: three or more
 workers are counted as `node-high-availability`, so check the topics' replication factor (2 or
-more) and remove the capability by hand where it is lower.
+more) and remove the capability by hand where it is lower. An HDInsight cluster being deleted or
+that failed (`clusterState` `Deleting`, `Error` or `DeletionFailed`, in any casing) is left out, as
+it is nothing to move.
 
 A Service Bus topic (where publishers write) and each of its subscriptions (where consumers read, a
 queue of their own with a dead-letter subqueue) are both listed, as both have to move. A subscription

@@ -459,8 +459,12 @@ def zone_count: (.zones // []) | length;
           # as it was written) is Kafka on virtual machines Azure runs; any other
           # kind stays unclassified. Sized by its worker role (the query packs it
           # alone): the count, the VM size and the disks of each worker. Azure
-          # encrypts its managed disks at rest.
-          if (.properties.clusterDefinition.kind? // "" | ascii_downcase) == "kafka" then
+          # encrypts its managed disks at rest. A cluster being deleted or that
+          # failed (clusterState Deleting, Error or DeletionFailed, any casing) is
+          # left out.
+          if (.properties.clusterState? // "" | ascii_downcase | IN("deleting", "error", "deletionfailed")) then
+            empty
+          elif (.properties.clusterDefinition.kind? // "" | ascii_downcase) == "kafka" then
             (.properties.computeProfile.roles[0]? // {}) as $worker
             | ($worker.dataDisksGroups[0]? // {}) as $disks
             | $base + {category: "messaging.kafka", capabilities: [
