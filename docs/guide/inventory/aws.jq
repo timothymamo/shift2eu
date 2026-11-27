@@ -36,6 +36,7 @@
 #   {"ClusterInfoList": ...}       kafka list-clusters-v2
 #   {"Results": [...]}             configservice select-resource-config (optional;
 #                                  one value per page if you page by hand)
+#   {"HostedZones": ...}           route53 list-hosted-zones, unprojected
 #
 # Three inputs are arrays of objects, one object per hosted zone, which the
 # guide's Route 53 commands write:
@@ -222,10 +223,17 @@ def inventory($source):
     | .Id | strings | zone_id] | unique) as $signed
 | ([$items[] | select(has("RoutedRecordSets")) | select((.RoutedRecordSets // 0) > 0)
     | .Id | strings | zone_id] | unique) as $routed
-# Hosted zones, one per zone ID: each region's run lists the same zones.
-| ([$items[] | select(has("PrivateZone") and has("Id") and has("Name"))
-    | {zone: (.Id | zone_id), Name, PrivateZone}]
-   | group_by(.zone) | map(.[0])) as $zones
+# Hosted zones, one per zone ID: each region's run lists the same zones. The
+# guide's projection writes an array of zones; the unprojected response holds
+# them under HostedZones, each zone's visibility in its Config. Only the ID, the
+# name and the visibility are kept, never CallerReference or the Config comment.
+| ([($items[] | select(has("PrivateZone") and has("Id") and has("Name"))
+     | {Id, Name, PrivateZone}),
+    ($docs[] | .HostedZones? // empty | arrays | .[] | objects
+     | select(has("Id") and has("Name"))
+     | {Id, Name, PrivateZone: .Config.PrivateZone?})]
+   | map({zone: (.Id | zone_id), Name, PrivateZone})
+   | unique | group_by(.zone) | map(.[0])) as $zones
 # The names two or more distinct zones share (a public and a private zone of one
 # name, split-horizon DNS).
 | ([$zones[] | .Name] | group_by(.) | map(select(length > 1) | .[0])) as $sharedzonenames
@@ -633,15 +641,15 @@ def inventory($source):
     # Route 53 hosted zones, from list-hosted-zones, each zone once by its zone
     # ID ($zones). A zone's ID is its name; zones that share a name each get
     # their zone ID appended, "shop.example.com. (Z0123456789ABCDEFGHIJ)", so
-    # two distinct zones never merge. A public zone is a
-    # public authoritative DNS zone, network.dns, served by Route 53's name
-    # servers from no region the user picks, so it has no region and no size.
-    # It is signed (dnssec) when get-dnssec's ServeSignature is SIGNING, and
-    # routes by client or by health (dns-routing) when it holds a routed record
-    # set: one with a set identifier (weighted, latency, failover, geolocation,
-    # geoproximity, IP-based, multivalue answer or AZ-affinity), a health check,
-    # a multivalue answer or a traffic policy instance. A private zone answers
-    # only inside the VPCs it is attached to: unclassified.
+    # two distinct zones never merge. A public zone is a public authoritative
+    # DNS zone, network.dns, served by Route 53's name servers from no region
+    # the user picks, so it has no region and no size. It is signed (dnssec)
+    # when get-dnssec's ServeSignature is SIGNING, and routes by client or by
+    # health (dns-routing) when it holds a routed record set: one with a set
+    # identifier (weighted, latency, failover, geolocation, geoproximity,
+    # IP-based or multivalue answer), a health check, a multivalue answer or a
+    # traffic policy instance. A private zone answers only inside the VPCs it
+    # is attached to: unclassified.
     ($zones[]
       | (.PrivateZone == false) as $public
       | .zone as $zone
