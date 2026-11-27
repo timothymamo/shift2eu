@@ -2,15 +2,15 @@
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-26
 
 ## Summary
 
 | Fit | Resources |
 |---|---|
 | direct | 6 |
-| partial | 5 |
-| none | 7 |
+| partial | 9 |
+| none | 3 |
 | total | 18 |
 
 ## Resources
@@ -18,17 +18,17 @@
 | ID | Raw type | Category | Fit | Best offering | Relations | Reasons |
 |---|---|---|---|---|---|---|
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | `Object Storage` offers every capability the resource uses |
-| `shop-catalog-docs` | `AWS::DocDB::DBCluster` | `database.mongodb` | none |  |  | no offering in the `Scaleway` catalog for `database.mongodb` |
+| `shop-catalog-docs` | `AWS::DocDB::DBCluster` | `database.mongodb` | partial | `Managed MongoDB Replica Set` |  | `Managed MongoDB Replica Set` does not offer `encryption-at-rest`; `Managed MongoDB Replica Set` does not offer `point-in-time-restore`; `Managed MongoDB Replica Set` does not offer `read-replicas` |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  | depends-on `shop-assets` | not classified |
 | `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
-| `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | no offering in the `Scaleway` catalog for `registry.container` |
+| `shop-images` | `AWS::ECR::Repository` | `registry.container` | partial | `Container Registry` |  | `Container Registry` does not offer `encryption-at-rest` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
-| `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  | depends-on `shop-orders` | no offering in the `Scaleway` catalog for `messaging.topic` |
+| `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | partial | `Topics and Events` | depends-on `shop-orders` | `Topics and Events` does not offer `encryption-at-rest` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
 | `shop-product-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | no offering in the `Scaleway` catalog for `search.opensearch` |
-| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | none |  |  | no offering in the `Scaleway` catalog for `cache.redis` |
+| `shop-sessions` | `AWS::ElastiCache::ReplicationGroup` | `cache.redis` | partial | `Managed Database for Redis Cluster` |  | `Managed Database for Redis Cluster` does not offer `encryption-at-rest`; `Managed Database for Redis Cluster` does not offer `node-high-availability` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` | depends-on `shop-assets` | `Serverless Functions` offers every capability the resource uses |
 | `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
@@ -38,20 +38,20 @@
 
 ## Required changes
 
+- `shop-catalog-docs`: `encryption-at-rest`, `point-in-time-restore`, `read-replicas` (not offered by `Managed MongoDB Replica Set`)
 - `shop-db`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
+- `shop-images`: `encryption-at-rest` (not offered by `Container Registry`)
 - `shop-legacy-mysql`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
+- `shop-order-events`: `encryption-at-rest` (not offered by `Topics and Events`)
 - `shop-orders`: `encryption-at-rest` (not offered by `Queues`)
 - `shop-orders-dlq`: `encryption-at-rest` (not offered by `Queues`)
+- `shop-sessions`: `encryption-at-rest`, `node-high-availability` (not offered by `Managed Database for Redis Cluster`)
 - `shop-web-asg`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
 
 ## Blockers
 
-- `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
 - `shop-cdn`: not classified
-- `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
-- `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
 - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
-- `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
 - `shop.example.com`: not classified
 
 ## Workloads
@@ -64,13 +64,9 @@
 
 ### `shop`
 
-- Fit: 4 direct, 4 partial, 6 none
+- Fit: 4 direct, 8 partial, 2 none
 - Blockers:
-  - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
-  - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
-  - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
-  - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
   - `shop.example.com`: not classified
 
 ### No workload

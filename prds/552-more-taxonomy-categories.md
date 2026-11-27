@@ -1,6 +1,6 @@
 # PRD #552: More taxonomy categories
 
-**Status:** In progress, milestones 1, 2, 3, 4 and 5 done. The maintainer decided questions 1-11 under *Decisions and
+**Status:** In progress, milestones 1, 2, 3, 4, 5 and 6 done. The maintainer decided questions 1-11 under *Decisions and
 decided questions* on 2026-11-24, as recommended, and 12-13 on 2026-11-25 (issue #600). Milestone 1's ADR is
 [0046](../docs/adr/0046-add-seven-taxonomy-categories-and-match-cache-plans-on-memory.md).
 **Issue:** #552
@@ -79,7 +79,7 @@ production estates, not a measured figure.
 | `messaging.topic` | A publish-subscribe topic the provider runs: every subscription gets its own copy of each message | Common (SNS, Service Bus topics, Pub/Sub); stops a topic mapping `direct` to a queue | none | Topics and Events | none |
 | `serverless.container` | A container image the provider runs and scales with requests; it may scale to zero when idle (Cloud Run, Container Apps and Scaleway can, App Runner keeps at least one provisioned instance) | Common on GCP (Cloud Run) and Azure (Container Apps) | none | Serverless Containers | none |
 | `registry.container` | A private registry of OCI container images the provider runs | Very common; two targets have a GA registry | Managed Private Registry (no 3-AZ variant: zone continuity not stated, milestone 5) | Container Registry | none (open beta) |
-| `storage.file` | A shared file system the provider runs, mounted by several machines over NFS | Moderate (EFS, Filestore, Azure Files NFS); every target has one | none (File Storage Service: general availability not confirmed, milestone 5) | File Storage | File Storage |
+| `storage.file` | A shared file system the provider runs, mounted by several machines over NFS | Moderate (EFS, Filestore, Azure Files NFS); every target has one | none (File Storage Service: general availability not confirmed, milestone 5) | none (File Storage mounts over virtiofs, not NFS, milestone 6) | File Storage |
 
 The target offerings, with the documentation they were found in on 2026-11-24 (milestones 5 to 7
 re-read each one and cite it in `SOURCES.md`):
@@ -102,6 +102,9 @@ re-read each one and cite it in `SOURCES.md`):
     <https://www.scaleway.com/en/docs/managed-databases-for-redis/concepts/>,
     <https://www.scaleway.com/en/docs/managed-databases-for-redis/how-to/create-a-database-for-redis/>,
     <https://www.scaleway.com/en/docs/managed-databases-for-redis/reference-content/ensuring-data-persistence/>.
+    Milestone 6 (2026-11-26) records Standalone and a *Cluster* variant with `sharding` but **without
+    `node-high-availability`**: Cluster mode needs a cluster-aware client, which the snapshot cannot
+    say, so decided question 11's fallback applies.
   - UpCloud: Valkey 8.1 and 9.1; plans of 1, 2 or 3 nodes, 1 to 112 GiB; automatic failover on 2 and 3
     nodes, standby nodes on "physically separated backend hosts"; replica reads through a separate DNS
     name; encryption at rest always on; all eight EU zones.
@@ -111,8 +114,10 @@ re-read each one and cite it in `SOURCES.md`):
   - OVHcloud: MongoDB 7.0 and 8.0, Production (3 nodes) and Advanced (3 to 7 nodes, "PITR capability
     for the last 24 hours"), read-only nodes, 1-AZ and 3-AZ regions.
     <https://docs.ovhcloud.com/en/guides/public-cloud/databases/mongodb-concept-capabilities>.
-  - Scaleway: Managed MongoDB®, GA since 2025-06-10, MongoDB 7.0 and 8.0, a 3-node replica set ("one of
-    the remaining standby nodes … can take over"), snapshots.
+  - Scaleway: Managed MongoDB®, GA since 2025-06-10, MongoDB 7.0 and 8.0, two node configurations, a
+    1-node replica set (no redundancy) and a 3-node replica set ("one of the remaining standby nodes …
+    can take over"), snapshots; in `fr-par` only. Milestone 6 (2026-11-26) records them as two tiers,
+    *Managed MongoDB* and *Managed MongoDB Replica Set* (`node-high-availability`).
     <https://www.scaleway.com/en/docs/managed-mongodb-databases/concepts/>,
     <https://www.scaleway.com/en/docs/managed-mongodb-databases/faq/>. Scaleway's older Document Database
     (FerretDB on PostgreSQL) has no product pages left and is not used.
@@ -163,9 +168,13 @@ re-read each one and cite it in `SOURCES.md`):
     #54 open, the product page's "other consumption modes coming at GA"), so OVHcloud shows fit `none`
     for `storage.file` until a refresh confirms it.
   - Scaleway: File Storage, GA in Paris (2026-07-16) and Amsterdam (2026-10-21), 25 GB to 50 TB,
-    "triple replication" within one zone, encrypted at rest, snapshots, billed on provisioned space;
-    mounted by Instances and Kapsule. <https://www.scaleway.com/en/docs/file-storage/faq/>,
-    <https://www.scaleway.com/en/docs/file-storage/quickstart/>.
+    "triple replication" within one zone, encrypted at rest, billed on provisioned space; mounted by
+    Instances and Kapsule. <https://www.scaleway.com/en/docs/file-storage/faq/>,
+    <https://www.scaleway.com/en/docs/file-storage/quickstart/>. Milestone 6 (2026-11-26) found no
+    snapshots on any File Storage page, and that it mounts with virtiofs ("You do not need to manually
+    configure or connect via the NFS protocol"), not NFS, so it records no offering: Scaleway shows fit
+    `none` for `storage.file` (flagged for the maintainer; Scaleway's `SOURCES.md`, *Left out on
+    purpose*, names the offering accepting virtiofs would add).
   - UpCloud: File Storage, NFS 4.1, 250 to 25,000 GiB, encryption at rest chosen at creation; in
     `de-fra1`, `dk-cph1`, `fi-hel1`, `fi-hel2`, `nl-ams1` and `se-sto1`.
     <https://upcloud.com/docs/products/file-storage/> and its `encryption-at-rest/` and `availability/`
@@ -321,7 +330,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 - [x] A version 2 resource of a new category takes exactly the size fields under *Estimates*. Any other
   size or usage field (`vcpus` on `cache.redis`, `storageGiB` on `network.loadbalancer`, any size on
   `messaging.topic`) is refused with exit 1 and a message naming the field by its path.
-- [ ] Given a resource that lists `sharding` or `udp`, the inventory is read; an offering that does not
+- [x] Given a resource that lists `sharding` or `udp`, the inventory is read; an offering that does not
   list it gives fit `partial` naming it as missing (a UDP load balancer on Scaleway is `partial`, missing
   `udp`).
 - [ ] Inventories with only the nine existing categories keep their reports: in milestones 1 to 4 no
@@ -491,7 +500,7 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    Managed Private Registry offering with no 3-AZ variant, since no quoted page says it keeps serving
    through the loss of a zone. Both are under *Left out on purpose* in OVHcloud's `SOURCES.md`, with what
    reverses them. The re-read prices page changed no existing price or plan.
-6. [ ] **Scaleway catalog.** Offerings for `cache.redis` (Managed Database for Redis™; a cluster-mode
+6. [x] **Scaleway catalog.** Offerings for `cache.redis` (Managed Database for Redis™; a cluster-mode
    variant with `node-high-availability` and `sharding`), `database.mongodb` (Managed MongoDB®),
    `network.loadbalancer`, `messaging.topic` (Topics and Events), `serverless.container`,
    `registry.container` and `storage.file`, with plans and prices for the priced ones. **Gated on the
@@ -504,6 +513,18 @@ fit `none` with "no offering in the <target> catalog", which is already more pre
    are not needed: decided question 6 leaves load balancers and registries unpriced, and topics and
    serverless containers are usage-priced. An existing price or plan the re-read pages
    show changed is updated to its current value (*Acceptance criteria*, goldens). Depends on 1.
+   Done on 2026-11-26 from the maintainer's saved pages, with three departures (*To be checked*): no
+   `storage.file` offering, since File Storage mounts over virtiofs, not NFS; the Redis Cluster variant
+   lists `sharding` but not `node-high-availability`, decided question 11's fallback, since the
+   snapshot cannot say that Cluster mode needs a cluster-aware client; and MongoDB is two tiers, a
+   1-node *Managed MongoDB* and a 3-node *Managed MongoDB Replica Set*. Load Balancer and Container
+   Registry leave Milan out (their SDKs do not declare it). The two saved price pages embed Scaleway's
+   whole price catalogue, so every existing price (Instances, Elastic Metal, the Kapsule control
+   planes, PostgreSQL and MySQL, Block and Object Storage) was re-read from it the same day; none
+   changed, and the snapshot's retrieved date moves to 2026-11-26 (Scaleway's `SOURCES.md`). A cache
+   without `sharding` and a MongoDB database without `node-high-availability` tie the base and the
+   multi-node tier, so the estimate takes the tier's lower per-node price; decided question 10 accepts
+   that under-estimate until issue #558, and `SOURCES.md` records it.
 7. [ ] **UpCloud catalog.** Offerings for `cache.redis` (Managed Valkey: 1 node, and a multi-node
    variant with `node-high-availability`), `network.loadbalancer` (Managed Load Balancer, and a
    Production variant if its failover is confirmed; `udp` only if a page states it) and `storage.file` (File Storage),
@@ -929,7 +950,32 @@ text as the decision)
 - Milestone 6: the regions of every new Scaleway product (the documentation names none but Redis's
   zones); encryption at rest for Redis™ and MongoDB®; whether Topics and Events has a dead-letter
   setting; the page that prices File Storage; whether the Redis™ and MongoDB® node-type prices are per
-  node or per cluster, and that each Redis™ node type gives a vCPU count.
+  node or per cluster, and that each Redis™ node type gives a vCPU count. Checked on 2026-11-26 (the
+  maintainer's saved copies of the managed-databases and storage price pages and of the availability
+  page, `scaleway/docs-content` and `scaleway/scaleway-sdk-go` on public GitHub; sources in Scaleway's
+  `SOURCES.md`):
+  - Regions: Redis™ `fr-par`, `nl-ams`, `pl-waw` (zones 1 and 2 of each; Milan "Available soon");
+    MongoDB® `fr-par` only (Milan "Available soon"); Load Balancer `fr-par`, `nl-ams`, `pl-waw`, with
+    Milan left out (the availability page and price data say yes, SDK `api/lb/v1` does not declare it);
+    Topics and Events `fr-par`, `nl-ams`; Serverless Containers all four; Container Registry `fr-par`,
+    `nl-ams`, `pl-waw`, with Milan left out (the availability page and the 2026-08-31 changelog say yes,
+    SDK `api/registry/v1` does not declare it); File Storage `fr-par` and `nl-ams` on the availability
+    page, `fr-par` only in its SDK (not in the snapshot).
+  - Encryption at rest for Redis™ and MongoDB®: **not documented** for either (Redis names TLS in
+    transit only), so neither lists `encryption-at-rest`, and a source cache or MongoDB database that
+    lists it is `partial` on Scaleway.
+  - Topics and Events dead-letter setting: **none** (`RedrivePolicy` not supported on the SNS support
+    page), so no `dead-letter-queue`.
+  - The page that prices File Storage: <https://www.scaleway.com/en/pricing/storage/>, table *File
+    Storage*, €0.000221 per GB and hour (€0.1613 a month); File Storage is not in the snapshot
+    (virtiofs, not NFS).
+  - Per node or per cluster: Redis™ per node, a "Main node" and an "Additional nodes" price, with no
+    sentence on how a 3- to 6-node cluster combines them; the Cluster plan is (main + 2 × additional) ×
+    730 ÷ 3 per node, an inference `SOURCES.md` records. MongoDB® a management fee per instance plus a
+    price per node; the page's "Price for 1 Node" and "Price for 3 Nodes" give the two tiers' plans
+    (the 3-node one ÷ 3, per node).
+  - vCPU per Redis™ node type: **given** for all seven (RED1-MICRO 2 to RED1-XL 16), so every Redis
+    plan records `vcpus`.
 - Milestone 7: that Managed Load Balancer Production fails over without manual action, and whether any
   frontend mode forwards UDP; File Storage node-level redundancy; whether UpCloud's multi-node Valkey
   plans are priced per plan or per node, and that each plan gives a vCPU count.
