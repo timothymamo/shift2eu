@@ -91,7 +91,7 @@ Arrows are imports. They point inwards only:
   is the thin `syscall/js` glue: it registers one JavaScript function that calls `internal/web`, and it is
   the only package that imports `syscall/js` (`web-composition-root`, `syscall-js-only-in-the-web-root`).
   Its untagged package `cmd/shift2eu-web/internal/wire` builds the adapters `cmd/shift2eu`'s offline path
-  builds but the PDF reporter (PRD #584 milestone 2 adds it), the inventory reader in its in-memory mode and the HTML reporter, into `web.Deps`
+  builds but the PDF reporter (its allow list already permits it; PRD #584 milestone 2 constructs it), the inventory reader in its in-memory mode and the HTML reporter, into `web.Deps`
   (`web-composition-root-wire`). It builds and is tested natively. Its tests, allowed to import
   `internal/cli` (`web-composition-root-wire-tests`), hold the option parity and the download parity with
   the CLI. Beside them only `internal/cli`'s own tests import it; every other test

@@ -528,7 +528,7 @@ Test levels:
 - [x] *e2e:* the built binary writes a PDF for each example inventory (`examples/aws`, `examples/azure`,
   `examples/gcp`) against each target and `--target all`, with and without `--no-estimate`, and exits 0.
   Each file starts with `%PDF-`, and two runs give the same bytes.
-- [ ] *CLI and e2e:* `--format pdf` runs on every fixture of
+- [x] *CLI and e2e:* `--format pdf` runs on every fixture of
   `.github/security-audit/testdata/hostile-inventories/`. The test derives the accepted set from the
   Markdown run, so a fixture added later is covered without a change: every fixture the Markdown run
   accepts gives a PDF that exits 0 and passes the structural invariants, and every fixture it refuses is
@@ -538,7 +538,7 @@ Test levels:
   `numbers`, and `path-like-names`, `terminal-escapes`, `unicode-tricks`, `relations-graph` and
   `unknown-values`, for their controls, bidi characters, duplicate ID or unknown category). That split
   is not the criterion; the derived set is.
-- [ ] *Lint and static:* `pdfreport` imports only the allow list of `reporters-stay-offline`.
+- [x] *Lint and static:* `pdfreport` imports only the allow list of `reporters-stay-offline`.
   `cmd/shift2eu` and `wire` may import it, and the depguard pin holds the changed rules.
   `test/architecture` checks it for every release target and `js/wasm`.
 - [x] *Review:* CLAUDE.md's adapters row names `pdfreport`, its status paragraph names `--format pdf`, and

@@ -531,6 +531,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport$",
 			"github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport$",
 			"github.com/timothymamo/shift2eu/internal/adapter/report/markdown$",
+			"github.com/timothymamo/shift2eu/internal/adapter/report/pdfreport$",
 			"github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile$",
 			"github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud$",
 			"github.com/timothymamo/shift2eu/internal/adapter/target/scaleway$",
