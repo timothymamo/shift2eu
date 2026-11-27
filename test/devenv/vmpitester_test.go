@@ -79,16 +79,15 @@ func vmPiTesterStream(t *testing.T, sb *sandbox, sources ...string) string {
 	return stdout
 }
 
-// vmPiTesterHereDocument returns the body of the here-document the printed script carries for marker: the lines
-// between the cat that opens it and the marker line that ends it, each with its newline.
-func vmPiTesterHereDocument(t *testing.T, stream, marker string) string {
+// vmPiTesterHereDocumentOpen returns the index, in the printed script's lines, of the cat line that opens the
+// here-document the script carries for marker: the one whose <<'<marker>' starts it, so a truncation test can cut
+// the stream inside the file's body.
+func vmPiTesterHereDocumentOpen(t *testing.T, stream, marker string) int {
 	t.Helper()
-
-	lines := strings.Split(strings.TrimSuffix(stream, "\n"), "\n")
 
 	open := -1
 
-	for i, line := range lines {
+	for i, line := range strings.Split(strings.TrimSuffix(stream, "\n"), "\n") {
 		if !strings.Contains(line, "<<'"+marker+"'") {
 			continue
 		}
@@ -103,6 +102,18 @@ func vmPiTesterHereDocument(t *testing.T, stream, marker string) string {
 	if open < 0 {
 		t.Fatalf("%s prints no <<'%s' here-document, so the three files do not travel inside the script (issue #692):\n%s", vmPiTesterGenerator, marker, stream)
 	}
+
+	return open
+}
+
+// vmPiTesterHereDocument returns the body of the here-document the printed script carries for marker: the lines
+// between the cat that opens it and the marker line that ends it, each with its newline.
+func vmPiTesterHereDocument(t *testing.T, stream, marker string) string {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSuffix(stream, "\n"), "\n")
+
+	open := vmPiTesterHereDocumentOpen(t, stream, marker)
 
 	for j := open + 1; j < len(lines); j++ {
 		if strings.TrimSpace(lines[j]) == marker {
@@ -332,12 +343,16 @@ func TestVMPiTesterScriptRunsNothingOnATruncatedStream(t *testing.T) {
 		// cutBefore says the stream stops just before it.
 		cutAt     string
 		cutBefore bool
-		reason    string
+		// insideHereDocument is the marker of the here-document the stream stops inside instead: cutAt is then
+		// unused, and what arrives is the here-document's opening line and one line of the file's body, never
+		// the marker line that ends it, so the wrapper itself arrives cut short.
+		insideHereDocument string
+		reason             string
 	}{
 		{
-			name:   "inside the here-document that carries the wrapper",
-			cutAt:  vmPiTesterHereDocuments[0].marker,
-			reason: "the here-document the wrapper travels in never reaches its delimiter",
+			name:               "one line into the here-document that carries the wrapper",
+			insideHereDocument: vmPiTesterHereDocuments[0].marker,
+			reason:             "the here-document the wrapper travels in stops after the wrapper's first line, so its delimiter never comes and the wrapper is cut short",
 		},
 		{
 			name:      "just before the call that runs the installation",
@@ -363,9 +378,23 @@ func TestVMPiTesterScriptRunsNothingOnATruncatedStream(t *testing.T) {
 
 			lines := strings.Split(stream, "\n")
 
-			cut := lineIndex(t, stream, tc.cutAt)
-			if tc.cutBefore {
-				cut--
+			var cut int
+
+			switch {
+			case tc.insideHereDocument != "":
+				// One line of the file's body: the cut is measured from the here-document's opening line, never
+				// from a line of the wrapper, so a change to the wrapper moves the cut with it.
+				cut = vmPiTesterHereDocumentOpen(t, stream, tc.insideHereDocument) + 1
+
+				if cut >= len(lines) || strings.TrimSpace(lines[cut]) == tc.insideHereDocument {
+					t.Fatalf("the %s here-document of the script %s prints carries no body, so a stream cut one line into it would also carry the marker line that ends it: this test would pin nothing (issue #692)",
+						tc.insideHereDocument, vmPiTesterGenerator)
+				}
+			default:
+				cut = lineIndex(t, stream, tc.cutAt)
+				if tc.cutBefore {
+					cut--
+				}
 			}
 
 			env := sb.baseEnv()
