@@ -1903,13 +1903,14 @@ var azureHDInsightSourceFields = []string{
 // osProfile, scriptActions and virtualNetworkProfile with it.
 const azureHDInsightRolesPath = "properties.computeProfile.roles"
 
-// azureHDInsightExcludedNames are the names the part of the query that reads an
-// HDInsight cluster must hold nowhere, whatever the projection: PRD #571
-// excludes osProfile and connectivityEndpoints outright (the cluster's admin
-// user, its SSH key, the hosts it answers on), and scriptActions and
-// virtualNetworkProfile carry the scripts the cluster runs and the network it
-// sits in, which the program reads no field of.
-var azureHDInsightExcludedNames = []string{"osProfile", "connectivityEndpoints", "scriptActions", "virtualNetworkProfile"}
+// The names the part of the query that reads an HDInsight cluster must hold
+// nowhere are the records of the shared excluded-key list (awsExcludedKeysPath),
+// not a copy kept here: PRD #571 excludes osProfile (the cluster's admin user, its
+// SSH key and its domain-join credentials), connectivityEndpoints (the hosts it
+// answers on), scriptActions and virtualNetworkProfile, and the cluster's
+// securityProfile, storageProfile and kafkaRestProperties with them (audit finding
+// and review finding N3 on PRD #571's milestone 4). Read from the one list, the
+// guide's projection check and the fixture check cannot drift apart.
 
 // azureHDInsightTypeFilter matches the filter that opens the branch of the
 // Resource Graph query that reads an HDInsight cluster: `where type =~ 'microsoft.hdinsight/clusters'`,
@@ -2261,7 +2262,7 @@ func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []s
 
 	for _, excluded := range hdInsightExcluded {
 		if strings.Contains(strings.ToLower(branch), strings.ToLower(excluded)) {
-			problems = append(problems, fmt.Sprintf("names %q, want it nowhere: PRD #571 excludes it from every projection of an HDInsight cluster, and the program reads no field of it", excluded))
+			problems = append(problems, fmt.Sprintf("names %q, want it nowhere: PRD #571's *Only the fields the program reads* excludes it from every projection of an HDInsight cluster and from the guide's search and messaging calls, and the program reads no field of it", excluded))
 		}
 	}
 
@@ -2334,7 +2335,7 @@ func TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads(
 	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
 	query := azureResourceGraphQuery(t, guide)
 
-	problems := azureResourceGraphQueryProblems(query, azureHDInsightExcludedNames)
+	problems := azureResourceGraphQueryProblems(query, readAWSExcludedFields(t).names)
 
 	for _, problem := range problems {
 		t.Errorf("%s's Resource Graph query %s\n%s", guidePath, problem, query)
@@ -2382,7 +2383,7 @@ func TestInventoryGuideAzureResourceGraphQueryRulesFlagALeakingQuery(t *testing.
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			problems := azureResourceGraphQueryProblems(tc.query, azureHDInsightExcludedNames)
+			problems := azureResourceGraphQueryProblems(tc.query, readAWSExcludedFields(t).names)
 
 			for _, phrase := range tc.want {
 				if !slices.ContainsFunc(problems, func(problem string) bool {
@@ -2532,7 +2533,7 @@ func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			problems := azureHDInsightBranchProblems(tc.branch, azureHDInsightExcludedNames)
+			problems := azureHDInsightBranchProblems(tc.branch, readAWSExcludedFields(t).names)
 
 			for _, phrase := range tc.want {
 				if !slices.ContainsFunc(problems, func(problem string) bool {

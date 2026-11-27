@@ -41,5 +41,16 @@ key: connectivityEndpoints
 # four, and the guide's query packs the worker role field by field.
 key: scriptActions
 key: virtualNetworkProfile
+# The rest of an HDInsight cluster's properties bag: the cluster's securityProfile
+# (the Enterprise Security Package's domain and its service credentials), its
+# storageProfile (the storage accounts it sits on, their access keys with them)
+# and its kafkaRestProperties (the Kafka REST proxy's configuration). PRD #571
+# keeps none of them either, and the query packs a cluster's properties field by
+# field. A virtual machine's row keeps a `storageProfile` of its own, which is
+# another field and one the query packs on purpose, so the fixture check applies
+# this list to an HDInsight cluster's row rather than to every row of the export.
+key: securityProfile
+key: storageProfile
+key: kafkaRestProperties
 prefix: ZookeeperConnectString
 prefix: BootstrapBroker

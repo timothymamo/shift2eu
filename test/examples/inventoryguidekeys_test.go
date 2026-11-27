@@ -114,6 +114,14 @@ const azureResourceGraphFixtures = "test/e2e/testdata/inventory-guide/azure/grap
 // one role per cluster: its name, its targetInstanceCount, its
 // hardwareProfile.vmSize and its dataDisksGroups, and no osProfile, scriptActions
 // or virtualNetworkProfile with them.
+//
+// The fields the export may hold nowhere are the records of the shared
+// excluded-key list (excludedFixtureKeysPath), which this file's check reads
+// through readExcludedFixtureKeys: osProfile, connectivityEndpoints,
+// scriptActions, virtualNetworkProfile, securityProfile, storageProfile and
+// kafkaRestProperties among them (audit finding and review finding N3 on PRD
+// #571's milestone 4). No copy of that half of the list is kept here, so the two
+// checks that read it cannot drift apart.
 var azureHDInsightFixtureKeys = []string{
 	"id", "name", "type", "kind", "location", "zones", "sku", "properties",
 	"clusterDefinition",
@@ -121,17 +129,6 @@ var azureHDInsightFixtureKeys = []string{
 	"targetInstanceCount", "hardwareProfile", "vmSize",
 	"dataDisksGroups", "disksPerNode", "diskSizeGB",
 }
-
-// hdInsightExcludedFixtureKeys are the properties of an HDInsight cluster PRD
-// #571 excludes from the guide's export (*Only the fields the program reads*,
-// *No data-plane or configuration access*): osProfile holds the cluster's admin
-// user, its SSH key and its domain-join credentials, connectivityEndpoints the
-// hosts it answers on, scriptActions the scripts the cluster runs with their
-// parameters, and virtualNetworkProfile the subnet it sits in. The guide reads an
-// HDInsight cluster through Resource Graph alone, and the query projects the
-// fields the program reads out of the cluster's roles rather than passing the
-// array whole, so none of the four reaches the export in any row of it.
-var hdInsightExcludedFixtureKeys = []string{"osProfile", "connectivityEndpoints", "scriptActions", "virtualNetworkProfile"}
 
 // excludedFixtureKeysPath is the one list of the fields PRD #571 excludes from
 // every projection and fixture of the guide's search and messaging calls, shared
@@ -721,10 +718,16 @@ func readFixtureValues(t *testing.T, path, call string) []any {
 // pins the Azure half of PRD #571's *Only the fields the program reads*, the way
 // TestInventoryGuideSearchAndKafkaFixturesCarryOnlyTheFieldsTheProgramReads pins
 // the AWS and GCP halves: every key of an HDInsight cluster in the guide's
-// Resource Graph export is one azure.jq reads, at any depth, and none of
-// osProfile or connectivityEndpoints appears anywhere in the export. A fixture
-// that grew a key after this test was written would otherwise carry a field the
-// guide's raw output should have dropped.
+// Resource Graph export is one azure.jq reads, at any depth, and the cluster's
+// row holds none of the fields the shared excluded-key list names, osProfile and
+// connectivityEndpoints among them. A fixture that grew a key after this test was
+// written would otherwise carry a field the guide's raw output should have
+// dropped.
+//
+// The exclusion is read from a cluster's row rather than from the whole page: the
+// shared list also names a virtual machine's `storageProfile`, which the query
+// packs for that row on purpose, so only the rows of the type the list is about
+// can be held to all of it.
 func TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads(t *testing.T) {
 	t.Parallel()
 
@@ -774,16 +777,6 @@ func TestInventoryGuideAzureHDInsightFixtureCarriesOnlyTheFieldsTheProgramReads(
 				}
 			}
 		}
-
-		// The exclusion holds of the whole page, not of the HDInsight rows alone:
-		// no row of the export a program reads may hold either field.
-		page := readFile(t, path)
-
-		for _, key := range hdInsightExcludedFixtureKeys {
-			if strings.Contains(page, quotedKey(key)) {
-				t.Errorf("%s holds the key %s, want it nowhere: PRD #571 excludes it from every projection and fixture of the guide's search and messaging calls, and an HDInsight cluster is read through Resource Graph alone", file, quotedKey(key))
-			}
-		}
 	}
 
 	if clusters == 0 {
@@ -810,6 +803,19 @@ func TestInventoryGuideAzureHDInsightFixtureCheckFindsAPlantedRoleField(t *testi
 				"name": "gateway",
 				"host": "kafka-shop-audit.azurehdinsight.net",
 			}},
+			"securityProfile": map[string]any{
+				"directoryType": "ActiveDirectory",
+				"domain":        "example.com",
+			},
+			"storageProfile": map[string]any{
+				"storageaccounts": []any{map[string]any{
+					"name": "stshophdinsight.example.com",
+					"key":  "0000000000000000000000000000000000000000000000000000000000000000",
+				}},
+			},
+			"kafkaRestProperties": map[string]any{
+				"clientGroupInfo": map[string]any{"groupName": "kafka-shop-audit"},
+			},
 			"computeProfile": map[string]any{
 				"roles": []any{map[string]any{
 					"name":                "workernode",
@@ -830,13 +836,46 @@ func TestInventoryGuideAzureHDInsightFixtureCheckFindsAPlantedRoleField(t *testi
 		},
 	}
 
-	problems := fixtureKeyProblems(planted, azureHDInsightFixtureKeys, readExcludedFixtureKeys(t))
+	excluded := readExcludedFixtureKeys(t)
+	problems := fixtureKeyProblems(planted, azureHDInsightFixtureKeys, excluded)
 
-	for _, key := range hdInsightExcludedFixtureKeys {
+	// The fields the planted cluster holds are the ones the check has to report,
+	// read from the rows themselves rather than from a copy of the list here: a
+	// field added to the shared list and planted in a row cannot pass unread.
+	var plantedExcluded []string
+
+	var walk func(value any)
+
+	walk = func(value any) {
+		switch typed := value.(type) {
+		case map[string]any:
+			for key, child := range typed {
+				if excluded.excludes(key) && !slices.Contains(plantedExcluded, key) {
+					plantedExcluded = append(plantedExcluded, key)
+				}
+
+				walk(child)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child)
+			}
+		}
+	}
+
+	walk(planted)
+
+	slices.Sort(plantedExcluded)
+
+	if len(plantedExcluded) == 0 {
+		t.Fatalf("the planted HDInsight cluster holds none of the fields %s excludes, so this check read nothing: the fixture has to plant a field the check must report", excludedFixtureKeysPath)
+	}
+
+	for _, key := range plantedExcluded {
 		want := "the fixture holds the key " + quotedKey(key) + ", which PRD #571 excludes from every projection"
 
 		if !slices.Contains(problems, want) {
-			t.Errorf("fixtureKeyProblems reported the keys of a planted HDInsight role as %v, want %q among them: an excluded field inside a worker role has to fail the fixture's check, not pass it", problems, want)
+			t.Errorf("fixtureKeyProblems reported the keys of a planted HDInsight cluster as %v, want %q among them: an excluded field inside a worker role or in the cluster's own properties has to fail the fixture's check, not pass it", problems, want)
 		}
 	}
 }
