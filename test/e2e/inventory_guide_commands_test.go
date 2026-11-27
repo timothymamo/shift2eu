@@ -110,6 +110,30 @@ var repeatingToken = []fakeAWSResponse{
 	{stdout: `{"collectionSummaries": [{"id": "fedcba9876543210fedcba9876543210", "name": "shop-thumbnails"}], "nextToken": "t2"}`},
 }
 
+// guideShell is one shell the guide's blocks are run under here.
+type guideShell struct {
+	// name is how the subtests name the shell.
+	name string
+	// shell is the shell the block runs under, by name on PATH.
+	shell string
+	// preamble is written before the block, for a shell that has to run in a
+	// stricter mode than its default.
+	preamble string
+}
+
+// guidePOSIXShells are the shells the guide says its commands are for (bash,
+// zsh), the two smaller POSIX ones a visitor may have instead (sh, dash), and a
+// bash that stops on an unset variable. The guide promises all of them, so every
+// block it documents has to run in every one, whatever words or files it uses
+// (review finding N-a).
+var guidePOSIXShells = []guideShell{
+	{name: "bash", shell: "bash"},
+	{name: "zsh", shell: "zsh"},
+	{name: "sh", shell: "sh"},
+	{name: "dash", shell: "dash"},
+	{name: "bash with set -u", shell: "bash", preamble: "set -u\n"},
+}
+
 // TestInventoryGuideListCollectionsBlock runs the guide's own list-collections
 // block, extracted from docs/guide/inventory.md, against a fake aws program
 // (review findings S-A, S-B and N-a): it pages through every page, it says the
@@ -229,21 +253,9 @@ func TestInventoryGuideListCollectionsBlock(t *testing.T) {
 	// array, such as one holding the CLI arguments still to pass and expanded
 	// as "${next[@]}", is not POSIX: under set -u a bash before 4.4 takes its
 	// empty expansion for an unset variable and stops the whole command (review
-	// finding N-a). So the block has to run in each of these, whatever words it
-	// pages with.
-	shells := []struct {
-		name     string
-		shell    string
-		preamble string
-	}{
-		{name: "bash", shell: "bash"},
-		{name: "zsh", shell: "zsh"},
-		{name: "sh", shell: "sh"},
-		{name: "dash", shell: "dash"},
-		{name: "bash with set -u", shell: "bash", preamble: "set -u\n"},
-	}
-
-	for _, sh := range shells {
+	// finding N-a). So the block has to run in each of guidePOSIXShells,
+	// whatever words it pages with.
+	for _, sh := range guidePOSIXShells {
 		t.Run("runs under "+sh.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -713,20 +725,26 @@ func TestInventoryGuideCloudDNSRecordSetsBlock(t *testing.T) {
 
 	block := inventoryGuideCloudDNSBlock(t)
 
-	for _, shellName := range []string{"sh", "dash"} {
-		t.Run("runs under "+shellName, func(t *testing.T) {
+	// The same shells the list-collections block runs under: the guide promises
+	// bash and zsh, and a visitor may have sh or dash instead (review finding,
+	// round 3).
+	for _, sh := range guidePOSIXShells {
+		shellName := sh.name
+
+		t.Run("runs under "+sh.name, func(t *testing.T) {
 			t.Parallel()
 
-			if _, err := exec.LookPath(shellName); err != nil {
-				t.Skipf("%s is not installed, so this shell cannot be checked here: %v", shellName, err)
+			if _, err := exec.LookPath(sh.shell); err != nil {
+				t.Skipf("%s is not installed, so this shell cannot be checked here: %v", sh.shell, err)
 			}
 
 			run := runGuideBlock(t, guideBlockOptions{
-				shell: shellName,
-				block: block,
-				fakes: map[string]func(callLog string) []byte{"gcloud": fakeGCloudProgram},
-				files: map[string]string{cloudDNSManagedZonesFile: cloudDNSManagedZones},
-				env:   []string{"project=" + cloudDNSProject},
+				shell:    sh.shell,
+				preamble: sh.preamble,
+				block:    block,
+				fakes:    map[string]func(callLog string) []byte{"gcloud": fakeGCloudProgram},
+				files:    map[string]string{cloudDNSManagedZonesFile: cloudDNSManagedZones},
+				env:      []string{"project=" + cloudDNSProject},
 			})
 
 			if run.exitStatus != 0 {
