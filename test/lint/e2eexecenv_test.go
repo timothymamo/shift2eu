@@ -87,10 +87,20 @@ var e2eLinkerStamp = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.[A-Za-z_][A-Za-z0-9_
 //     value already; the guard stays on purpose, so the safety does not depend
 //     on that regexp staying strict.
 //
-// So the value holds no quote, no backslash and no white space other than a
-// space or a tab. Each name=value field must match e2eLinkerStamp and may not
-// start with "-", and each field before it must be exactly -X.
+// cmd/go also reads a value whose first byte is not "-" as pattern=flags (the
+// flags for the packages a pattern names), and a split on white space would
+// drop a leading space or tab unseen; so the value must start with "-" and end
+// with no white space.
+//
+// So the value starts with "-", ends with no white space and holds no quote, no
+// backslash and no white space other than a space or a tab. Each name=value
+// field must match e2eLinkerStamp and may not start with "-", and each field
+// before it must be exactly -X.
 func e2eLinkerStamps(value string) bool {
+	if !strings.HasPrefix(value, "-") || strings.TrimRight(value, " \t") != value {
+		return false
+	}
+
 	if strings.ContainsAny(value, `'"\`) {
 		return false
 	}
