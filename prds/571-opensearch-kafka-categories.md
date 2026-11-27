@@ -245,7 +245,7 @@ Capabilities the programs derive (each milestone pins the exact rule):
 | `search.opensearch` | `encryption-at-rest` | AWS: `EncryptionAtRestOptions.Enabled` true; always for a Serverless collection |
 | `search.opensearch` | `snapshots` | AWS: always for a domain (OpenSearch Service takes automated snapshots of every domain; to be checked); always for a Serverless collection (hourly automated snapshots, restorable; decided in milestone 2) |
 | `messaging.kafka` | `node-high-availability` | MSK: `NumberOfBrokerNodes` 2 or more (to be checked: whether a topic's replication factor, 2 or more for a topic to survive the loss of a broker, which no cluster setting gives, must be stated by hand); MSK Serverless: always; GCP Managed Kafka: always (to be checked); HDInsight: 3 or more worker nodes (checked in milestone 4: Azure asks for 3 or more workers to guarantee availability, and no cluster setting gives a topic's replication factor, which the guide says to check) |
-| `messaging.kafka` | `zone-high-availability` | MSK: brokers in two or more zones (`BrokerNodeGroupInfo.ClientSubnets`, one subnet per zone; to be checked); MSK Serverless: always (to be checked); GCP: to be checked; HDInsight: zones set on the cluster |
+| `messaging.kafka` | `zone-high-availability` | MSK: brokers in two or more zones (`BrokerNodeGroupInfo.ClientSubnets`, one subnet per zone; to be checked); MSK Serverless: always (to be checked); GCP: to be checked; HDInsight: never (decided in milestone 4: a cluster with zones set is zonal, all its nodes in the one zone chosen) |
 | `messaging.kafka` | `encryption-at-rest` | MSK and MSK Serverless: always (`EncryptionInfo.EncryptionAtRest`); GCP: always (Google default encryption); HDInsight: always (Azure managed disks, encrypted at rest by default; checked in milestone 4) |
 
 Not capabilities: shards and partitions (what both categories are, as scaling with requests is what
@@ -792,6 +792,15 @@ text as the decision)
     <https://learn.microsoft.com/en-us/azure/hdinsight/kafka/apache-kafka-get-started>. HDInsight Kafka
     "does not support downward scaling".
     <https://learn.microsoft.com/en-us/azure/hdinsight/kafka/apache-kafka-introduction>
+  - **Zones.** "Azure HDInsight clusters can be configured to deploy within one Availability Zone. All
+    the nodes in this HDInsight cluster including the two head nodes, three zookeeper nodes, two
+    gateway nodes and the worker nodes will be placed in the specified Availability Zone." For high
+    availability across zones the page has a second cluster in another zone, to switch to "If this
+    Availability zone goes down"; new workers go to "the same Availability zone of this cluster".
+    Decided in milestone 4 (after the AI reviewer's finding on PR #685): a cluster with `zones` set is
+    zonal, not zone redundant, so an HDInsight Kafka cluster never gets `zone-high-availability`; the
+    query still projects `zones`, the outer projection every resource shares.
+    <https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-use-availability-zones>
   - **Disk size.** The Azure CLI's `az hdinsight create` describes `--workernode-data-disk-size` as
     "The size of the data disk in GB, e.g. 1023", and gives `--workernode-count` a default of 3.
     <https://learn.microsoft.com/en-us/cli/azure/hdinsight?view=azure-cli-latest>. Kafka on HDInsight

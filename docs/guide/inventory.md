@@ -1559,7 +1559,7 @@ holds data, and stays; so does a share of such a FileStorage account, a persiste
 | `storage.file` (`Microsoft.FileShares`) | `zone-high-availability` | `redundancy` `Zone` |
 | `messaging.kafka` (HDInsight) | `encryption-at-rest` | always: Azure encrypts the cluster's managed disks |
 | `messaging.kafka` (HDInsight) | `node-high-availability` | the worker role's `targetInstanceCount` is 3 or more |
-| `messaging.kafka` (HDInsight) | `zone-high-availability` | the cluster has `zones` set |
+| `messaging.kafka` (HDInsight) | `zone-high-availability` | never: a cluster with `zones` set is zonal, every node in the one zone chosen, not zone redundant, and does not survive that zone's loss (Microsoft Learn, *Create an Azure HDInsight cluster that uses Availability Zones*) |
 
 A frontend is IPv6 when its `privateIPAddressVersion` or its public IP address's
 `publicIPAddressVersion` is `IPv6`. A backend pool member is IPv6 when the IP configuration it names

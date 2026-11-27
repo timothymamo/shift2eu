@@ -459,7 +459,9 @@ def zone_count: (.zones // []) | length;
           # as it was written) is Kafka on virtual machines Azure runs; any other
           # kind stays unclassified. Sized by its worker role (the query packs it
           # alone): the count, the VM size and the disks of each worker. Azure
-          # encrypts its managed disks at rest. A cluster being deleted, deleted or
+          # encrypts its managed disks at rest. Never zone highly available: a
+          # cluster with zones set is zonal, every node in the one zone chosen,
+          # and does not survive that zone's loss. A cluster being deleted, deleted or
           # that failed (clusterState Deleting, Deleted, DeleteQueued,
           # DeleteTimeout, DeleteError, Error, Aborted or Timeout, any casing) is
           # left out; every other state is kept.
@@ -472,8 +474,7 @@ def zone_count: (.zones // []) | length;
             | ($worker.dataDisksGroups[0]? // {}) as $disks
             | $base + {category: "messaging.kafka", capabilities: [
                 "encryption-at-rest",
-                cap("node-high-availability"; ($worker.targetInstanceCount // 0) >= 3),
-                cap("zone-high-availability"; zone_count >= 1)
+                cap("node-high-availability"; ($worker.targetInstanceCount // 0) >= 3)
               ],
               size: size_of(($worker.hardwareProfile.vmSize? | vm_size($vmsizes) // {})
                 + {count: ($worker.targetInstanceCount | if type == "number" and . >= 1 then . else null end),

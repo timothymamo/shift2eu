@@ -273,8 +273,7 @@
       "region": "westeurope",
       "capabilities": [
         "encryption-at-rest",
-        "node-high-availability",
-        "zone-high-availability"
+        "node-high-availability"
       ],
       "size": {
         "vcpus": 4,
