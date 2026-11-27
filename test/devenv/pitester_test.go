@@ -1637,12 +1637,14 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 	}{
 		{
 			name: "the deck's directory is missing",
-			home: func(t *testing.T, root, _ string) string { return filepath.Join(root, "home") },
+			home: func(_ *testing.T, root, _ string) string { return filepath.Join(root, "home") },
 			why:  missing,
 		},
 		{
 			name: "the deck's path is a regular file",
 			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
 				home := filepath.Join(root, "home")
 				writeFileMode(t, piTesterDeckDir(home), []byte("not a directory\n"), 0o644)
 
@@ -1653,6 +1655,8 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		{
 			name: "the deck's directory is a symbolic link to a whole one",
 			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
 				home := filepath.Join(root, "home")
 				target := filepath.Join(root, "written-by-the-deck")
 				deckFile(t, target, "index.ts")
@@ -1672,6 +1676,8 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		{
 			name: "the deck's directory is empty",
 			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
 				home := filepath.Join(root, "home")
 
 				if err := os.MkdirAll(piTesterDeckDir(home), 0o700); err != nil {
@@ -1685,6 +1691,8 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		{
 			name: "the deck's directory lies in the working directory",
 			home: func(t *testing.T, _, project string) string {
+				t.Helper()
+
 				home := resolvePiTesterDir(t, project)
 				deckFile(t, home, "index.ts")
 
@@ -1695,6 +1703,8 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		{
 			name: "the deck's directory lies below the working directory",
 			home: func(t *testing.T, _, project string) string {
+				t.Helper()
+
 				home := filepath.Join(resolvePiTesterDir(t, project), "home")
 				deckFile(t, home, "index.ts")
 
@@ -1705,6 +1715,8 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		{
 			name: "the deck holds only index.ts",
 			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
 				home := filepath.Join(root, "home")
 				deckFile(t, home, "index.ts")
 
@@ -1714,6 +1726,8 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		{
 			name: "the deck holds only index.js",
 			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
 				home := filepath.Join(root, "home")
 				deckFile(t, home, "index.js")
 
@@ -1723,6 +1737,8 @@ func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
 		{
 			name: "the deck holds only package.json",
 			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
 				home := filepath.Join(root, "home")
 				deckFile(t, home, "package.json")
 
