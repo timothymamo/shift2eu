@@ -25,7 +25,7 @@ offering (Scaleway's Redis Cluster lists no `node-high-availability`: see its SO
 registry take no size and are not priced.
 
 - `OVHcloud`: prices retrieved 2026-11-27 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
-- `Scaleway`: prices retrieved 2026-11-26 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
+- `Scaleway`: prices retrieved 2026-11-27 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
 - `UpCloud`: prices retrieved 2026-11-27 from `https://upcloud.com/pricing/`, estimated in `de-fra1` (its default region)
 
 | Target | Category | Size | Offering | Plan | Monthly estimate | Reason |
@@ -50,10 +50,12 @@ registry take no size and are not priced.
 | `Scaleway` | `database.mysql` | 2 vCPU, 4 GiB memory, 50 GiB storage, count 1, 730 h/month | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PLAY2-NANO` | €34.46 |  |
 | `Scaleway` | `database.postgresql` | 2 vCPU, 4 GiB memory, 50 GiB storage, count 1, 730 h/month | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PLAY2-NANO` | €34.46 |  |
 | `Scaleway` | `kubernetes.managed` | 2 vCPU, 4 GiB memory, count 3, 730 h/month | `Kubernetes Kapsule` | `PLAY2-NANO` | €60.31 |  |
+| `Scaleway` | `messaging.kafka` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month | `Clusters for Apache Kafka` | `BROKERNODE-SHARED-2C-8G` | €362.67 |  |
 | `Scaleway` | `messaging.queue` | none | none | none | — | `usage-priced` |
 | `Scaleway` | `messaging.topic` | none | none | none | — | `usage-priced` |
 | `Scaleway` | `network.loadbalancer` | none | none | none | — | `not-priced` |
 | `Scaleway` | `registry.container` | none | none | none | — | `not-priced` |
+| `Scaleway` | `search.opensearch` | 2 vCPU, 8 GiB memory, 100 GiB storage, count 3, 730 h/month, `node-high-availability` | `Cloud Essentials for OpenSearch High Availability` | `SEARCHDB-SHARED-2C-8G` | €246.60 |  |
 | `Scaleway` | `serverless.container` | none | none | none | — | `usage-priced` |
 | `Scaleway` | `serverless.function` | 1 GiB memory | none | none | — | `usage-priced` |
 | `Scaleway` | `storage.block` | 100 GiB storage, count 1 | `Block Storage` | none | €9.49 |  |
