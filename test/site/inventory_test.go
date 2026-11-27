@@ -1914,20 +1914,25 @@ const azureHDInsightRolesPath = "properties.computeProfile.roles"
 // and review finding N3 on PRD #571's milestone 4). Read from the one list, the
 // guide's projection check and the fixture check cannot drift apart.
 
+// azureHDInsightType is the Resource Manager type of an HDInsight cluster, in the
+// casing azure.jq compares it in. Written out once, so the filters below quote it
+// rather than spelling it again.
+const azureHDInsightType = "microsoft.hdinsight/clusters"
+
 // azureHDInsightTypeFilter matches the filter that opens the branch of the
 // Resource Graph query that reads an HDInsight cluster: `where type =~ 'microsoft.hdinsight/clusters'`,
 // in any casing and with any spacing. The branch is found by that filter, not by
 // the first place the query names the type: keyed on the first occurrence, the
 // check read the wrong part of the query as soon as the legs of the union were
 // written in another order (review finding N1).
-var azureHDInsightTypeFilter = regexp.MustCompile(`(?i)\bwhere\s+type\s+=~\s*'microsoft\.hdinsight/clusters'`)
+var azureHDInsightTypeFilter = regexp.MustCompile(`(?i)\bwhere\s+type\s+=~\s*'` + regexp.QuoteMeta(azureHDInsightType) + `'`)
 
 // azureHDInsightTypeExclusion matches the one other place the query may name the
 // type: the filter that keeps HDInsight clusters out of the branch reading every
 // other type, `where type !~ 'microsoft.hdinsight/clusters'`. Any other naming of
 // the type, a `case(...)` arm first among them, would pass a cluster's properties
 // on whole, past the branch that packs only the fields the program reads.
-var azureHDInsightTypeExclusion = regexp.MustCompile(`(?i)\btype\s+!~\s*'microsoft\.hdinsight/clusters'`)
+var azureHDInsightTypeExclusion = regexp.MustCompile(`(?i)\btype\s+!~\s*'` + regexp.QuoteMeta(azureHDInsightType) + `'`)
 
 // azureUnionOpen matches the `| union (` whose parenthesised group holds the
 // query's legs (PRD #571, milestone 4).
@@ -2156,8 +2161,6 @@ func azureProjectionProblems(query string) []string {
 // and connectivityEndpoints with them, past the branch that packs only the fields
 // the program reads.
 func azureHDInsightTypeOccurrenceProblems(query string) []string {
-	const marker = "microsoft.hdinsight/clusters"
-
 	var problems []string
 
 	lowered := strings.ToLower(query)
@@ -2165,13 +2168,13 @@ func azureHDInsightTypeOccurrenceProblems(query string) []string {
 	filter := azureHDInsightTypeFilter.FindStringIndex(query)
 
 	for offset := 0; offset < len(query); {
-		found := strings.Index(lowered[offset:], marker)
+		found := strings.Index(lowered[offset:], azureHDInsightType)
 		if found < 0 {
 			break
 		}
 
 		at := offset + found
-		offset = at + len(marker)
+		offset = at + len(azureHDInsightType)
 
 		if filter != nil && at >= filter[0] && at < filter[1] {
 			continue
