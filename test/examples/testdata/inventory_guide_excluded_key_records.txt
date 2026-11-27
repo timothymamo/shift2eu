@@ -1,7 +1,7 @@
 # The record documents both readers of inventory_guide_excluded_keys.txt are
 # given, and the outcome each expects of them (review finding on PR #654). The
 # readers are test/examples' readExcludedFixtureKeys, through parseExcludedKeys,
-# and test/site's readAWSExcludedFields, through parseAWSExcludedFields: neither
+# and test/site's readExcludedFields, through parseExcludedFields: neither
 # test package may import the other, so each holds its own copy of the parser, and
 # this one table is what says the two accept and reject the same documents for the
 # same reasons. Both run it, each against its own copy. A case added here is

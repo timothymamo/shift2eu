@@ -53,7 +53,10 @@
 # node count (from its tier, replicas and shards, or an Azure Managed Redis
 # cluster's high availability or zones), an Azure DocumentDB cluster's node count and
 # storage (its shards, a standby each with high availability, and sizeGb per
-# shard) and an NFS share's GiB (shareQuota, or provisionedStorageGiB). A number
+# shard), an NFS share's GiB (shareQuota, or provisionedStorageGiB) and an
+# HDInsight Kafka cluster's worker count, VM size and GiB per worker (its worker
+# role's targetInstanceCount, hardwareProfile.vmSize, and disksPerNode times
+# diskSizeGB). A number
 # no call gives is left out, never guessed. The workload, relations and
 # monthlyCost fields are the user's to add by hand; this program never writes
 # them.
@@ -450,6 +453,33 @@ def zone_count: (.zones // []) | length;
               cap("zone-high-availability"; .properties.redundancy? == "Zone")
             ],
             size: size_of({storageGiB: .properties.provisionedStorageGiB?})}
+          else $base + {category: "unclassified"} end
+        elif $t == "microsoft.hdinsight/clusters" then
+          # An HDInsight cluster of kind Kafka (any casing: Azure returns the kind
+          # as it was written) is Kafka on virtual machines Azure runs; any other
+          # kind stays unclassified. Sized by its worker role (the query packs it
+          # alone): the count, the VM size and the disks of each worker. Azure
+          # encrypts its managed disks at rest. Never zone highly available: a
+          # cluster with zones set is zonal, every node in the one zone chosen,
+          # and does not survive that zone's loss. A cluster being deleted, deleted or
+          # that failed (clusterState Deleting, Deleted, DeleteQueued,
+          # DeleteTimeout, DeleteError, Error, Aborted or Timeout, any casing) is
+          # left out; every other state is kept.
+          if (.properties.clusterState? // "" | ascii_downcase
+              | IN("deleting", "deleted", "deletequeued", "deletetimeout", "deleteerror",
+                   "error", "aborted", "timeout")) then
+            empty
+          elif (.properties.clusterDefinition.kind? // "" | ascii_downcase) == "kafka" then
+            (.properties.computeProfile.roles[0]? // {}) as $worker
+            | ($worker.dataDisksGroups[0]? // {}) as $disks
+            | $base + {category: "messaging.kafka", capabilities: [
+                "encryption-at-rest",
+                cap("node-high-availability"; ($worker.targetInstanceCount | type == "number" and . >= 3))
+              ],
+              size: size_of(($worker.hardwareProfile.vmSize? | vm_size($vmsizes) // {})
+                + {count: ($worker.targetInstanceCount | if type == "number" and . >= 1 then . else null end),
+                  storageGiB: (if ($disks.disksPerNode | type) == "number" and ($disks.diskSizeGB | type) == "number"
+                    then $disks.disksPerNode * $disks.diskSizeGB else null end)})}
           else $base + {category: "unclassified"} end
         elif $t == "microsoft.compute/snapshots" or $t == "microsoft.insights/autoscalesettings" then
           # Part of a disk's or a scale set's capabilities, not a resource to move.
