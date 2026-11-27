@@ -1,6 +1,6 @@
 # PRD #571: OpenSearch and Kafka as taxonomy categories
 
-**Status:** In progress, milestones 1 and 2 done. The maintainer decided all six questions under *Decisions and
+**Status:** In progress, milestones 1 to 4 done. The maintainer decided all six questions under *Decisions and
 decided questions* on 2026-11-25, as recommended. Milestone 1's ADR is
 [0047](../docs/adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md).
 **Issue:** #571
@@ -470,7 +470,7 @@ lands, its report shows the new categories as fit `none` with "no offering in th
    `roles/managedkafka.client`. `ConnectCluster` stays `unclassified`; synthetic sanitised fixtures,
    the test that they carry no excluded key, golden and the GCP entries of the e2e category list.
    Depends on 1 and PRD #552 milestone 3.
-4. [ ] **Azure classification in the guide.** HDInsight clusters of kind `KAFKA` from Resource Graph, the
+4. [x] **Azure classification in the guide.** HDInsight clusters of kind `KAFKA` from Resource Graph, the
    `project` extended to `clusterDefinition.kind`, the worker role's count and VM size, its disks if
    they give `storageGiB`, and the zones, and nothing else (never `osProfile` or
    `connectivityEndpoints`); HDInsight is read only through what Resource Graph projects, never an

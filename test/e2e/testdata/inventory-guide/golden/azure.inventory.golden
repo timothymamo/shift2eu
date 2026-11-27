@@ -237,14 +237,34 @@
     {
       "id": "kafka-shop-audit",
       "rawType": "Microsoft.HDInsight/clusters",
-      "category": "unclassified",
-      "region": "westeurope"
+      "category": "messaging.kafka",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest"
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 8,
+        "count": 2,
+        "storageGiB": 64
+      }
     },
     {
       "id": "kafka-shop-streams",
       "rawType": "Microsoft.HDInsight/clusters",
-      "category": "unclassified",
-      "region": "westeurope"
+      "category": "messaging.kafka",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "node-high-availability",
+        "zone-high-availability"
+      ],
+      "size": {
+        "vcpus": 4,
+        "memoryGiB": 16,
+        "count": 3,
+        "storageGiB": 512
+      }
     },
     {
       "id": "lb-shop-all",
