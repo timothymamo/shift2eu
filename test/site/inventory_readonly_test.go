@@ -28,15 +28,23 @@ import (
 // or ```json sample, in prose, in a heading, in a blockquote, in an indented block,
 // in an HTML block, in a code span over two lines, or in a heredoc body.
 //
-// A line that ends at its last field always takes the next line's fields, whether
-// or not the words so far read: the words after a command path are its positional
+// A line that ends at its last field takes the next line's fields, whether or not
+// the words so far read: the words after a command path are its positional
 // arguments, so prose appended to a read changes nothing, while a denied flag or a
 // second method the text wraps onto that line is read in the sequence it belongs to.
 // A command the text wraps — after the CLI's name in a code span, a prose line, a
 // fence body or a heredoc body, or in the middle of a program's comment table — is
-// thus read whole. The guard is the line's last character: the guide's JSON writes
-// `"source": "aws",`, whose comma ends the mention, not the `"resources"` array that
-// follows it, while a name that ends its line does take the next line's fields.
+// thus read whole. The one line that continues nothing is the next command's: a
+// continuation whose first field names a CLI starts that CLI's own sequence, so the
+// `az rest` reads the text gives a line each are reads of their own, not one
+// invocation with two methods. The guard is the line's last character: the guide's
+// JSON writes `"source": "aws",`, whose comma ends the mention, not the
+// `"resources"` array that follows it, while a name that ends its line does take the
+// next line's fields.
+//
+// A line break is a line break: `\r\n` and a lone `\r` alike, as CommonMark reads
+// them, so a command the text wraps with either arrives as the two lines it is,
+// rather than as two words run into one.
 //
 // An invocation's command path is held to the exact list of read commands its CLI
 // has in cloudCLIs, not to a verb: a new command is a deliberate edit of that list.
@@ -49,13 +57,16 @@ import (
 // `--flags-file`) fails even on a path that reads, and so does the flag's prefix,
 // which the CLIs' parsers complete (`--endpoint`, `--impersonate`). A denied flag
 // and a shell variable the CLIs read in its place (`AWS_ENDPOINT_URL`,
-// `AWS_CA_BUNDLE`, `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`, `REQUESTS_CA_BUNDLE`,
-// ...) fail wherever they stand: on the read's own line, on a line of their own
-// (the guide's `export AWS_REGION=...` idiom), or on a line the argument before
-// them wraps onto. The text-wide rule runs once per line, before any field
-// sequence is read, so a line is reported once. `az rest` reads only as one GET of
-// the management endpoint, with no resource, headers or body, and with its method
-// flag spelt out.
+// `AWS_CA_BUNDLE`, `AWS_CONFIG_FILE`, `AZURE_CONFIG_DIR`, `CLOUDSDK_CONFIG`,
+// `CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT`, `REQUESTS_CA_BUNDLE`, ...) fail
+// wherever they stand: on the read's own line, on a line of their own (the guide's
+// `export AWS_REGION=...` idiom), or on a line the argument before them wraps onto.
+// A variable spells no flag, and several of them stand in for a setting a config
+// file holds rather than for a flag (`the auth/disable_ssl_validation property`), so
+// cloudCLIs says what each one stands in for and the refusal names that. The
+// text-wide rule runs once per line, before any field sequence is read, so a line is
+// reported once. `az rest` reads only as one GET of the management endpoint, with no
+// resource, headers or body, and with its method flag spelt out.
 //
 // A single quote is no field separator, so a denied flag or an `az rest` flag that
 // an invocation quotes arrives with the quote on it; reads trims it before it names
@@ -174,11 +185,13 @@ var cloudCLIs = []cloudCLI{{
 	// --no-verify-ssl and --ca-bundle turn off the check that the answer comes from
 	// AWS, and --cli-input-json and --cli-input-yaml read the call's parameters from
 	// a file: a read that passes any of them reads something else's account. The
-	// variables are what the CLI reads in their place.
+	// variables are what the CLI reads in their place, AWS_CONFIG_FILE's being the
+	// endpoint_url and ca_bundle settings of the config file it names.
 	deniedFlags: []string{"--ca-bundle", "--cli-input-json", "--cli-input-yaml", "--endpoint-url", "--no-verify-ssl"},
 	deniedEnv: []deniedEnv{
-		{variable: "AWS_CA_BUNDLE", flag: "--ca-bundle"},
-		{variable: "AWS_ENDPOINT_URL", flag: "--endpoint-url"},
+		{variable: "AWS_CA_BUNDLE", standsFor: "the --ca-bundle flag"},
+		{variable: "AWS_CONFIG_FILE", standsFor: "the endpoint_url and ca_bundle settings of the config file it names"},
+		{variable: "AWS_ENDPOINT_URL", standsFor: "the --endpoint-url flag"},
 	},
 }, {
 	name: "az",
@@ -201,12 +214,15 @@ var cloudCLIs = []cloudCLI{{
 	},
 	// `az rest --resource` addresses Microsoft Graph with the visitor's
 	// management token, and --headers and --body carry a request of the caller's
-	// choosing: no read passes any of them. The two variables make the CLI skip
-	// TLS verification in a flag's place.
+	// choosing: no read passes any of them. The variables make the CLI skip TLS
+	// verification and trust another CA bundle where it has no flag to, and
+	// AZURE_CONFIG_DIR's config directory holds the cloud's endpoints and the
+	// caller's cached login.
 	deniedFlags: []string{"--body", "--headers", "--resource"},
 	deniedEnv: []deniedEnv{
-		{variable: "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION", flag: "--connection-verify"},
-		{variable: "REQUESTS_CA_BUNDLE", flag: "--ca-bundle"},
+		{variable: "AZURE_CLI_DISABLE_CONNECTION_VERIFICATION", standsFor: "the connection verification the CLI otherwise makes"},
+		{variable: "AZURE_CONFIG_DIR", standsFor: "the endpoints and cached login of the config directory it names"},
+		{variable: "REQUESTS_CA_BUNDLE", standsFor: "the CA bundle the CLI otherwise trusts"},
 	},
 }, {
 	name: "gcloud",
@@ -243,18 +259,20 @@ var cloudCLIs = []cloudCLI{{
 	// --impersonate-service-account makes the call as a service account the
 	// visitor may not own a read of, --flags-file reads the flags from a file the
 	// check does not read, --access-token-file takes the token from a file, and
-	// --configuration runs another named configuration's credentials. The
-	// variables are what the CLI reads in those flags' place: another active
-	// configuration, another token file, another API endpoint (one override per
-	// service), another CA bundle and TLS verification turned off.
+	// --configuration runs another named configuration's credentials. Some of the
+	// variables stand in for those flags; the rest stand in for properties gcloud
+	// sets in a configuration's config file — one override per service, a CA bundle
+	// and TLS verification turned off — and CLOUDSDK_CONFIG names a directory of
+	// such configurations.
 	deniedFlags: []string{"--access-token-file", "--configuration", "--flags-file", "--impersonate-service-account"},
 	deniedEnv: []deniedEnv{
-		{variable: "CLOUDSDK_ACTIVE_CONFIG_NAME", flag: "--configuration"},
-		{variable: "CLOUDSDK_API_ENDPOINT_OVERRIDES", flag: "--api-endpoint-overrides"},
-		{variable: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE", flag: "--access-token-file"},
-		{variable: "CLOUDSDK_AUTH_DISABLE_SSL_VALIDATION", flag: "--disable-ssl-validation"},
-		{variable: "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT", flag: "--impersonate-service-account"},
-		{variable: "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE", flag: "--custom-ca-certs-file"},
+		{variable: "CLOUDSDK_ACTIVE_CONFIG_NAME", standsFor: "the --configuration flag"},
+		{variable: "CLOUDSDK_API_ENDPOINT_OVERRIDES", standsFor: "the api_endpoint_overrides/* property"},
+		{variable: "CLOUDSDK_AUTH_ACCESS_TOKEN_FILE", standsFor: "the --access-token-file flag"},
+		{variable: "CLOUDSDK_AUTH_DISABLE_SSL_VALIDATION", standsFor: "the auth/disable_ssl_validation property"},
+		{variable: "CLOUDSDK_AUTH_IMPERSONATE_SERVICE_ACCOUNT", standsFor: "the --impersonate-service-account flag"},
+		{variable: "CLOUDSDK_CONFIG", standsFor: "the api_endpoint_overrides/*, auth/disable_ssl_validation and core/custom_ca_certs_file properties of the configurations it holds"},
+		{variable: "CLOUDSDK_CORE_CUSTOM_CA_CERTS_FILE", standsFor: "the core/custom_ca_certs_file property"},
 	},
 }}
 
@@ -279,14 +297,18 @@ type cloudCLI struct {
 	deniedEnv []deniedEnv
 }
 
-// deniedEnv is an environment variable that does what a denied flag does: the CLI
-// reads it in the flag's place.
+// deniedEnv is an environment variable that does what a denied flag or setting
+// does: the CLI reads it in that flag's or setting's place.
 type deniedEnv struct {
 	// variable is the variable's name; one of its per-service spellings, such as
 	// AWS_ENDPOINT_URL_S3, starts with it and an underscore.
 	variable string
-	// flag is the flag the variable stands in for.
-	flag string
+	// standsFor is what the variable stands in for, as the CLI's own documentation
+	// names it: a flag (`the --endpoint-url flag`) or, where the CLI has no flag of
+	// its own, the property or setting a config file holds (`the
+	// auth/disable_ssl_validation property`), so the refusal calls nothing a flag
+	// the CLI has none of.
+	standsFor string
 }
 
 // cloudCLIByName returns the CLI the name stands for, and whether there is one. It
@@ -360,7 +382,10 @@ func (c cloudCLI) denies(flag string) bool {
 // flag and a denied variable fail wherever they stand, on a line of their own or on
 // the line an argument before them wraps onto, and no CLI need be named on the line:
 // the CLIs read the variable and take the flag in every invocation. It runs once per
-// logical line, before the field loop, so a line is reported once.
+// logical line, before the field loop, so a line is reported once. The name a field
+// gives is trimmed of the `:` and the `-`, `+` and `?` a parameter expansion puts
+// after it (`${AWS_ENDPOINT_URL:=https://example.com}` reaches it as
+// `AWS_ENDPOINT_URL:`), and of the single quote a shell text may put around it.
 func deniedToken(file string, line logicalLine) (string, bool) {
 	for _, field := range lineFields(line.text) {
 		word := strings.Trim(field, "'")
@@ -370,6 +395,7 @@ func deniedToken(file string, line logicalLine) (string, bool) {
 
 		flag := flagName(word)
 		name, _, _ := strings.Cut(word, "=")
+		name = strings.TrimRight(name, ":-+?")
 
 		for _, cli := range cloudCLIs {
 			if slices.Contains(cli.deniedFlags, flag) {
@@ -378,7 +404,7 @@ func deniedToken(file string, line logicalLine) (string, bool) {
 
 			for _, denied := range cli.deniedEnv {
 				if name == denied.variable || strings.HasPrefix(name, denied.variable+"_") {
-					return environmentRefusal(file, line.number, name, denied.flag, line.text, cli), true
+					return environmentRefusal(file, line.number, name, denied.standsFor, line.text, cli), true
 				}
 			}
 		}
@@ -1110,6 +1136,49 @@ func TestReadOnlyCheckSeparatesConsecutiveCommands(t *testing.T) {
 	}
 }
 
+// TestDeniedVariablesNameWhatTheyStandFor pins the environment refusal's wording to
+// what each denied variable really stands in for (issue #716's audit): only some of
+// them have a flag of their own — gcloud's api_endpoint_overrides/*,
+// auth/disable_ssl_validation and core/custom_ca_certs_file are properties, and az
+// has neither a --ca-bundle nor a --connection-verify flag — so cloudCLIs tells what
+// each one stands in for and the refusal repeats it. A standsFor that names a flag
+// must name one the CLI really has, the flags cloudCLIs denies being the check's own
+// list of them, and a message that stands for no flag calls nothing one.
+func TestDeniedVariablesNameWhatTheyStandFor(t *testing.T) {
+	t.Parallel()
+
+	for _, cli := range cloudCLIs {
+		for _, denied := range cli.deniedEnv {
+			if denied.standsFor == "" {
+				t.Errorf("%s's %s stands in for nothing, want the flag or setting the CLI reads in its place", cli.name, denied.variable)
+
+				continue
+			}
+
+			message := environmentRefusal(inventoryGuidePath, 1, denied.variable, denied.standsFor, "export "+denied.variable+"=./x", cli)
+
+			if !strings.Contains(message, "reads in the place of "+denied.standsFor) {
+				t.Errorf("the refusal of %s %s is %q, want it to name what the variable stands in for", cli.name, denied.variable, message)
+			}
+
+			if !strings.Contains(denied.standsFor, "flag") && strings.Contains(message, "flag") {
+				t.Errorf("the refusal of %s %s, which stands in for %q, is %q, want it to call that no flag: the CLI has none of its own",
+					cli.name, denied.variable, denied.standsFor, message)
+			}
+
+			// A flag the refusal names is one the CLI accepts: gcloud has no
+			// --disable-ssl-validation flag, and az has no --ca-bundle.
+			if rest, named := strings.CutPrefix(denied.standsFor, "the --"); named {
+				flag, _, _ := strings.Cut(rest, " ")
+
+				if flag = "--" + flag; !slices.Contains(cli.deniedFlags, flag) {
+					t.Errorf("%s's %s stands in for %s, which is no flag %s has: the flags it denies are %v", cli.name, denied.variable, denied.standsFor, cli.name, cli.deniedFlags)
+				}
+			}
+		}
+	}
+}
+
 // TestCloudReadDecisions pins the decision each CLI's read commands decide: the
 // words the check holds a sequence to and whether it reads. The lists themselves
 // are cloudCLIs, the one place a read command is written down, so a new guide
@@ -1234,9 +1303,11 @@ type fieldScan struct {
 // program's. It is the check's one mechanism, and it trusts no Markdown and no
 // shell reading: every line is split into fields wherever it sits. A denied flag or
 // variable is refused on its line before any field sequence is read, so the line is
-// reported once.
+// reported once. A line break is a line break: `\r\n` becomes `\n` and a lone `\r`
+// too, as CommonMark reads them, so a command the text wraps with either arrives as
+// the two lines it is.
 func scanText(file, text string) fieldScan {
-	physical := strings.Split(strings.ReplaceAll(text, "\r", ""), "\n")
+	physical := strings.Split(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), "\n")
 
 	scan := fieldScan{accepted: make(map[string]int)}
 	scan.problems = fenceLabelProblems(file, physical)
@@ -1269,9 +1340,11 @@ func scanText(file, text string) fieldScan {
 			// the sequence's continuation, whether or not the words so far read:
 			// the words after a command path are positionals, so prose appended to
 			// a read changes nothing, while a denied flag or a second method the
-			// text wraps onto the line is read where it belongs.
-			if at+1 < len(lines) && endsWithLastField(line.text, fields) {
-				words = append(slices.Clone(words), continuationFields(lines[at+1].text)...)
+			// text wraps onto the line is read where it belongs. A next line whose
+			// first continuation field names a CLI is that CLI's own command, not
+			// this one's continuation: the text wrote two commands, one per line.
+			if next, ok := continuationOf(lines, at, line.text, fields); ok {
+				words = append(slices.Clone(words), continuationFields(next.text)...)
 			}
 
 			if len(words) == 0 {
@@ -1317,11 +1390,11 @@ func deniedFlagRefusal(file string, number int, flag, text string, cli cloudCLI)
 }
 
 // environmentRefusal is the problem a line that sets a denied variable gets: the
-// variable does what the flag does, wherever the line stands and whether or not it
-// names the CLI.
-func environmentRefusal(file string, number int, variable, flag, text string, cli cloudCLI) string {
+// variable does what the denied flag or setting it stands in for does, wherever the
+// line stands and whether or not it names the CLI.
+func environmentRefusal(file string, number int, variable, standsFor, text string, cli cloudCLI) string {
 	return fmt.Sprintf("%s:%d: %s is a variable %s reads in the place of %s, and a denied variable is refused wherever it stands, whether or not its line names the CLI, so the line %q is no read the guide may name (CLAUDE.md rule 1); cloudCLIs lists the read commands of %s, the variables it denies and their reference at %s",
-		file, number, variable, cli.name, flag, text, cli.name, cli.reference)
+		file, number, variable, cli.name, standsFor, text, cli.name, cli.reference)
 }
 
 // subcommandPath returns the words of a sequence that name its command groups and
@@ -1394,6 +1467,25 @@ func endsWithLastField(text string, fields []string) bool {
 	}
 
 	return strings.HasSuffix(strings.TrimRight(text, " \t\\"), fields[len(fields)-1])
+}
+
+// continuationOf returns the line that continues a line's field sequence, and
+// whether there is one: the line after it, when that line's first continuation field
+// names no CLI. A continuation field that names a CLI belongs to that CLI's own
+// sequence, so the two `az rest` reads the text gives a line each stay apart, while
+// `aws` on a line and `ec2 create-tags` on the next are one command the text wrapped.
+func continuationOf(lines []logicalLine, at int, text string, fields []string) (logicalLine, bool) {
+	if at+1 >= len(lines) || !endsWithLastField(text, fields) {
+		return logicalLine{}, false
+	}
+
+	next := lines[at+1]
+
+	if nextFields := continuationFields(next.text); len(nextFields) > 0 && cliNameField(nextFields[0]) != "" {
+		return logicalLine{}, false
+	}
+
+	return next, true
 }
 
 // guideBareMentions are the words today's guide and programs write after a cloud
