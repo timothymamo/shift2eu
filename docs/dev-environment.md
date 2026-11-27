@@ -793,8 +793,18 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   that token at GitHub, as every agent in the VM could read it. The warning covers any line that assigns
   one of those names (spaces around the `=`, behind `export` or `declare -x`), not a longer name that
   only ends in one (a `MY_` prefix).
-- **Every agent gets every variable.** The tester holds the Claude token and the App's token, the Claude
-  roles the DeepSeek key. Scope each one narrowly so it is cheap to revoke. The file stays on the VM's disk
+- **Every Claude Code agent gets every variable.** The Claude roles hold the DeepSeek key too. The tester
+  does not: `dev/pi-tester.sh` starts pi with an allow list (its DeepSeek key, the basics and the deck's
+  pane variables) and no other variable of `daemon.env`, and marks it with `SHIFT2EU_PI_TESTER=1`, which
+  makes the login profile skip `daemon.env`. So printing pi's environment shows only the DeepSeek key and
+  the pane variables (issue #662,
+  [ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)). This is not a
+  separation: the tester runs as the same user, so `daemon.env`, the App token file and other processes'
+  `/proc/<pid>/environ` stay readable to it, guarded only by pi's refusal (its file tools refuse
+  `~/.config/dot-agent-deck` and the App token folder `~/.config/shift2eu`, its patterns a command naming
+  either or the marker), which a program it writes can bypass, marker included; only a separate uid or
+  narrowed egress would change that. A new variable the tester needs goes into that script's list with a reason. Scope each credential
+  narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
 - **Cloud accounts (for integration tests and real analyses, later):** read-only identities only
   (`ReadOnlyAccess` or narrower on AWS, `Reader` on Azure, `roles/viewer` or narrower on GCP). Do not
@@ -3192,6 +3202,53 @@ is a second layer beside CLAUDE.md rule 3, not a boundary: for the tester the VM
 never start the deck outside it. An extension that fails to load is logged and skipped, so the refusal
 then fails open; a TUI pane shows "env-printing refusal loaded" when it is in place. Only tester panes
 started from a dispatch worktree created after the change was merged load it.
+
+The deck does not start pi directly: the tester's `command` in `.dot-agent-deck.toml` is
+`dev/pi-tester.sh` with pi's arguments, relative to the pane's working directory (the unit's folder), and
+`agent = "pi"` tells the deck which agent runs behind it (issue #662). The script:
+
+- refuses to start anything, exiting 1 with a message naming `PATH`, when `PATH` has an empty entry (a
+  leading, doubled or trailing `:`) or an entry that is not absolute (`.`, `bin`), since either finds
+  commands in the unit's folder; the VM's `PATH` has none;
+- refuses to start pi, exiting 1 with a message naming the file, unless `.pi/extensions/deny-env-printing.ts`
+  is a non-empty file and `.pi/deny-env-printing.json` is a JSON object with a non-empty `patterns` array
+  (checked with `jq`), and unless node, found on `PATH`, imports the extension with a function as its
+  default export and compiles every pattern of the list with `new RegExp` (no node refuses too). A tester
+  pane that stops with `pi-tester: ... the tester is not started` has a broken or missing refusal, or no
+  node: fix what it names, never start pi by hand around it;
+- starts pi under `env -i` with only the variables it lists, each with its reason: `DEEPSEEK_API_KEY`,
+  `HOME`, `PATH`, the terminal, locale, `TMPDIR` and `XDG_*` variables, and the deck's pane variables
+  (`DOT_AGENT_DECK_PANE_ID`, `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket and the like) that its pi
+  extension and `dot-agent-deck work-done` need, plus the marker `SHIFT2EU_PI_TESTER=1`, which makes
+  `/etc/profile.d/shift2eu.sh` leave `daemon.env` unsourced in the tester's login shells (from the next VM
+  rebuild). The other agents' keys, the GitHub token variables and the telemetry headers are not in pi's
+  environment, so printing it shows only the DeepSeek key and the pane variables. They are not out of the
+  tester's reach: it runs as the same user, so `daemon.env`, the App token file and other processes'
+  `/proc/<pid>/environ` stay readable, guarded only by pi's refusal: its file tools refuse the App token
+  folder `~/.config/shift2eu` (by path, as an ancestor of a `grep` or `find`, and an `agents-app` glob) as
+  they refuse the deck's, and its patterns refuse a command naming that folder, the token or identity file
+  (`dev/agents-app-token.sh` stays allowed) or the marker `SHIFT2EU_PI_TESTER`, or starting a command with
+  a cleared or fresh environment (`env -i`, `env -`, `exec -c`, `sudo -i`, `su -l`, `su -`); a program the
+  tester writes and runs can bypass both. Its `gh` and `git push` keep working through the App token file
+  under `HOME` (ADR 0031), not the environment.
+
+The refusal's limits and costs (ADR 0044, the amendment's consequences):
+
+- It is lexical. A single bash command can still get past it by quoting or globbing a folder name, or
+  through a symlink (the file tools resolve `~` and `..`, not symlinks); a login shell with a fresh
+  environment that the patterns do not spell drops the marker without naming it: `ssh localhost`,
+  `sudo -u <the same user> bash -l`, a GNU long-option abbreviation (`env --ignore`, `su --log`), an option
+  after the operand (`su x -l`) or after an option with a value (`env -P dir -i`, `env --unset=X -i`).
+  Only a separate uid or narrowed egress is a boundary.
+- A bash command whose text holds the marker `SHIFT2EU_PI_TESTER`, `agents-app-token` or
+  `agents-app-identity` (not followed by `.` or a letter), `env -i`, `env -`, `sudo -i`, `su -l`, `su -`
+  or `exec -c` is refused even as text (a bash `grep`, a `git commit -m`): use the grep tool and
+  `git commit -F`. The grep and find tools may search the repository with a pattern
+  naming `agents-app` or the folder, but not with a glob naming them, nor with a path under or above
+  `~/.config/shift2eu`.
+
+A changed tester command needs the maintainer's approval in the deck (`dot-agent-deck trust`) before a
+tester pane starts with it.
 
 ## Containers and image verification
 

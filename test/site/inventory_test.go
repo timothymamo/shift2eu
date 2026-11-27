@@ -1293,28 +1293,30 @@ var awsSearchAndMessagingCalls = map[string][]string{
 	},
 }
 
-// awsExcludedKeysPath is the one list of the fields no projection or fixture of
+// excludedKeysPath is the one list of the fields no projection or fixture of
 // the guide's search and messaging calls may name (PRD #571, *Only the fields the
 // program reads*). test/examples' fixture check reads the same file, so the two
 // halves of the promise, the guide's --query and the recorded output, cannot
-// drift apart (review finding on PR #639).
-const awsExcludedKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
+// drift apart (review finding on PR #639). It is the one list of every source, not
+// an AWS one, so neither it nor its reader is named after a source (review nit on
+// PR #685).
+const excludedKeysPath = "test/examples/testdata/inventory_guide_excluded_keys.txt"
 
-// awsExcludedKeysRecordTablePath is the table of record documents both readers of
+// excludedKeysRecordTablePath is the table of record documents both readers of
 // that list are given, with the records or the rejection each expects of them
 // (review finding on PR #654). The readers are this package's
-// readAWSExcludedFields and test/examples' readExcludedFixtureKeys, in
+// readExcludedFields and test/examples' readExcludedFixtureKeys, in
 // test/examples/inventoryguidekeys_test.go: neither test package may import the
 // other, so each holds its own copy of the parser, and this table is what holds
 // the two to the same documents. Both run it, each against its own copy, through
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords.
-const awsExcludedKeysRecordTablePath = "test/examples/testdata/inventory_guide_excluded_key_records.txt"
+const excludedKeysRecordTablePath = "test/examples/testdata/inventory_guide_excluded_key_records.txt"
 
-// awsExcludedFields are the fields PRD #571 excludes from every projection of
+// excludedFields are the fields PRD #571 excludes from every projection of
 // the search and messaging calls: an access policy carries the account's
 // principals, a security option its settings, an endpoint or a bootstrap address
 // a host with the account's name in it.
-type awsExcludedFields struct {
+type excludedFields struct {
 	// names are the fields a projection may not name.
 	names []string
 	// prefixes are the fields a projection may not name whatever their suffix: a
@@ -1324,12 +1326,12 @@ type awsExcludedFields struct {
 
 // The two kinds a record of the shared excluded-key list may have.
 const (
-	// awsRecordKindKey is the kind of a record naming one field a projection of
+	// recordKindKey is the kind of a record naming one field a projection of
 	// the guide's search and messaging calls may not name.
-	awsRecordKindKey = "key"
-	// awsRecordKindPrefix is the kind of a record naming a prefix no field may
+	recordKindKey = "key"
+	// recordKindPrefix is the kind of a record naming a prefix no field may
 	// start with.
-	awsRecordKindPrefix = "prefix"
+	recordKindPrefix = "prefix"
 )
 
 // The reasons the shared excluded-key list, and the table of its record
@@ -1337,37 +1339,37 @@ const (
 // the reason it expects and both copies of the parser can be held to it (review
 // finding on PR #654).
 var (
-	// errAWSRecordMalformed rejects a record that is neither `key: <field>` nor
+	// errRecordMalformed rejects a record that is neither `key: <field>` nor
 	// `prefix: <prefix>`.
-	errAWSRecordMalformed = errors.New("a record is neither `key: <field>` nor `prefix: <prefix>`")
-	// errAWSRecordKind rejects a record of a kind the list does not know.
-	errAWSRecordKind = errors.New("a record's kind is neither `key` nor `prefix`")
-	// errAWSRecordComment rejects a record line that carries a comment, which
+	errRecordMalformed = errors.New("a record is neither `key: <field>` nor `prefix: <prefix>`")
+	// errRecordKind rejects a record of a kind the list does not know.
+	errRecordKind = errors.New("a record's kind is neither `key` nor `prefix`")
+	// errRecordComment rejects a record line that carries a comment, which
 	// would become part of the field's name.
-	errAWSRecordComment = errors.New("a record line carries a comment")
-	// errAWSRecordRepeat rejects a record an earlier line already wrote, which
+	errRecordComment = errors.New("a record line carries a comment")
+	// errRecordRepeat rejects a record an earlier line already wrote, which
 	// would hide that first copy.
-	errAWSRecordRepeat = errors.New("a record repeats an earlier one")
-	// errAWSRecordEmptyHalf rejects a list that holds no key or no prefix.
-	errAWSRecordEmptyHalf = errors.New("the list holds no key or no prefix")
+	errRecordRepeat = errors.New("a record repeats an earlier one")
+	// errRecordEmptyHalf rejects a list that holds no key or no prefix.
+	errRecordEmptyHalf = errors.New("the list holds no key or no prefix")
 )
 
-// awsExcludedKeyRecord is one record of the shared excluded-key list: a field a
+// excludedKeyRecord is one record of the shared excluded-key list: a field a
 // projection of the guide's search and messaging calls may not name, or a prefix
 // no field may start with (PRD #571).
-type awsExcludedKeyRecord struct {
-	// kind is awsRecordKindKey or awsRecordKindPrefix.
+type excludedKeyRecord struct {
+	// kind is recordKindKey or recordKindPrefix.
 	kind string
 	// name is the field, or the prefix a field may not start with.
 	name string
 }
 
 // spelling renders the record as the shared list writes it.
-func (r awsExcludedKeyRecord) spelling() string {
+func (r excludedKeyRecord) spelling() string {
 	return r.kind + ": " + r.name
 }
 
-// parseAWSExcludedFields reads the records of the shared excluded-key list (PRD
+// parseExcludedFields reads the records of the shared excluded-key list (PRD
 // #571). A record is `key: <field>` or `prefix: <prefix>`; a comment and a blank
 // line are no record. A malformed record, a record line that carries a comment
 // (which would become part of the field's name), a record of an unknown kind or a
@@ -1377,14 +1379,14 @@ func (r awsExcludedKeyRecord) spelling() string {
 //
 // The same parser, kept by hand, is test/examples' parseExcludedKeys in
 // test/examples/inventoryguidekeys_test.go, behind its readExcludedFixtureKeys
-// (the twin of this package's readAWSExcludedFields). Neither test package may
-// import the other, so awsExcludedKeysRecordTablePath is what holds the two copies
+// (the twin of this package's readExcludedFields). Neither test package may
+// import the other, so excludedKeysRecordTablePath is what holds the two copies
 // to the same documents, and
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords runs it against this
 // one (review finding on PR #654).
-func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
+func parseExcludedFields(document string) ([]excludedKeyRecord, error) {
 	var (
-		records  []awsExcludedKeyRecord
+		records  []excludedKeyRecord
 		keys     int
 		prefixes int
 		// seen maps a record to the line that wrote it, so a repeat names both
@@ -1400,68 +1402,68 @@ func parseAWSExcludedFields(document string) ([]awsExcludedKeyRecord, error) {
 
 		if strings.Contains(trimmed, "#") {
 			return nil, fmt.Errorf("%w: line %d reads %q, want the comment on a line of its own, or the comment is part of the field's name and no field matches it",
-				errAWSRecordComment, number+1, trimmed)
+				errRecordComment, number+1, trimmed)
 		}
 
 		kind, name, ok := strings.Cut(trimmed, ": ")
 		if !ok || name == "" {
 			return nil, fmt.Errorf("%w: line %d reads %q, want `key: <field>` or `prefix: <prefix>`",
-				errAWSRecordMalformed, number+1, trimmed)
+				errRecordMalformed, number+1, trimmed)
 		}
 
 		if first, repeated := seen[trimmed]; repeated {
 			return nil, fmt.Errorf("%w: line %d repeats line %d's record %q, want one record per field, since a second copy hides the first and leaves unclear which one the two checks read",
-				errAWSRecordRepeat, number+1, first, trimmed)
+				errRecordRepeat, number+1, first, trimmed)
 		}
 
 		seen[trimmed] = number + 1
 
 		switch kind {
-		case awsRecordKindKey:
+		case recordKindKey:
 			keys++
-		case awsRecordKindPrefix:
+		case recordKindPrefix:
 			prefixes++
 		default:
 			return nil, fmt.Errorf("%w: line %d reads %q, a record of kind %q, want `key: <field>` or `prefix: <prefix>`",
-				errAWSRecordKind, number+1, trimmed, kind)
+				errRecordKind, number+1, trimmed, kind)
 		}
 
-		records = append(records, awsExcludedKeyRecord{kind: kind, name: name})
+		records = append(records, excludedKeyRecord{kind: kind, name: name})
 	}
 
 	if keys == 0 || prefixes == 0 {
 		return nil, fmt.Errorf("%w: it holds %d key(s) and %d prefix(es), want both, since the list is the whole of what both checks exclude and an empty half would let a field the PRD excludes through",
-			errAWSRecordEmptyHalf, keys, prefixes)
+			errRecordEmptyHalf, keys, prefixes)
 	}
 
 	return records, nil
 }
 
-// readAWSExcludedFields reads the shared list of the fields every projection and
+// readExcludedFields reads the shared list of the fields every projection and
 // fixture of the guide's search and messaging calls leaves out (PRD #571), and
-// hands it to parseAWSExcludedFields. Its twin is test/examples'
+// hands it to parseExcludedFields. Its twin is test/examples'
 // readExcludedFixtureKeys in test/examples/inventoryguidekeys_test.go, which
 // reads the same file for the recorded fixtures with a copy of that parser. This
 // package cannot import the other's reader, so it has one of its own, as the two
 // readers of test/examples/testdata/namespace_may_follow_delimiters.txt do (issue
-// #630); awsExcludedKeysRecordTablePath is the table both run, so a document
+// #630); excludedKeysRecordTablePath is the table both run, so a document
 // either copy accepted or rejected differently from the other fails both (review
 // findings on PRs #639 and #654).
-func readAWSExcludedFields(t *testing.T) awsExcludedFields {
+func readExcludedFields(t *testing.T) excludedFields {
 	t.Helper()
 
-	records, err := parseAWSExcludedFields(string(readRepositoryFile(t, awsExcludedKeysPath)))
+	records, err := parseExcludedFields(string(readRepositoryFile(t, excludedKeysPath)))
 	if err != nil {
-		t.Fatalf("%s: %v", awsExcludedKeysPath, err)
+		t.Fatalf("%s: %v", excludedKeysPath, err)
 	}
 
-	var excluded awsExcludedFields
+	var excluded excludedFields
 
 	for _, record := range records {
 		switch record.kind {
-		case awsRecordKindKey:
+		case recordKindKey:
 			excluded.names = append(excluded.names, record.name)
-		case awsRecordKindPrefix:
+		case recordKindPrefix:
 			excluded.prefixes = append(excluded.prefixes, record.name)
 		}
 	}
@@ -1469,35 +1471,35 @@ func readAWSExcludedFields(t *testing.T) awsExcludedFields {
 	return excluded
 }
 
-// awsExcludedKeyRecordRejections maps a rejection reason the shared table names to
-// the error parseAWSExcludedFields returns for it: a document the table rejects as
+// excludedKeyRecordRejections maps a rejection reason the shared table names to
+// the error parseExcludedFields returns for it: a document the table rejects as
 // "duplicate" is one this parser and test/examples' must both reject as
-// errAWSRecordRepeat, and so on. A table case naming a reason this map does not
+// errRecordRepeat, and so on. A table case naming a reason this map does not
 // hold fails the table's test rather than shrinking what the two parsers are held
 // to.
-var awsExcludedKeyRecordRejections = map[string]error{
-	"malformed":    errAWSRecordMalformed,
-	"unknown kind": errAWSRecordKind,
-	"comment":      errAWSRecordComment,
-	"duplicate":    errAWSRecordRepeat,
-	"empty half":   errAWSRecordEmptyHalf,
+var excludedKeyRecordRejections = map[string]error{
+	"malformed":    errRecordMalformed,
+	"unknown kind": errRecordKind,
+	"comment":      errRecordComment,
+	"duplicate":    errRecordRepeat,
+	"empty half":   errRecordEmptyHalf,
 }
 
-// awsExcludedKeyRecordCase is one case of the shared table of record documents: a
+// excludedKeyRecordCase is one case of the shared table of record documents: a
 // list both copies of the parser are given, and the outcome each expects of it.
-type awsExcludedKeyRecordCase struct {
+type excludedKeyRecordCase struct {
 	// document is the list text both parsers are given.
 	document string
 	// want is the records the document holds, each spelled as the list spells it
 	// and joined by " ; ", or "" for a document both parsers reject.
 	want string
 	// rejection is the reason both parsers reject the document, one of
-	// awsExcludedKeyRecordRejections' keys, or "" for a document both accept.
+	// excludedKeyRecordRejections' keys, or "" for a document both accept.
 	rejection string
 }
 
 // name names the case for a subtest.
-func (tc awsExcludedKeyRecordCase) name() string {
+func (tc excludedKeyRecordCase) name() string {
 	outcome := "accepted as " + tc.want
 	if tc.rejection != "" {
 		outcome = "rejected as " + tc.rejection
@@ -1506,20 +1508,20 @@ func (tc awsExcludedKeyRecordCase) name() string {
 	return outcome + ": " + strings.ReplaceAll(tc.document, "\n", ", ")
 }
 
-// awsExcludedKeyRecordCases returns the shared table of record documents,
-// awsExcludedKeysRecordTablePath: a case per line, `<outcome> | <document>`, with
+// excludedKeyRecordCases returns the shared table of record documents,
+// excludedKeysRecordTablePath: a case per line, `<outcome> | <document>`, with
 // `\n` for a newline in the document and the outcome being the records the
 // document holds or `rejected: <reason>`. It fails when the table holds no case,
 // no accepted document, or no document rejected for one of the reasons above, so
 // that a reason the two parsers agree on cannot lose its pin silently.
-func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
+func excludedKeyRecordCases(t *testing.T) []excludedKeyRecordCase {
 	t.Helper()
 
-	var cases []awsExcludedKeyRecordCase
+	var cases []excludedKeyRecordCase
 
 	reasons := map[string]bool{}
 
-	for number, line := range strings.Split(string(readRepositoryFile(t, awsExcludedKeysRecordTablePath)), "\n") {
+	for number, line := range strings.Split(string(readRepositoryFile(t, excludedKeysRecordTablePath)), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -1528,10 +1530,10 @@ func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
 		outcome, document, ok := strings.Cut(trimmed, " | ")
 		if !ok {
 			t.Fatalf("%s line %d reads %q, want `<outcome> | <document>`",
-				awsExcludedKeysRecordTablePath, number+1, trimmed)
+				excludedKeysRecordTablePath, number+1, trimmed)
 		}
 
-		tc := awsExcludedKeyRecordCase{document: strings.ReplaceAll(document, `\n`, "\n")}
+		tc := excludedKeyRecordCase{document: strings.ReplaceAll(document, `\n`, "\n")}
 
 		if reason, rejected := strings.CutPrefix(outcome, "rejected: "); rejected {
 			tc.rejection = reason
@@ -1545,18 +1547,18 @@ func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
 
 	if len(cases) == 0 {
 		t.Fatalf("%s holds no case, want one per record document the two parsers are held to",
-			awsExcludedKeysRecordTablePath)
+			excludedKeysRecordTablePath)
 	}
 
-	if !slices.ContainsFunc(cases, func(tc awsExcludedKeyRecordCase) bool { return tc.rejection == "" }) {
+	if !slices.ContainsFunc(cases, func(tc excludedKeyRecordCase) bool { return tc.rejection == "" }) {
 		t.Errorf("%s holds no accepted document, want one: a table of rejected documents alone says nothing about what the two parsers accept",
-			awsExcludedKeysRecordTablePath)
+			excludedKeysRecordTablePath)
 	}
 
-	for reason := range awsExcludedKeyRecordRejections {
+	for reason := range excludedKeyRecordRejections {
 		if !reasons[reason] {
 			t.Errorf("%s holds no document rejected as %q, want one: a reason no case exercises leaves the two parsers' agreement on it unpinned",
-				awsExcludedKeysRecordTablePath, reason)
+				excludedKeysRecordTablePath, reason)
 		}
 	}
 
@@ -1565,32 +1567,32 @@ func awsExcludedKeyRecordCases(t *testing.T) []awsExcludedKeyRecordCase {
 
 // TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords pins that this
 // package's reader of the shared excluded-key list and test/examples' agree
-// (review finding on PR #654). parseAWSExcludedFields and test/examples'
+// (review finding on PR #654). parseExcludedFields and test/examples'
 // parseExcludedKeys, in test/examples/inventoryguidekeys_test.go, are hand-kept
 // copies of one parser, since neither test package may import the other, and one
 // copy that grew to accept a document the other rejects would let one half of PRD
 // #571's promise hold while the other let a field through. Both run
-// awsExcludedKeysRecordTablePath, each against its own copy, and a document the
+// excludedKeysRecordTablePath, each against its own copy, and a document the
 // table holds is accepted as the records it lists, or rejected for the reason it
 // names, in both.
 func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range awsExcludedKeyRecordCases(t) {
+	for _, tc := range excludedKeyRecordCases(t) {
 		t.Run(tc.name(), func(t *testing.T) {
 			t.Parallel()
 
-			records, err := parseAWSExcludedFields(tc.document)
+			records, err := parseExcludedFields(tc.document)
 
 			if tc.rejection != "" {
-				reason, known := awsExcludedKeyRecordRejections[tc.rejection]
+				reason, known := excludedKeyRecordRejections[tc.rejection]
 				if !known {
-					t.Fatalf("%s rejects a document as %q, a reason this test does not know: add it to awsExcludedKeyRecordRejections, and to test/examples' copy of that map",
-						awsExcludedKeysRecordTablePath, tc.rejection)
+					t.Fatalf("%s rejects a document as %q, a reason this test does not know: add it to excludedKeyRecordRejections, and to test/examples' copy of that map",
+						excludedKeysRecordTablePath, tc.rejection)
 				}
 
 				if !errors.Is(err, reason) {
-					t.Fatalf("parseAWSExcludedFields reads %q as %v, want it rejected as %q (%v): the shared table's document is one both parsers must reject, and for the same reason",
+					t.Fatalf("parseExcludedFields reads %q as %v, want it rejected as %q (%v): the shared table's document is one both parsers must reject, and for the same reason",
 						tc.document, err, tc.rejection, reason)
 				}
 
@@ -1598,7 +1600,7 @@ func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
 			}
 
 			if err != nil {
-				t.Fatalf("parseAWSExcludedFields rejects %q as %v, want the records %q: the shared table's document is one both parsers must accept",
+				t.Fatalf("parseExcludedFields rejects %q as %v, want the records %q: the shared table's document is one both parsers must accept",
 					tc.document, err, tc.want)
 			}
 
@@ -1608,7 +1610,7 @@ func TestTheTwoExcludedKeyReadersAcceptAndRejectTheSameRecords(t *testing.T) {
 			}
 
 			if got := strings.Join(spellings, " ; "); got != tc.want {
-				t.Errorf("parseAWSExcludedFields reads %q as %q, want %q: the records the document holds, in the list's order",
+				t.Errorf("parseExcludedFields reads %q as %q, want %q: the records the document holds, in the list's order",
 					tc.document, got, tc.want)
 			}
 		})
@@ -1656,7 +1658,7 @@ func TestInventoryGuideSearchAndKafkaCallsKeepOnlyTheFieldsTheyRead(t *testing.T
 
 	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
 	seen := map[string]bool{}
-	excluded := readAWSExcludedFields(t)
+	excluded := readExcludedFields(t)
 
 	for _, command := range guideCommands(t, guide, guideSources[0]) {
 		for _, call := range awsSearchAndMessagingCallsIn(t, command) {
@@ -1867,6 +1869,953 @@ func guideRoleParagraphs(guide string) string {
 	}
 
 	return strings.Join(paragraphs, "\n\n")
+}
+
+// azureResourceGraphQueryMarker marks the command of the guide's Azure section
+// that builds the Resource Graph query: one shell variable the loop below hands
+// to `az graph query`, page after page (PRD #571, milestone 4).
+const azureResourceGraphQueryMarker = `query="Resources`
+
+// azureResourceGraphQueryPrefix is how that command opens the variable: the name,
+// a `="`, and the query's first pipe-less line.
+const azureResourceGraphQueryPrefix = `query="`
+
+// azureHDInsightSourceFields are the fields of an HDInsight cluster the guide's
+// Resource Graph branch may name as the source of the properties it packs (PRD
+// #571, *Only the fields the program reads*): the cluster's kind, which
+// classifies it as messaging.kafka, its clusterState, which decides whether it is
+// read at all, and the worker role's name, count, size and disks, which the
+// program counts and sizes. Every other field of a cluster stays out of the
+// branch, osProfile (the admin user, its SSH key and its domain-join
+// credentials), scriptActions (the scripts and their parameters),
+// virtualNetworkProfile and connectivityEndpoints first among them.
+var azureHDInsightSourceFields = []string{
+	"properties.clusterDefinition.kind",
+	"properties.clusterState",
+	"role.name",
+	"role.targetInstanceCount",
+	"role.hardwareProfile.vmSize",
+	"role.dataDisksGroups[0].disksPerNode",
+	"role.dataDisksGroups[0].diskSizeGB",
+}
+
+// azureHDInsightRolesPath is the one field the branch may name only as the
+// source of an `mv-expand`: Resource Graph cannot trim inside an array, so the
+// branch expands the roles into one row per role, keeps the worker role and
+// packs that role back as a one-element array. Named as a value of bag_pack, or
+// projected as a column, the array would reach the file whole, every role's
+// osProfile, scriptActions and virtualNetworkProfile with it.
+const azureHDInsightRolesPath = "properties.computeProfile.roles"
+
+// azureHDInsightType is the Resource Manager type of an HDInsight cluster, in the
+// casing azure.jq compares it in. Written out once, so the filters below quote it
+// rather than spelling it again.
+const azureHDInsightType = "microsoft.hdinsight/clusters"
+
+// azureHDInsightTypeFilter matches the filter that opens the branch of the
+// Resource Graph query that reads an HDInsight cluster: `where type =~ 'microsoft.hdinsight/clusters'`,
+// in any casing and with any spacing. The branch is found by that filter, not by
+// the first place the query names the type: keyed on the first occurrence, the
+// check read the wrong part of the query as soon as the legs of the union were
+// written in another order (review finding N1).
+var azureHDInsightTypeFilter = regexp.MustCompile(`(?i)\bwhere\s+type\s+=~\s*'` + regexp.QuoteMeta(azureHDInsightType) + `'`)
+
+// azureHDInsightTypeExclusion matches the one other place the query may name the
+// type: the filter that keeps HDInsight clusters out of the branch reading every
+// other type, `where type !~ 'microsoft.hdinsight/clusters'`. Any other naming of
+// the type, a `case(...)` arm first among them, would pass a cluster's properties
+// on whole, past the branch that packs only the fields the program reads.
+var azureHDInsightTypeExclusion = regexp.MustCompile(`(?i)\btype\s+!~\s*'` + regexp.QuoteMeta(azureHDInsightType) + `'`)
+
+// azureUnionOpen matches the `| union (` whose parenthesised group holds the
+// query's legs (PRD #571, milestone 4).
+var azureUnionOpen = regexp.MustCompile(`(?i)\|\s*union\s*\(`)
+
+// azureResourceGraphColumns are the columns the query's final projection writes,
+// and the only ones it may write: the resource's short ID, its name, type, kind,
+// region, zones and SKU, and the reduced `properties` bag each branch builds.
+var azureResourceGraphColumns = []string{"id", "name", "type", "kind", "location", "zones", "sku", "properties"}
+
+// azureFieldPath matches one field path of the guide's Resource Graph query: the
+// name `properties` or a role, then one or more dotted segments, each optionally
+// indexed, so that properties.clusterDefinition.kind and
+// role.dataDisksGroups[0].disksPerNode are each one path. White space around the
+// dots and the index is part of the match, so a path the query breaks over two
+// lines is still read as one.
+var azureFieldPath = regexp.MustCompile(`(?i)\b(?:properties|role)(?:\s*\.\s*[A-Za-z0-9_]+(?:\s*\[\s*\d+\s*\])?)+`)
+
+// azureExpandSource matches the `mv-expand <role> =` the branch must write before
+// the roles array it expands.
+var azureExpandSource = regexp.MustCompile(`(?i)\bmv-expand\s+[A-Za-z_][A-Za-z0-9_]*\s*=\s*$`)
+
+// azureBareProperties matches the name `properties` wherever a query writes it.
+var azureBareProperties = regexp.MustCompile(`(?i)\bproperties\b`)
+
+// azureBagPackOpen matches the start of a `bag_pack(` call, the only place a
+// branch writes the keys of a reduced properties bag.
+var azureBagPackOpen = regexp.MustCompile(`(?i)\bbag_pack\s*\(`)
+
+// azureResourceGraphQuery returns the KQL the guide's Azure section builds for
+// its Resource Graph call.
+func azureResourceGraphQuery(t *testing.T, guide string) string {
+	t.Helper()
+
+	azure := guideSourceByKey(t, "azure")
+	commands := guideCommands(t, guide, azure)
+
+	var assignments []string
+
+	for _, command := range commands {
+		if strings.Contains(command, azureResourceGraphQueryMarker) {
+			assignments = append(assignments, command)
+		}
+	}
+
+	if len(assignments) != 1 {
+		t.Fatalf("docs/guide/inventory.md's %s section builds %d Resource Graph quer(y/ies) (`%s`), want exactly one: PRD #571's Azure classification reads an HDInsight cluster's properties from that query, and a second one would leave which query the program's fields come from unclear\n%s",
+			azure.name, len(assignments), azureResourceGraphQueryMarker, describeCommands(commands))
+	}
+
+	command := assignments[0]
+	rest := command[strings.Index(command, azureResourceGraphQueryPrefix)+len(azureResourceGraphQueryPrefix):]
+
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		t.Fatalf("docs/guide/inventory.md's Resource Graph query is not closed by a `\"`, so this check cannot read the query it builds\n%s", command)
+	}
+
+	return rest[:end]
+}
+
+// azureHDInsightBranch returns the part of the Resource Graph query that reads an
+// HDInsight cluster: the text from the filter that opens that branch to the end of
+// it. A branch ends at the `| union (` that opens the next leg, at the next one's
+// type filter, at the `case(...)`'s closing `dynamic(null)`, at the line that
+// closes the `union(...)` the branch sits in, and at the query's last `| project`
+// line, which names the reduced properties column of every type and so is no
+// branch's own text. It reports false when the query opens no branch with a
+// `where type =~ 'microsoft.hdinsight/clusters'` filter.
+//
+// The `| union (` is what ends the branch when the legs are written in the
+// guide's order: the filter that keeps clusters out of the next leg is no
+// `type =~`, and the leg's `case(...)` arms come after it, so without that
+// terminator the branch ran on into the next leg (review finding on PR #685).
+//
+// The branch is anchored on that filter rather than on the first occurrence of the
+// type's name, so the legs of the union may be written in any order (review finding
+// N1).
+//
+// This reads the query's shape rather than parsing KQL: a branch written in
+// another shape may end elsewhere, and the review of the guide's change has to
+// weigh that. What this cannot decide is left to the review rather than guessed
+// at here.
+func azureHDInsightBranch(query string) (string, bool) {
+	filter := azureHDInsightTypeFilter.FindStringIndex(query)
+	if filter == nil {
+		return "", false
+	}
+
+	start := filter[1]
+	end := len(query)
+
+	lowered := strings.ToLower(query)
+
+	for _, terminator := range []string{"type =~", "type in~", "dynamic(null)"} {
+		if i := strings.Index(lowered[start:], terminator); i >= 0 {
+			end = min(end, start+i)
+		}
+	}
+
+	if union := azureUnionOpen.FindStringIndex(query[start:]); union != nil {
+		end = min(end, start+union[0])
+	}
+
+	for _, offset := range azureBranchEnds(query) {
+		if offset > start {
+			end = min(end, offset)
+		}
+	}
+
+	return query[start:end], true
+}
+
+// azureBranchEnds returns the offsets of the lines that end a branch of a union:
+// a line opening with the parenthesised union's closing `)`, and the query's
+// last `| project` line, which every branch of the union is fed through.
+func azureBranchEnds(query string) []int {
+	var ends []int
+
+	for offset := 0; offset < len(query); {
+		line := query[offset:]
+		if i := strings.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+		}
+
+		if strings.HasPrefix(strings.TrimSpace(line), ")") {
+			ends = append(ends, offset)
+		}
+
+		offset += len(line) + 1
+	}
+
+	if at, _, ok := azureLastProjection(query); ok {
+		ends = append(ends, at)
+	}
+
+	return ends
+}
+
+// azureLastProjection returns the offset of the query's last `| project` line and
+// the columns it names: every branch of the union is fed through that projection,
+// and it is the only place the query chooses what the file holds of a resource.
+func azureLastProjection(query string) (int, []string, bool) {
+	at, columns, found := -1, []string(nil), false
+
+	for offset := 0; offset < len(query); {
+		line := query[offset:]
+		if i := strings.IndexByte(line, '\n'); i >= 0 {
+			line = line[:i]
+		}
+
+		if projection, ok := strings.CutPrefix(strings.TrimSpace(line), "| project "); ok {
+			at, found, columns = offset, true, nil
+
+			for _, column := range strings.Split(projection, ",") {
+				columns = append(columns, strings.TrimSpace(column))
+			}
+		}
+
+		offset += len(line) + 1
+	}
+
+	return at, columns, found
+}
+
+// azureUnionCloseOffset returns the offset of the character that closes the
+// parenthesised group a `| union (` opens. A parenthesis inside a quoted KQL
+// string is no parenthesis, and a group the query never closes reports false.
+func azureUnionCloseOffset(query string) (int, bool) {
+	open := azureUnionOpen.FindStringIndex(query)
+	if open == nil {
+		return 0, false
+	}
+
+	depth := 1
+	quote := rune(0)
+
+	for offset, r := range query[open[1]:] {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '(':
+			depth++
+		case r == ')':
+			depth--
+
+			if depth == 0 {
+				return open[1] + offset, true
+			}
+		}
+	}
+
+	return 0, false
+}
+
+// azureProjectionProblems returns what is wrong with the query's final projection
+// (audit finding L2 + review finding N1): the query's outermost last `| project`
+// has to come after the line that closes the union, and to write exactly the
+// columns the program reads. A projection inside the union leaves each branch
+// writing the columns it happens to carry, which is what the reduced `properties`
+// bag exists to prevent, and a column the program does not read, the `role` the
+// HDInsight branch expands first among them, is a cluster's property the file then
+// holds.
+func azureProjectionProblems(query string) []string {
+	var problems []string
+
+	at, columns, ok := azureLastProjection(query)
+	if !ok {
+		return append(problems, "ends in no `| project`, want one after the union naming exactly "+strings.Join(azureResourceGraphColumns, ", ")+": without it the query writes every column of every resource to the file, and the program's fields cannot be told from the rest")
+	}
+
+	if closeOffset, ok := azureUnionCloseOffset(query); !ok {
+		problems = append(problems, "closes no `| union (...)`, want the resources of every type unioned in one parenthesised group with the final projection after it")
+	} else if at < closeOffset {
+		problems = append(problems, "projects its columns inside the union's parentheses, want the `| project` on a line after the one that closes the group: a projection inside the union leaves each branch writing the columns it happens to carry, and the worker `role` the HDInsight branch expands reaches the file with them")
+	}
+
+	want := slices.Clone(azureResourceGraphColumns)
+	got := slices.Clone(columns)
+
+	slices.Sort(want)
+	slices.Sort(got)
+
+	if !slices.Equal(want, got) {
+		problems = append(problems, fmt.Sprintf("projects the columns %v, want exactly %v: a column the program does not read, the worker `role` the HDInsight branch expands first among them, is a property of the resource the file then holds whole, and a column it reads but the query leaves out is missing from every resource",
+			columns, azureResourceGraphColumns))
+	}
+
+	return problems
+}
+
+// azureHDInsightTypeOccurrenceProblems returns what is wrong with every place the
+// query names `microsoft.hdinsight/clusters` besides the filter that opens its
+// branch (audit finding L1): each has to be a `type !~` exclusion. A `case(...)`
+// arm that named the type would pass a cluster's properties on whole, osProfile
+// and connectivityEndpoints with them, past the branch that packs only the fields
+// the program reads.
+func azureHDInsightTypeOccurrenceProblems(query string) []string {
+	var problems []string
+
+	lowered := strings.ToLower(query)
+	exclusions := azureHDInsightTypeExclusion.FindAllStringIndex(query, -1)
+	filter := azureHDInsightTypeFilter.FindStringIndex(query)
+
+	for offset := 0; offset < len(query); {
+		found := strings.Index(lowered[offset:], azureHDInsightType)
+		if found < 0 {
+			break
+		}
+
+		at := offset + found
+		offset = at + len(azureHDInsightType)
+
+		if filter != nil && at >= filter[0] && at < filter[1] {
+			continue
+		}
+
+		if slices.ContainsFunc(exclusions, func(exclusion []int) bool { return at >= exclusion[0] && at < exclusion[1] }) {
+			continue
+		}
+
+		problems = append(problems, "names microsoft.hdinsight/clusters outside the filter that opens its branch and outside a `type !~` exclusion, want it in neither: a `case(...)` arm that names the type passes a cluster's properties on whole, osProfile, connectivityEndpoints and its scripts with them, so the branch that packs only the fields the program reads is the one place a cluster may be read")
+	}
+
+	return problems
+}
+
+// azureResourceGraphQueryProblems returns what is wrong with a Resource Graph
+// query of the guide's shape: its final projection, the reduced `properties` bag
+// every branch has to build, the places it names an HDInsight cluster's type, and
+// the fields its HDInsight branch keeps. It returns one sentence per problem and
+// none for the query the guide has to write.
+func azureResourceGraphQueryProblems(query string, hdInsightExcluded []string) []string {
+	problems := azureProjectionProblems(query)
+
+	if !azurePacksProperties(query) {
+		problems = append(problems, "builds no reduced `properties` bag (`properties = bag_pack(...)`, or the `extend properties = case(...)` it has today), want one: without it the query writes every resource's properties whole, an HDInsight cluster's osProfile and connectivityEndpoints included")
+	}
+
+	problems = append(problems, azureHDInsightTypeOccurrenceProblems(query)...)
+
+	branch, ok := azureHDInsightBranch(query)
+	if !ok {
+		return append(problems, "opens no branch with a `where type =~ 'microsoft.hdinsight/clusters'` filter, want one that expands the cluster's worker roles and packs only "+strings.Join(azureHDInsightSourceFields, ", ")+": an HDInsight cluster of kind Kafka is messaging.kafka (PRD #571), and the program reads its kind, its worker count and its workers' size from that branch")
+	}
+
+	for _, problem := range azureHDInsightBranchProblems(branch, hdInsightExcluded) {
+		problems = append(problems, "keeps an HDInsight branch that "+problem)
+	}
+
+	return problems
+}
+
+// azureHDInsightBranchProblems returns what is wrong with the part of the query
+// that reads an HDInsight cluster, one sentence per problem and no problem for a
+// branch that keeps only the fields the program reads (PRD #571). The names in
+// hdInsightExcluded are the fields the branch must hold nowhere, read from the
+// shared excluded-key list (excludedKeysPath, through this package's
+// readExcludedFields) rather than from a copy kept here, so the guide's query
+// check and the fixture check cannot drift apart while they read the one list:
+// PRD #571 excludes osProfile (the cluster's admin user, its SSH key and its
+// domain-join credentials), connectivityEndpoints (the hosts it answers on),
+// scriptActions and virtualNetworkProfile, and the cluster's securityProfile,
+// storageProfile and kafkaRestProperties with them (audit finding and review
+// finding N3 on PRD #571's milestone 4; three properties of a cluster had reached
+// neither).
+//
+// A field is named only as a whole, as a segment of one of the property paths the
+// branch writes or as the quoted key of a `bag_pack(...)` call, and compared
+// whatever its case: a field whose name merely holds an excluded one inside it, a
+// key `'storageProfileless'` or the path role.hardwareProfile.vmSize, is no naming
+// of that field (review suggestion on PR #685).
+func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []string {
+	var problems []string
+
+	expansions := 0
+
+	named := map[string]bool{}
+
+	for _, loc := range azureFieldPath.FindAllStringIndex(branch, -1) {
+		path := withoutSpace(branch[loc[0]:loc[1]])
+		named[path] = true
+
+		if strings.EqualFold(path, azureHDInsightRolesPath) {
+			if !azureExpandsInPlace(branch, loc[0]) {
+				problems = append(problems, fmt.Sprintf("names %q as a value or a column, want it only as the source of an `mv-expand`: the array passed whole carries every role's osProfile, scriptActions and virtualNetworkProfile into the file the program reads", path))
+
+				continue
+			}
+
+			expansions++
+
+			continue
+		}
+
+		if !slices.Contains(azureHDInsightSourceFields, path) {
+			problems = append(problems, fmt.Sprintf("names %q, want only the fields the program reads of a cluster (%s): a field the program does not read would keep a property the guide's raw output should drop",
+				path, strings.Join(azureHDInsightSourceFields, ", ")))
+		}
+	}
+
+	if expansions == 0 {
+		problems = append(problems, "never expands the roles array with an `mv-expand`, want one naming properties.computeProfile.roles: Resource Graph cannot trim inside an array, so the branch expands it and packs the worker role back alone")
+	}
+
+	for _, field := range azureHDInsightSourceFields {
+		if !named[field] {
+			problems = append(problems, fmt.Sprintf("names no %q, want it: the program reads the cluster's kind to classify it, its clusterState to leave out a cluster being deleted or failed, and its worker role to count and size it", field))
+		}
+	}
+
+	if !strings.Contains(strings.ToLower(branch), "workernode") {
+		problems = append(problems, "names no worker role, want the branch to filter one by name (`where role.name =~ 'workernode'`): a cluster's worker count and size are its workers' alone, not its head nodes'")
+	}
+
+	for _, excluded := range hdInsightExcluded {
+		if azureHDInsightBranchNamesField(branch, excluded) {
+			problems = append(problems, fmt.Sprintf("names %q, want it nowhere: PRD #571's *Only the fields the program reads* excludes it from every projection of an HDInsight cluster and from the guide's search and messaging calls, and the program reads no field of it", excluded))
+		}
+	}
+
+	for _, loc := range azureBareProperties.FindAllStringIndex(branch, -1) {
+		if azurePropertiesPathKeyOrTarget(branch, loc[0], loc[1]) {
+			continue
+		}
+
+		problems = append(problems, "names `properties` whole, want the branch to build it with bag_pack from the fields the program reads: a cluster's properties bag passed on as it comes carries osProfile and connectivityEndpoints with it")
+	}
+
+	return problems
+}
+
+// azureHDInsightBranchNamesField reports whether the branch names field, as one
+// of the segments of a property path it writes or as the quoted key of one of its
+// `bag_pack(...)` calls. Both comparisons are whole and case-insensitive, so a
+// field whose name merely holds an excluded one inside it is no naming of it.
+func azureHDInsightBranchNamesField(branch, field string) bool {
+	return slices.ContainsFunc(azureFieldPathSegments(branch), func(segment string) bool {
+		return strings.EqualFold(segment, field)
+	}) || slices.ContainsFunc(azureBagPackKeys(branch), func(key string) bool {
+		return strings.EqualFold(key, field)
+	})
+}
+
+// azureFieldPathSegments returns the segments of every property path the branch
+// writes, each without its index: properties.computeProfile.roles gives
+// properties, computeProfile and roles, and role.dataDisksGroups[0].disksPerNode
+// gives role, dataDisksGroups and disksPerNode.
+func azureFieldPathSegments(branch string) []string {
+	var segments []string
+
+	for _, loc := range azureFieldPath.FindAllStringIndex(branch, -1) {
+		for _, segment := range strings.Split(withoutSpace(branch[loc[0]:loc[1]]), ".") {
+			if at := strings.IndexByte(segment, '['); at >= 0 {
+				segment = segment[:at]
+			}
+
+			segments = append(segments, segment)
+		}
+	}
+
+	return segments
+}
+
+// azureBagPackKeys returns the quoted keys of every `bag_pack(...)` call in the
+// branch: the argument at an even position of a call, when it is one quoted string
+// and nothing else. A quoted value, one at an odd position, is no key, and neither
+// is any other expression.
+func azureBagPackKeys(branch string) []string {
+	var keys []string
+
+	for _, loc := range azureBagPackOpen.FindAllStringIndex(branch, -1) {
+		for i, argument := range azureCallArguments(branch[loc[1]:]) {
+			if i%2 != 0 {
+				continue
+			}
+
+			if key, ok := azureQuotedLiteral(argument); ok {
+				keys = append(keys, key)
+			}
+		}
+	}
+
+	return keys
+}
+
+// azureCallArguments returns the arguments of the call whose opening parenthesis
+// the offset after names, one string per top-level comma, with the call's closing
+// `)` left out: a comma inside a quoted string or inside a nested call is neither
+// one's to split on.
+func azureCallArguments(after string) []string {
+	var (
+		arguments []string
+		opened    int
+		quote     byte
+		start     int
+	)
+
+	for i := 0; i < len(after); i++ {
+		switch c := after[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(' || c == '[':
+			opened++
+		case c == ')' || c == ']':
+			if opened == 0 {
+				return append(arguments, after[start:i])
+			}
+
+			opened--
+		case c == ',' && opened == 0:
+			arguments = append(arguments, after[start:i])
+
+			start = i + 1
+		}
+	}
+
+	return nil
+}
+
+// azureQuotedLiteral returns the value of an argument that is one quoted string
+// and nothing else, and false for any other expression.
+func azureQuotedLiteral(argument string) (string, bool) {
+	trimmed := strings.TrimSpace(argument)
+	if len(trimmed) < 2 {
+		return "", false
+	}
+
+	quote := trimmed[0]
+	if quote != '\'' && quote != '"' {
+		return "", false
+	}
+
+	literal := trimmed[1 : len(trimmed)-1]
+	if trimmed[len(trimmed)-1] != quote || strings.IndexByte(literal, quote) >= 0 {
+		return "", false
+	}
+
+	return literal, true
+}
+
+// azureExpandsInPlace reports whether the path at offset at is the source of an
+// `mv-expand <role> =`, the only way the branch may name the roles array.
+func azureExpandsInPlace(branch string, at int) bool {
+	before := branch[:at]
+
+	if i := strings.LastIndexAny(before, "\n|;"); i >= 0 {
+		before = before[i+1:]
+	}
+
+	return azureExpandSource.MatchString(collapseSpace(before))
+}
+
+// azurePropertiesPathKeyOrTarget reports whether the name `properties` at a match
+// of azureBareProperties is no bare naming of the bag: the start of a property
+// path, the quoted key of a bag_pack, or the name the branch packs its reduced
+// properties into.
+func azurePropertiesPathKeyOrTarget(branch string, start, end int) bool {
+	after := strings.TrimLeft(branch[end:], " \t\r\n")
+	if strings.HasPrefix(after, ".") || strings.HasPrefix(after, "[") || strings.HasPrefix(after, "=") {
+		return true
+	}
+
+	before := strings.TrimRight(branch[:start], " \t\r\n")
+
+	return strings.HasSuffix(before, "'") || strings.HasSuffix(before, `"`)
+}
+
+// azurePacksProperties reports whether the query builds a reduced properties bag
+// at a `properties =` assignment of its own, as every shape of it has to.
+func azurePacksProperties(query string) bool {
+	for _, loc := range azureBareProperties.FindAllStringIndex(query, -1) {
+		assigned := strings.HasPrefix(strings.TrimLeft(query[loc[1]:], " \t\r\n"), "=")
+		quoted := strings.HasSuffix(strings.TrimRight(query[:loc[0]], " \t\r\n"), "'")
+
+		if assigned && !quoted {
+			return true
+		}
+	}
+
+	return false
+}
+
+// TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads
+// pins the Azure half of PRD #571's *Only the fields the program reads* on the
+// guide's own text: the Resource Graph query keeps its columns with an explicit
+// `| project` after the union and no column but those the program reads, and the
+// branch that reads an HDInsight cluster names only the properties the program
+// reads of it, never osProfile or connectivityEndpoints. The recorded fixture
+// cannot pin this on its own, since a fixture written after the fact could leave
+// out the fields a query without the projection writes.
+func TestInventoryGuideAzureResourceGraphQueryKeepsOnlyTheFieldsTheProgramReads(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	query := azureResourceGraphQuery(t, guide)
+
+	problems := azureResourceGraphQueryProblems(query, readExcludedFields(t).names)
+
+	for _, problem := range problems {
+		t.Errorf("%s's Resource Graph query %s\n%s", guidePath, problem, query)
+	}
+}
+
+// TestInventoryGuideAzureResourceGraphQueryRulesFlagALeakingQuery pins the rules
+// the check above applies, against queries written here: a query that named the
+// HDInsight type in a `case(...)` arm, that added a column the program does not
+// read, or that projected inside the union is reported, and the query the guide
+// has to write is not, whatever the order of its legs (audit findings L1 and L2,
+// review findings N1 and N3). The check above reads the guide's own query; this
+// one holds the rules to queries written here, so a rule that stopped reading a
+// leak cannot pass on a query it never saw.
+func TestInventoryGuideAzureResourceGraphQueryRulesFlagALeakingQuery(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// query is the Resource Graph query the rules read.
+		query string
+		// want are the phrases each of which a reported problem has to hold.
+		want []string
+	}{{
+		name:  "the query the guide has to write",
+		query: azureResourceGraphQueryOfGuideShape(),
+	}, {
+		name:  "a query whose legs are written in the other order",
+		query: azureOtherTypesLeg + "\n| union (Resources" + azureHDInsightLeg + ")\n" + azureResourceGraphProjection,
+	}, {
+		name:  "a query whose other leg names an excluded field after the HDInsight branch",
+		query: "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLegNamingAnExcludedField + ")\n" + azureResourceGraphProjection,
+		// No want: a field the union's other leg names is no leak of the HDInsight
+		// branch, and a branch that ran on past its `| union (` into that leg
+		// reported it as one (review finding on PR #685).
+	}, {
+		name:  "a query that reads HDInsight clusters through a case(...) arm as well",
+		query: "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLegWithoutExclusion + "\n    type =~ 'microsoft.hdinsight/clusters', properties,\n    dynamic(null)))\n" + azureResourceGraphProjection,
+		want:  []string{"names microsoft.hdinsight/clusters outside the filter that opens its branch"},
+	}, {
+		name:  "a query that projects the worker role with the other columns",
+		query: azureResourceGraphQueryOfGuideShape() + ", role",
+		want:  []string{"projects the columns"},
+	}, {
+		name:  "a query that projects inside the union's parentheses",
+		query: "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLegWithoutExclusion + "\n    dynamic(null)\n" + azureResourceGraphProjection + "))",
+		want:  []string{"projects its columns inside the union's parentheses"},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := azureResourceGraphQueryProblems(tc.query, readExcludedFields(t).names)
+
+			for _, phrase := range tc.want {
+				if !slices.ContainsFunc(problems, func(problem string) bool {
+					return strings.Contains(problem, phrase)
+				}) {
+					t.Errorf("azureResourceGraphQueryProblems reported no problem holding %q, want one: a query that leaks a field past PRD #571 has to fail the guide's check, not pass it\nreported:\n%s\nquery:%s",
+						phrase, strings.Join(problems, "\n"), tc.query)
+				}
+			}
+
+			if len(tc.want) == 0 && len(problems) != 0 {
+				t.Errorf("azureResourceGraphQueryProblems reported %d problem(s) for a query that keeps only the fields the program reads, want none: this check would fail the query the guide has to write\nreported:\n%s\nquery:%s",
+					len(problems), strings.Join(problems, "\n"), tc.query)
+			}
+		})
+	}
+}
+
+// azureHDInsightLeg is the leg of the Resource Graph query that reads an HDInsight
+// cluster as the guide has to write it: the cluster's kind, which classifies it,
+// and its worker role's count, size and disks, packed back field by field.
+const azureHDInsightLeg = `
+| where type =~ 'microsoft.hdinsight/clusters'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| extend properties = bag_pack(
+    'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind),
+    'clusterState', properties.clusterState,
+    'computeProfile', bag_pack('roles', pack_array(bag_pack(
+      'name', role.name,
+      'targetInstanceCount', role.targetInstanceCount,
+      'hardwareProfile', bag_pack('vmSize', role.hardwareProfile.vmSize),
+      'dataDisksGroups', pack_array(bag_pack(
+        'disksPerNode', role.dataDisksGroups[0].disksPerNode,
+        'diskSizeGB', role.dataDisksGroups[0].diskSizeGB))))))`
+
+// azureOtherTypesLeg is the union's other leg, which reads every type but an
+// HDInsight cluster and packs the properties the program reads of each of them.
+const azureOtherTypesLeg = `Resources
+| where type !~ 'microsoft.hdinsight/clusters'
+| extend properties = case(
+    type =~ 'microsoft.compute/virtualmachines', bag_pack(
+      'hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)),
+    dynamic(null))`
+
+// azureOtherTypesLegWithoutExclusion is azureOtherTypesLeg without the filter
+// that keeps HDInsight clusters out of it, so that a query written from it can
+// read a cluster through a `case(...)` arm instead.
+const azureOtherTypesLegWithoutExclusion = `Resources
+| extend properties = case(
+    type =~ 'microsoft.compute/virtualmachines', bag_pack(
+      'hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)),`
+
+// azureOtherTypesLegNamingAnExcludedField is the union's other leg as a hand edit
+// may write it: neither its filter nor its `case(...)` arm compares a `type =~`
+// or a `type in~`, so no type filter ends a branch before it, and the arm names a
+// field PRD #571 keeps out of an HDInsight cluster's branch. A branch that ran on
+// past its `| union (` read the arm as the cluster's own and reported that field
+// (review finding on PR #685).
+const azureOtherTypesLegNamingAnExcludedField = `Resources
+| where isnotempty(location)
+| extend properties = case(
+    isnotempty(properties.osProfile), bag_pack('osProfile', properties.osProfile),
+    bag_pack('hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)))`
+
+// azureResourceGraphProjection is the query's final projection, on the line after
+// the one that closes the union.
+const azureResourceGraphProjection = `| project id, name, type, kind, location, zones, sku, properties`
+
+// azureResourceGraphQueryOfGuideShape assembles the Resource Graph query the
+// guide has to write out of the parts above: the HDInsight branch first, the
+// other types unioned in behind it, and the final projection after the union.
+func azureResourceGraphQueryOfGuideShape() string {
+	return "Resources" + azureHDInsightLeg + "\n| union (" + azureOtherTypesLeg + ")\n" + azureResourceGraphProjection
+}
+
+// TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch pins the branch
+// rules the check above applies: a branch that passes a field past PRD #571 is
+// reported, and the branch the guide has to write is not. The check above reads
+// the guide's own branch and the rules it holds to it; this one holds the same
+// rules to branches written here, so a rule that stopped reading a leak cannot
+// pass on a branch it never saw.
+func TestInventoryGuideAzureHDInsightBranchRulesFlagALeakingBranch(t *testing.T) {
+	t.Parallel()
+
+	const workerRole = `
+      'computeProfile', bag_pack('roles', pack_array(bag_pack(
+        'name', role.name,
+        'targetInstanceCount', role.targetInstanceCount,
+        'hardwareProfile', bag_pack('vmSize', role.hardwareProfile.vmSize),
+        'dataDisksGroups', pack_array(bag_pack(
+          'disksPerNode', role.dataDisksGroups[0].disksPerNode,
+          'diskSizeGB', role.dataDisksGroups[0].diskSizeGB)))))`
+
+	// kind is the part of the branch that classifies a cluster: its kind and the
+	// state the program leaves a deleting or failed cluster by.
+	const kind = `'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind),
+    'clusterState', properties.clusterState`
+
+	tests := []struct {
+		name string
+		// branch is the part of the query that reads an HDInsight cluster, as
+		// azureHDInsightBranch hands it to the rules.
+		branch string
+		// want are the phrases each of which a reported problem has to hold.
+		want []string
+		// notWant are the phrases none of the reported problems may hold: a
+		// branch that packs a field the program merely does not read may be
+		// reported as naming an unlisted field, and never as naming an excluded
+		// one.
+		notWant []string
+	}{{
+		name: "a branch that expands the worker role and packs only the fields the program reads",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, kind, location, zones, sku, properties = bag_pack(` + kind + `,` + workerRole + `)`,
+	}, {
+		name: "a branch that passes the roles array whole",
+		branch: `'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'computeProfile', bag_pack('roles', properties.computeProfile.roles))`,
+		want: []string{
+			`names "properties.computeProfile.roles" as a value or a column`,
+			"never expands the roles array",
+		},
+	}, {
+		name: "a branch that names a property the program does not read",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'securityProfile', properties.securityProfile,` + workerRole + `)`,
+		want: []string{`names "properties.securityProfile"`},
+	}, {
+		name: "a branch that names connectivityEndpoints, storageProfile and kafkaRestProperties",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'connectivityEndpoints', properties.connectivityEndpoints,
+    'storageProfile', properties.storageProfile,
+    'kafkaRestProperties', properties.kafkaRestProperties,` + workerRole + `)`,
+		want: []string{`names "connectivityEndpoints"`, `names "storageProfile"`, `names "kafkaRestProperties"`},
+	}, {
+		// The excluded word is a substring of the field's name, not its whole
+		// name: the branch names a field whose name merely starts with an
+		// excluded one, as `'storageProfileless'` starts with `storageProfile`.
+		// That field is one the program does not read, so the branch is reported
+		// for it, and it is no field PRD #571 excludes, so the branch may not be
+		// reported as naming one (review suggestion on PR #685).
+		name: "a branch that packs a field whose name holds an excluded one as a substring",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, kind, location, zones, sku, properties = bag_pack(` + kind + `,` + workerRole + `,
+    'storageProfileless', properties.storageProfileless)`,
+		want:    []string{`names "properties.storageProfileless"`},
+		notWant: []string{"want it nowhere"},
+	}, {
+		name: "a branch that names osProfile",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'osProfile', role.osProfile,` + workerRole + `)`,
+		want: []string{`names "osProfile"`},
+	}, {
+		name: "a branch that names scriptActions and virtualNetworkProfile",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, location, zones, properties = bag_pack(` + kind + `,
+    'scriptActions', role.scriptActions,
+    'virtualNetworkProfile', role.virtualNetworkProfile,` + workerRole + `)`,
+		want: []string{`names "scriptActions"`, `names "virtualNetworkProfile"`},
+	}, {
+		name: "a branch that projects properties whole for the type",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| project id, name, type, kind, location, zones, sku, properties`,
+		want: []string{"names `properties` whole"},
+	}, {
+		name: "a branch that names no worker role",
+		branch: `'
+| mv-expand role = properties.computeProfile.roles
+| project id, name, type, kind, location, zones, sku, properties = bag_pack(` + kind + `,` + workerRole + `)`,
+		want: []string{"names no worker role"},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problems := azureHDInsightBranchProblems(tc.branch, readExcludedFields(t).names)
+
+			for _, phrase := range tc.want {
+				if !slices.ContainsFunc(problems, func(problem string) bool {
+					return strings.Contains(problem, phrase)
+				}) {
+					t.Errorf("azureHDInsightBranchProblems reported no problem holding %q, want one: a branch that leaks a field past PRD #571 has to fail the guide's check, not pass it\nreported:\n%s\nbranch:%s",
+						phrase, strings.Join(problems, "\n"), tc.branch)
+				}
+			}
+
+			for _, phrase := range tc.notWant {
+				if slices.ContainsFunc(problems, func(problem string) bool {
+					return strings.Contains(problem, phrase)
+				}) {
+					t.Errorf("azureHDInsightBranchProblems reported a problem holding %q, want none: a field whose name merely holds an excluded one inside it is no field PRD #571 excludes, and reporting it as one makes the guide's operator rename a field the list never named\nreported:\n%s\nbranch:%s",
+						phrase, strings.Join(problems, "\n"), tc.branch)
+				}
+			}
+
+			if len(tc.want) == 0 && len(problems) != 0 {
+				t.Errorf("azureHDInsightBranchProblems reported %d problem(s) for a branch that keeps only the fields the program reads, want none: this check would fail the branch the guide has to write\nreported:\n%s\nbranch:%s",
+					len(problems), strings.Join(problems, "\n"), tc.branch)
+			}
+		})
+	}
+}
+
+// hdInsightCLICommand is the `az` command the guide must not run (PRD #571, *No
+// data-plane or configuration access*): Azure groups its configuration and
+// credentials calls for an HDInsight cluster under that command, and the guide
+// reads the cluster through the Resource Graph projection alone. The group's name
+// is spelled as the CLI spells it, which misspell reads as a misspelling of an
+// English word.
+//
+//nolint:misspell // the Azure CLI's own group name, not a word
+const hdInsightCLICommand = "az hdinsight"
+
+// TestInventoryGuideReadsNoHDInsightConfiguration pins PRD #571's *No
+// data-plane or configuration access* for Azure: an HDInsight cluster is read
+// through the Resource Graph projection alone, so the guide runs no
+// configuration command for one and names no configurations action, which would
+// ask the cluster for its settings and its credentials instead of their public
+// shape.
+func TestInventoryGuideReadsNoHDInsightConfiguration(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	for _, source := range guideSources {
+		for _, command := range guideCommands(t, guide, source) {
+			if strings.Contains(command, hdInsightCLICommand) {
+				t.Errorf("%s's %s section runs `%s`, want no such call: PRD #571 reads an HDInsight cluster through the Resource Graph projection alone, and a configuration call reads the cluster's settings and credentials\n%s",
+					guidePath, source.name, hdInsightCLICommand, command)
+			}
+		}
+	}
+
+	const configurationsAction = "Microsoft.HDInsight/clusters/configurations/action"
+
+	if strings.Contains(guide, configurationsAction) {
+		t.Errorf("%s names `%s`, want it nowhere: it is the configuration and credentials read PRD #571 forbids, and the guide's Azure role grants no such action\n%s",
+			guidePath, configurationsAction, guideRoleParagraphs(guide))
+	}
+}
+
+// TestInventoryGuideAzureEventHubsHandRule pins the sentence beside the Azure
+// classification table that PRD #571 asks for: an Event Hubs namespace stays
+// unclassified unless every client of it uses the namespace's Kafka endpoint,
+// in which case the reader sets its category to messaging.kafka by hand. The
+// check reads only the two names the rule cannot leave out, so the wording is
+// the guide's to choose.
+func TestInventoryGuideAzureEventHubsHandRule(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	var paragraphs []string
+
+	for _, paragraph := range strings.Split(guide, "\n\n") {
+		if strings.Contains(paragraph, "Event Hubs") && strings.Contains(paragraph, "messaging.kafka") {
+			paragraphs = append(paragraphs, paragraph)
+		}
+	}
+
+	if len(paragraphs) == 0 {
+		t.Errorf("%s names no paragraph holding both `Event Hubs` and `messaging.kafka`, want one beside the Azure classification table: an Event Hubs namespace is no Kafka cluster unless every client of it uses the namespace's Kafka endpoint, and PRD #571 has the guide say when to set its category by hand",
+			guidePath)
+	}
 }
 
 // TestInventoryGuidePagesListCollectionsByHand pins the page limit the guide has

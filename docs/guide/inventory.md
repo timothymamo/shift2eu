@@ -98,10 +98,10 @@ programs below classify into the seven categories ADR 0046 adds, on every source
 service: AWS and Azure into all seven, GCP into all but `database.mongodb` (its program classifies no
 GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table
 names the types. Of the two categories ADR 0047 adds (PRD #571), the AWS program classifies into
-both and the GCP program into `messaging.kafka` (GCP runs no managed OpenSearch), and no program into
-`network.dns`: a search service or Kafka cluster on Azure, or a DNS zone on any source, is listed as
-`unclassified`, or not at all, so set its category (`search.opensearch`, `messaging.kafka` or
-`network.dns`) by hand.
+both, the GCP and Azure programs into `messaging.kafka` (neither source runs a managed OpenSearch),
+and no program into `network.dns`: a search service on Azure, an Event Hubs namespace whose clients
+all use its Kafka endpoint, or a DNS zone on any source, is listed as `unclassified`, or not at all,
+so set its category (`search.opensearch`, `messaging.kafka` or `network.dns`) by hand.
 
 The **capabilities** are features a resource depends on:
 
@@ -1164,7 +1164,9 @@ storage account key, an access key or any data. The three reads added for file s
 subscriptions and Azure Managed Redis are the actions
 `Microsoft.Storage/storageAccounts/fileServices/shares/read`,
 `Microsoft.ServiceBus/namespaces/topics/subscriptions/read` and
-`Microsoft.Cache/redisEnterprise/databases/read`, all within `*/read`.
+`Microsoft.Cache/redisEnterprise/databases/read`, all within `*/read`. An HDInsight cluster is read
+only through what the Resource Graph query below projects, which `*/read` covers: no HDInsight
+command, and no action that reads a cluster's configuration or credentials, is needed or granted.
 
 ### Collect from Azure
 
@@ -1177,8 +1179,27 @@ out=inventories/azure
 mkdir -p "$out"
 
 # Keep only the properties azure.jq reads, and only for the types it reads them from.
+# An HDInsight cluster has a branch of its own: its roles array is expanded and
+# only its kind, its state and the worker role's count, VM size and disks are
+# packed back, as each role
+# also carries its admin user, SSH key, script actions and network.
 query="Resources
-| extend properties = case(
+| where type =~ 'microsoft.hdinsight/clusters'
+| mv-expand role = properties.computeProfile.roles
+| where role.name =~ 'workernode'
+| extend properties = bag_pack(
+    'clusterDefinition', bag_pack('kind', properties.clusterDefinition.kind),
+    'clusterState', properties.clusterState,
+    'computeProfile', bag_pack('roles', pack_array(bag_pack(
+      'name', role.name,
+      'targetInstanceCount', role.targetInstanceCount,
+      'hardwareProfile', bag_pack('vmSize', role.hardwareProfile.vmSize),
+      'dataDisksGroups', pack_array(bag_pack(
+        'disksPerNode', role.dataDisksGroups[0].disksPerNode,
+        'diskSizeGB', role.dataDisksGroups[0].diskSizeGB))))))
+| union (Resources
+  | where type !~ 'microsoft.hdinsight/clusters'
+  | extend properties = case(
     type =~ 'microsoft.compute/virtualmachines', bag_pack(
       'virtualMachineScaleSet', bag_pack('id', properties.virtualMachineScaleSet.id),
       'storageProfile', bag_pack(
@@ -1235,7 +1256,7 @@ query="Resources
       bag_pack('protocol', properties.protocol,
         'provisionedStorageGiB', properties.provisionedStorageGiB,
         'redundancy', properties.redundancy),
-    dynamic(null))
+    dynamic(null)))
 | project id, name, type, kind, location, zones, sku, properties"
 page=1
 token=""
@@ -1297,9 +1318,11 @@ jq -r '.data[] | select(.type == "microsoft.cache/redisenterprise") | .id' "$out
       --output json
   done > "$out/redis-databases.json"
 
-# The vCPU and memory of every VM size, in each region with virtual machines or scale sets.
+# The vCPU and memory of every VM size, in each region with virtual machines, scale sets
+# or HDInsight clusters.
 jq -r '[.data[] | select(.type == "microsoft.compute/virtualmachines"
-    or .type == "microsoft.compute/virtualmachinescalesets") | .location] | unique[]' "$out"/graph-*.json |
+    or .type == "microsoft.compute/virtualmachinescalesets"
+    or .type == "microsoft.hdinsight/clusters") | .location] | unique[]' "$out"/graph-*.json |
   while read -r location; do
     az vm list-sizes --location "$location" --output json
   done > "$out/vm-sizes.json"
@@ -1316,7 +1339,12 @@ load-balancing rules, a Cosmos DB account's locations, an AKS cluster's node poo
 tags (keys and values), taints, subnet IDs and node image versions), as Resource Graph cannot trim
 inside an array. So a Cosmos DB account's locations keep each region's endpoint host name
 (`documentEndpoint`), and a scale set's network interface configurations keep a public IP
-address's DNS label (`dnsSettings.domainNameLabel`), where one is set.
+address's DNS label (`dnsSettings.domainNameLabel`), where one is set. An HDInsight cluster's roles
+are the exception: each role carries the cluster's admin user and SSH key (`osProfile`), its script
+actions and its virtual network, so the query expands the roles (`mv-expand`), keeps the worker role
+and packs back only its name, count, VM size and first data disk group, with the cluster's kind. Its
+gateway host names (`connectivityEndpoints`) are not kept either. A cluster without a role named
+`workernode` drops out of the listing; add it by hand.
 
 Resource Graph holds most settings; Service Bus queues, topics and topic subscriptions, storage
 queues, a storage account's blob versioning, file shares, the databases of an Azure Managed Redis
@@ -1354,6 +1382,9 @@ Review `inventories/azure.inventory.json`, then delete the raw output: `rm -r in
 | Azure DocumentDB (`mongoClusters`) | `storageGiB` | `properties.storage.sizeGb` (per shard) × the shard count |
 | NFS file share of a FileStorage account | `storageGiB` | `properties.shareQuota` |
 | `Microsoft.FileShares` file share | `storageGiB` | `properties.provisionedStorageGiB` |
+| HDInsight Kafka cluster | `count` | the worker role's `targetInstanceCount` |
+| HDInsight Kafka cluster | `vcpus`, `memoryGiB` | the worker role's `hardwareProfile.vmSize`, looked up in `az vm list-sizes` |
+| HDInsight Kafka cluster | `storageGiB` | the worker role's `dataDisksGroups[0]`: `disksPerNode` × `diskSizeGB` (per worker) |
 
 Not filled in: a flexible server's vCPU and memory (its `sku.name`, such as `Standard_D2ds_v4`), the
 count of a flexible server with high availability (`ZoneRedundant` or `SameZone`), an AKS cluster's
@@ -1423,7 +1454,29 @@ Graph writes types in lower case).
 | `Microsoft.ServiceBus/namespaces/topics` | `messaging.topic` |
 | `Microsoft.ServiceBus/namespaces/topics/subscriptions` | `messaging.queue` |
 | `Microsoft.Storage/storageAccounts/queueServices/queues` | `messaging.queue` |
+| `Microsoft.HDInsight/clusters`, `clusterDefinition.kind` `KAFKA` (any casing) | `messaging.kafka` |
+| `Microsoft.HDInsight/clusters`, any other kind (Spark, Hadoop, HBase, ...) | `unclassified` |
+| `Microsoft.EventHub/namespaces` (Event Hubs) | `unclassified` |
+| `Microsoft.Search/searchServices` (Azure AI Search) | `unclassified` |
 | any other type | `unclassified` |
+
+An Event Hubs namespace stays `unclassified` even when its Kafka endpoint is on: most Event Hubs
+clients use AMQP or the Event Hubs SDKs, and no read-only call says which protocol they use, so
+listing it as Kafka could hide a client rewrite. Only a Standard, Premium or Dedicated namespace has
+a Kafka endpoint; a Basic namespace has none and stays `unclassified`. Change a Standard, Premium or
+Dedicated namespace's category to `messaging.kafka` by hand only when every client of the namespace
+uses its Kafka endpoint. Azure AI Search is no OpenSearch
+service, so it stays `unclassified`.
+
+An HDInsight Kafka cluster's virtual machines and disks are not separate resources in the listing:
+the cluster stands for them, and its size is its worker nodes'. No cluster setting gives a topic's
+replication factor, which decides whether a topic survives the loss of a broker: three or more
+workers are counted as `node-high-availability`, so check the topics' replication factor (2 or
+more) and remove the capability by hand where it is lower. An HDInsight cluster being deleted,
+deleted or that failed (`clusterState` `Deleting`, `Deleted`, `DeleteQueued`, `DeleteTimeout`,
+`DeleteError`, `Error`, `Aborted` or `Timeout`, in any casing) is left out, as it is nothing to
+move; a cluster in any other state (being provisioned, running, or queued for a patch, a resize or a
+certificate rollover) is kept.
 
 A Service Bus topic (where publishers write) and each of its subscriptions (where consumers read, a
 queue of their own with a dead-letter subqueue) are both listed, as both have to move. A subscription
@@ -1504,6 +1557,9 @@ holds data, and stays; so does a share of such a FileStorage account, a persiste
 | `storage.file` (share of a FileStorage account) | `zone-high-availability` | the account's SKU is zone redundant (`_ZRS`) |
 | `storage.file` (share of a FileStorage account) | `snapshots` | the share has a snapshot |
 | `storage.file` (`Microsoft.FileShares`) | `zone-high-availability` | `redundancy` `Zone` |
+| `messaging.kafka` (HDInsight) | `encryption-at-rest` | always: Azure encrypts the cluster's managed disks |
+| `messaging.kafka` (HDInsight) | `node-high-availability` | the worker role's `targetInstanceCount` is 3 or more |
+| `messaging.kafka` (HDInsight) | `zone-high-availability` | never: a cluster with `zones` set is zonal, every node in the one zone chosen, not zone redundant, and does not survive that zone's loss (Microsoft Learn, *Create an Azure HDInsight cluster that uses Availability Zones*) |
 
 A frontend is IPv6 when its `privateIPAddressVersion` or its public IP address's
 `publicIPAddressVersion` is `IPv6`. A backend pool member is IPv6 when the IP configuration it names

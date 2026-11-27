@@ -2,11 +2,11 @@ package lint_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -213,7 +213,9 @@ func validCoAuthorRange(r string) error {
 
 // TestBranchCoAuthorTrailers reads the branch's own commits, the range
 // coAuthorRange picks, and fails on every co-author trailer coAuthorFindings
-// refuses against .github/co-author-addresses.txt (issue #663). It never reads
+// refuses against .github/co-author-addresses.txt as the range's base commit
+// holds it, never the working tree's (issues #663 and #672, coAuthorRangeFindings):
+// a local run's base is origin/main, CI's the pull request's base. It never reads
 // main's history before the range, which holds the 25 commits that credit
 // pi-mono. CI's co-author trailer job passes the pull request's range and
 // requires one; every other run skips without origin/main.
@@ -232,27 +234,71 @@ func TestBranchCoAuthorTrailers(t *testing.T) {
 		t.Skip(skip)
 	}
 
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(coAuthorAllowListPath)))
+	commits, findings, err := coAuthorRangeFindings(root, spec)
 	if err != nil {
-		t.Fatalf("read %s: %v", coAuthorAllowListPath, err)
+		t.Fatal(err)
 	}
-	allowed, err := parseCoAuthorAllowList(data)
-	if err != nil {
-		t.Fatalf("parse %s: %v", coAuthorAllowListPath, err)
-	}
-
-	commits := branchCommits(t, root, spec)
 	t.Logf("read %d commits of %s", len(commits), spec)
 	if err := coAuthorCommitCount(os.Getenv, len(commits)); err != nil {
 		t.Fatalf("%s: %v", spec, err)
 	}
 
-	for _, f := range coAuthorFindings(commits, allowed) {
+	for _, f := range findings {
 		t.Errorf("commit %s: %q: %s", f.SHA, f.Trailer, f.Reason)
 	}
 	if t.Failed() {
 		t.Log(coAuthorAdvice)
 	}
+}
+
+// coAuthorRangeFindings returns the commits of the range spec in the repository
+// at root, newest first, and the findings coAuthorFindings makes over them:
+// their authors, committers and co-author trailers checked against
+// .github/co-author-addresses.txt as of the range's base revision, read with
+// git show <base>:<path>, never from the working tree (issue #672). A pull
+// request that changes only the list is therefore checked against the old one:
+// a change to the list counts once it is merged. The run is the pull request's
+// own copy of this check, so a change to the check itself is for the
+// maintainer's code-owner review to catch. spec must be a range
+// validCoAuthorRange accepts, a..b, whose left side is the base; the base is
+// first resolved to a full commit SHA with git rev-parse --verify
+// --end-of-options, so git show reads exactly that commit and no part of spec
+// can be read as an option. Every git call runs with --no-replace-objects, so a
+// replace ref cannot change the commit, the list or the history it reads. A
+// base revision or a list the run cannot read is an error, never an empty
+// list.
+func coAuthorRangeFindings(root, spec string) ([]commitMessage, []coAuthorFinding, error) {
+	ctx := context.Background()
+
+	if err := validCoAuthorRange(spec); err != nil {
+		return nil, nil, fmt.Errorf("range %q: %w", spec, err)
+	}
+	base, _, _ := strings.Cut(spec, "..")
+
+	out, err := runGit(ctx, root, "--no-replace-objects", "rev-parse", "--verify", "--quiet", "--end-of-options", base+"^{commit}")
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve the base %q of %s: %w", base, spec, err)
+	}
+	baseSHA := strings.TrimSpace(string(out))
+	if !isCommitSHA(baseSHA) {
+		return nil, nil, fmt.Errorf("resolve the base %q of %s: git rev-parse printed %q, want a full commit SHA",
+			base, spec, baseSHA)
+	}
+
+	data, err := runGit(ctx, root, "--no-replace-objects", "show", "--no-textconv", "--end-of-options", baseSHA+":"+coAuthorAllowListPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read %s at the base %s (%s): %w", coAuthorAllowListPath, base, baseSHA, err)
+	}
+	allowed, err := parseCoAuthorAllowList(data)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse %s at the base %s (%s): %w", coAuthorAllowListPath, base, baseSHA, err)
+	}
+
+	commits, err := rangeCommits(ctx, root, spec)
+	if err != nil {
+		return nil, nil, err
+	}
+	return commits, coAuthorFindings(commits, allowed), nil
 }
 
 // coAuthorCommitCount returns an error when SHIFT2EU_COAUTHOR_CHECK is
@@ -265,24 +311,23 @@ func coAuthorCommitCount(getenv func(string) string, n int) error {
 	return nil
 }
 
-// branchCommits returns the commits of the range spec, newest first, as git
+// rangeCommits returns the commits of the range spec, newest first, as git
 // log writes them: each commit's full SHA, author and committer address and
 // raw message, NUL-separated, with git's -z NUL after each commit.
-func branchCommits(t *testing.T, root, spec string) []commitMessage {
-	t.Helper()
-
+func rangeCommits(ctx context.Context, root, spec string) ([]commitMessage, error) {
 	// --no-show-signature and --no-notes keep a developer's log.showSignature
-	// or notes from putting extra text into the -z output.
-	out, err := gitOutput(t, root, "log", "-z", "--no-color", "--no-show-signature", "--no-notes", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
+	// or notes from putting extra text into the -z output; --no-replace-objects
+	// keeps a replace ref from swapping in other commits (issue #672).
+	out, err := runGit(ctx, root, "--no-replace-objects", "log", "-z", "--no-color", "--no-show-signature", "--no-notes", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", spec)
 	if err != nil {
-		t.Fatalf("git log %s: %v", spec, err)
+		return nil, fmt.Errorf("git log %s: %w", spec, err)
 	}
 
 	commits, err := parseBranchCommits(out)
 	if err != nil {
-		t.Fatalf("git log %s: %v", spec, err)
+		return nil, fmt.Errorf("git log %s: %w", spec, err)
 	}
-	return commits
+	return commits, nil
 }
 
 // parseBranchCommits splits git log -z --format=%H%x00%ae%x00%ce%x00%B output
@@ -335,7 +380,14 @@ func gitIn(t *testing.T, root string, args ...string) error {
 func gitOutput(t *testing.T, root string, args ...string) ([]byte, error) {
 	t.Helper()
 
-	cmd := exec.CommandContext(t.Context(), "git", args...)
+	return runGit(t.Context(), root, args...)
+}
+
+// runGit is gitOutput for a caller with no *testing.T: git with args, an argv
+// and never a shell, in root, in the environment childEnv passes, until ctx
+// ends.
+func runGit(ctx context.Context, root string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = root
 	cmd.Env = childEnv()
 	var stderr bytes.Buffer
