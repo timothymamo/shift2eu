@@ -2173,6 +2173,38 @@ old `paths:` filter never started one) and wait on the required check until they
 amended by issue #452): a pull request runs its own copy of the workflow, so it could edit the workflow
 to skip the check; that edit changes a pin path and shows in its diff and its reviews.
 
+**The co-author trailers check** (issue #706,
+[ADR 0050](adr/0050-run-the-co-author-check-from-the-base-branch-under-pull-request-target.md)). The
+co-author check runs from `.github/workflows/coauthor-trailers.yml` under `pull_request_target`, so GitHub
+reads the workflow, the `test/lint` that runs and the allow list from the base branch, never from the
+pull request; it reports its own check, **Co-author trailers (base)**, no longer inside `Lint`.
+**Maintainer steps, once, for issue #706's pull request:**
+
+1. Merge the pull request first. Before the merge `main` has no `coauthor-trailers.yml`, so no pull
+   request can report the check, and requiring it would block every pull request.
+2. Right after the merge, before merging anything else: Settings → Rules → Rulesets → Protect main →
+   Require status checks to pass → add **Co-author trailers (base)** (the job's name), choose **GitHub
+   Actions** as its expected source, and save. `Lint` stays required.
+3. Check it (PASS: `{"context":"Co-author trailers (base)","integration_id":15368}`; FAIL: no row, no
+   `integration_id`, or another one):
+
+   ```bash
+   gh api repos/timothymamo/shift2eu/rulesets/<Protect main id> \
+     --jq '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]
+           | select(.context == "Co-author trailers (base)") | tojson'
+   ```
+
+4. Pull requests open at the merge have no run of the new workflow and wait on the required check until
+   a new event starts one: a push, **Update branch**, a title edit, or a close and reopen. Re-running
+   their old jobs cannot help.
+5. Probe, then close unmerged: a pull request into `main` with one commit that turns the check step of
+   `coauthor-trailers.yml` into `exit 0` (and loosens the pin to match) and one commit carrying a
+   `Co-Authored-By:` trailer with an `example.com` address. PASS: **Co-author trailers (base)** fails on
+   the head commit, names that trailer, and the run's workflow file is `main`'s. FAIL: the check passes.
+
+The known limit (ADR 0050): the required check pins the integration, not the workflow, so a pull request
+could add a job of the same name to its own `ci.yml`; that edit shows in its diff and its reviews.
+
 **1. Create the reviewer App.** On GitHub, Settings → Developer settings → GitHub Apps → New GitHub App:
 
 - Name: anything, for example `shift2eu-reviewer`; its slug makes the reviewer's login

@@ -24,10 +24,19 @@
 // lint-target matrix and the Lint aggregator of .github/workflows/ci.yml as a
 // closed schema, pins the golangci-lint step to make lint's build settings and
 // the aggregator's script whole, and compares the matrix with .goreleaser.yaml.
-// It pins the coauthor-trailers job the aggregator needs step by step, in
-// order (issues #663 and #689): each step's keys are a closed set, its with:,
-// env: and run: are pinned line by line, and every ${{ expression stays in an
-// env: block, setup-go's go-version-file excepted.
+// The aggregator needs lint-target and lint-shell alone: the co-author check
+// is no job of ci.yml (issue #706, ADR 0050).
+//
+// TestCICoAuthorTrailersRunsFromTheBaseBranch (coauthortrailers_test.go) pins
+// .github/workflows/coauthor-trailers.yml whole: pull_request_target alone with
+// its four types and no filter, a contents: read token, no secrets. anywhere
+// in the file, one job of a closed set of keys named Co-author trailers (base),
+// and its four steps in order - the base checkout, the fetch of the pull
+// request's commits as objects, setup-go over the checkout's go.mod and the
+// check - each with a closed set of keys and its with:, env: and run: line by
+// line, every ${{ expression in an env: block and both action pins ci.yml's.
+// TestCICoAuthorTrailersStaysOutOfCI fails on a coauthor-trailers job in
+// ci.yml and on a job named Co-author trailers (base) in any other workflow.
 //
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml, strict
 // or not, against the copy pinnedDepguardRules: its list-mode, its files and
