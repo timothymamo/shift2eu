@@ -333,10 +333,12 @@
 // TestCoAuthorAllowListFile pin its helpers and the list;
 // TestCoAuthorRangeFindingsReadTheBaseAllowList,
 // TestCoAuthorRangeFindingsFailClosedOnTheBaseList,
-// TestCoAuthorRangeFindingsIgnoreReplaceRefs and
-// TestCoAuthorRangeFindingsIsolateTheGitConfig (coauthortrailer_base_test.go)
-// pin the base commit's list, the replace refs and the git configuration the
-// check ignores on fixture repositories.
+// TestCoAuthorRangeFindingsIgnoreReplaceRefs,
+// TestCoAuthorRangeFindingsIsolateTheGitConfig and
+// TestCoAuthorGitEnvSwitchesOffTheSystemConfig (coauthortrailer_base_test.go)
+// pin the base commit's list, the replace refs and the global and system git
+// configuration the check ignores on fixture repositories, and coAuthorGitEnv's
+// value exactly.
 //
 // TestOpenTofuRequiredVersionRuleStripsTheV (renovateopentofu_test.go, issue
 // #434) reads .github/renovate.json5 as JSON5, with the reader of
