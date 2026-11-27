@@ -4080,10 +4080,14 @@ func TestInventoryGuideGCPCloudDNSCallsKeepOnlyTheFieldsTheyRead(t *testing.T) {
 }
 
 // gcpZoneLoop matches the loop the guide runs over its managed zones, one line
-// at a time: `while IFS=<separator> read -r <variable>...`. The separator may be
-// a tab ($'\t'), the fields are each zone's number and its name, and the
-// variables are what the loop body quotes.
-var gcpZoneLoop = regexp.MustCompile(`(?m)while\s+IFS=(\S*)\s+read\s+-r\s+([A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)`)
+// at a time: `while read -r <variable>...` or `while IFS=<separator> read -r
+// <variable>...`. The line holds each zone's number and its name with a space
+// between them; the variables are what the loop body quotes.
+var gcpZoneLoop = regexp.MustCompile(`(?m)while\s+((?:IFS=('[^']*'|"[^"]*"|\S*)\s+)?)read\s+-r\s+([A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)`)
+
+// gcpBashDollarQuote matches a `$'...'` word, which is bash's own quoting and no
+// POSIX shell's: the guide says its commands run under sh, dash and zsh too.
+var gcpBashDollarQuote = regexp.MustCompile(`\$'`)
 
 // gcpRoutedEntryID matches the `id` key of the object the record-set loop writes
 // per zone, with its value or with a `--arg` name: the count is joined to the
@@ -4099,10 +4103,13 @@ var gcpMachineTypesVariable = regexp.MustCompile(`[^A-Za-z0-9_]types(?:[^A-Za-z0
 // TestInventoryGuideGCPCloudDNSLoopReadsTheZoneList pins the loop PRD #581's
 // milestone 3 runs (PRD #581, *The per-zone loops*): the record-set call runs
 // once per public zone of the project, over the list the managed-zones call
-// wrote, read line by line with `while IFS= read -r`. A loop read with a bare
-// `read` drops a trailing backslash, and one fed by `for` splits a zone's name
-// on white space, so the call would ask about a zone that does not exist and the
-// zone would lose dns-routing. No command holds an unquoted loop variable.
+// wrote, read line by line with `while read -r` or `while IFS=' ' read -r`. A
+// loop read with a bare `read` drops a trailing backslash, and one fed by `for`
+// splits a zone's name on white space, so the call would ask about a zone that
+// does not exist and the zone would lose dns-routing. No command holds an
+// unquoted loop variable, and none holds a `$'...'` word: that is a bashism, and
+// under dash `IFS=$'\t'` is the three characters `$`, `\` and `t`, so a zone
+// named `test-zone` is cut at its own `t` (review finding, round 2).
 //
 // The line the loop reads holds the zone's number and its name: the asset row
 // names a zone by the number, the record-set call takes the name, and the count
@@ -4122,16 +4129,35 @@ func TestInventoryGuideGCPCloudDNSLoopReadsTheZoneList(t *testing.T) {
 	recordSets := gcpCommandsRunning(t, commands, gcpRecordSetsCall, 1)[0]
 	code := commandCode(recordSets)
 
+	// The guide promises a POSIX shell (sh, dash, bash, zsh), and `$'...'` is
+	// bash's quoting alone: under dash it is the three characters `$`, `\` and
+	// `t`, so a line `1234567890123456789<tab>shop-zone` reads as one field and
+	// an empty one, and Google is asked about a zone named none (review finding,
+	// round 2).
+	if gcpBashDollarQuote.MatchString(code) {
+		t.Errorf("%s's command that runs `%s` holds a `$'...'` word, want none: the guide's commands run under sh and dash too, where `$'` quotes nothing and `$'\\t'` is the three characters `$`, `\\` and `t`, so a loop separated by it reads a zone's number and name wrong and the call asks about a zone that does not exist\n%s",
+			guidePath, gcpRecordSetsCall, recordSets)
+	}
+
 	if loop := gcpZoneLoop.FindStringSubmatch(code); loop == nil {
-		t.Errorf("%s's command that runs `%s` holds no `while IFS=... read -r`, want the zone list read line by line (PRD #581, *The per-zone loops*): a bare `read` drops a trailing backslash, and a `for` loop splits a zone's name on white space\n%s",
+		t.Errorf("%s's command that runs `%s` holds no `while read -r ...` and no `while IFS=... read -r ...`, want the zone list read line by line (PRD #581, *The per-zone loops*): a bare `read` drops a trailing backslash, and a `for` loop splits a zone's name on white space\n%s",
 			guidePath, gcpRecordSetsCall, recordSets)
 	} else {
-		fields := strings.Fields(loop[2])
+		// The line the list holds is the zone's number, a space and its name, so
+		// the loop splits on the default IFS, which takes white space, or on the
+		// one space it names itself. Any other separator is a character no line
+		// holds, and the name stays empty or joined to the number.
+		if separator := strings.Trim(loop[2], `'"`); loop[1] != "" && separator != " " {
+			t.Errorf("%s's command that runs `%s` sets IFS to %q, want `IFS=' '` or no IFS at all: the managed-zones file holds each zone's number and its name separated by a space, and a separator the line does not hold leaves the name empty or the number and the name joined (PRD #581, milestone 3)\n%s",
+				guidePath, gcpRecordSetsCall, loop[2], recordSets)
+		}
+
+		fields := strings.Fields(loop[3])
 
 		switch {
 		case len(fields) != 2:
 			t.Errorf("%s's command that runs `%s` reads %d field(s) per line (`read -r %s`), want two: the managed-zones file holds each zone's number and its name, the call takes the name and the count is joined to the asset row on the number, so a loop that read one of them alone asks about a zone no call knows or writes a count nothing joins (PRD #581, milestone 3)\n%s",
-				guidePath, gcpRecordSetsCall, len(fields), loop[2], recordSets)
+				guidePath, gcpRecordSetsCall, len(fields), loop[3], recordSets)
 		default:
 			number, name := fields[0], fields[1]
 
