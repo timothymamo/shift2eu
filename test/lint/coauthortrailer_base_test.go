@@ -32,6 +32,7 @@
 package lint_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -349,17 +350,19 @@ func TestCoAuthorRangeFindingsIgnoreReplaceRefs(t *testing.T) {
 // therefore makes git log write the fixture's UTF-8 message out as ISO-8859-1,
 // so the message the check reads holds different bytes than the fixture
 // committed, and the trailer it reports is a different trailer. The planted
-// configuration sits in a HOME of the case's own, which is how a global
-// configuration reaches the check's git calls today, and the case hands the same
-// file to GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM as well, so an environment
-// that forwards either to the git calls reads it too.
+// configuration sits in a HOME of the case's own, and the case sets HOME and
+// XDG_CONFIG_HOME to it, the two places a git process reads a global
+// configuration from. It hands the planted file to neither GIT_CONFIG_GLOBAL nor
+// GIT_CONFIG_SYSTEM: this harness forwards no GIT_* variable to a child
+// (module_test.go's passedEnv), so a value the case set would be inert.
 //
-// GIT_CONFIG_GLOBAL is what the case observes: a global configuration arrives in
-// a git process through its HOME, and this harness passes HOME on. The system
-// configuration GIT_CONFIG_NOSYSTEM=1 switches off is not observable from here:
-// GIT_CONFIG_SYSTEM and GIT_CONFIG_NOSYSTEM never reach a child of this harness
-// (module_test.go's passedEnv), and /etc/gitconfig is not a file a test may
-// write, so only a change to the check's own child environment would show it.
+// The global half, GIT_CONFIG_GLOBAL=/dev/null, is what the case observes: a
+// global configuration arrives in a git process through its HOME, and this
+// harness passes HOME on. The system configuration GIT_CONFIG_NOSYSTEM=1
+// switches off is not observable from here: GIT_CONFIG_SYSTEM and
+// GIT_CONFIG_NOSYSTEM never reach a child of this harness (module_test.go's
+// passedEnv), and /etc/gitconfig is not a file a test may write, so only a
+// change to the check's own child environment would show it.
 // TestCoAuthorGitEnvSwitchesOffTheSystemConfig pins that half where it is
 // observable: over runGitEnv's extra env.
 func TestCoAuthorRangeFindingsIsolateTheGitConfig(t *testing.T) {
@@ -502,8 +505,21 @@ func TestCoAuthorGitEnvSwitchesOffTheSystemConfig(t *testing.T) {
 	// read.
 	out, err := runGitEnv(t.Context(), root, append(slices.Clone(coAuthorGitEnv), "GIT_CONFIG_SYSTEM="+planted),
 		"config", "--get", "i18n.commitEncoding")
-	if err == nil {
-		t.Errorf("git config --get i18n.commitEncoding with %s as the system configuration and coAuthorGitEnv read %q, want "+
+
+	// git config --get exits 1, and prints nothing, when no configuration sets the
+	// key it asks for. That exact failure is the one to want: any other error (git
+	// missing, a root that is no repository, a wrong argv) fails a check that
+	// accepted "some error" too.
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+		t.Errorf("git config --get i18n.commitEncoding with %s as the system configuration and coAuthorGitEnv returned %v, want "+
+			"the *exec.ExitError of git's exit 1, its answer for a key no configuration sets: GIT_CONFIG_NOSYSTEM=1 switches "+
+			"the system scope off, so the host's system git configuration cannot decide what the co-author check reads "+
+			"(issue #689)", planted, err)
+	}
+
+	if len(out) != 0 {
+		t.Errorf("git config --get i18n.commitEncoding with %s as the system configuration and coAuthorGitEnv printed %q, want "+
 			"nothing: GIT_CONFIG_NOSYSTEM=1 switches the system scope off, so the host's system git configuration cannot "+
 			"decide what the co-author check reads (issue #689)", planted, strings.TrimSpace(string(out)))
 	}
