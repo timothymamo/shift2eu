@@ -1273,6 +1273,9 @@ func TestParseResultFilePath(t *testing.T) {
 		{name: "a dot then a plus", file: ".+x"},
 		{name: "a dot then a colon", file: ".:x"},
 		{name: "a dot then an at sign", file: ".@x"},
+		// 200 bytes, the file's cap: the boundary the 201-byte row below sits
+		// on, in a dot-leading name no shorter than the cap.
+		{name: "200 bytes, a dot-leading name at the cap", file: "." + strings.Repeat("f", 199)},
 
 		// Refused: a segment that is a dot, and the paths that hold one.
 		{name: "a lone dot", file: ".", wantRefused: true},
