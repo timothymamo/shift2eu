@@ -393,8 +393,13 @@ reach.
   host clone's three files into an existing VM (`dev/vm-pi-tester.sh`, over `limactl shell`'s standard
   input; each file is replaced whole, the wrapper last, and it ends by naming the directory it installed
   into and `vm-pi-tester: done`; the recipe runs it under `env -u SHIFT2EU_PI_TESTER_ROOT`, the tests' root
-  prefix). Lima runs the provisioning on every boot, so provisioning installs only absent files, so a boot
-  keeps what `make vm-pi-tester` installed last; a VM rebuild installs the template's copy. The maintainer
+  prefix, and requires both lines). Lima runs the provisioning on every boot, so provisioning installs the
+  three files as one set, guarded on the installed wrapper, which both installers write last and which so
+  marks a complete installation: with the wrapper there a boot installs nothing and keeps what
+  `make vm-pi-tester` installed last; without it, all three come from the template, the deny files first,
+  over any already there. A deny file missing behind an installed wrapper stays missing, and the wrapper then
+  refuses to start the tester visibly; reinstall with `make vm-pi-tester`. A VM rebuild installs the
+  template's copy. The maintainer
   runs one of them after a merge that changes any of the three files; agents never do. Until then the tester
   starts from the copy installed before, and its pane shows the one line.
 

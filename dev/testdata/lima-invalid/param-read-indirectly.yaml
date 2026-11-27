@@ -768,7 +768,7 @@ provision:
       compare_copy "${extension}" "${PWD}/.pi/extensions/deny-env-printing.ts"
       compare_copy "${list}" "${PWD}/.pi/deny-env-printing.json"
       if [ -n "${differs}" ]; then
-        printf 'pi-tester: %s are missing or differ from the installed copies (expected on a branch that changes them); the checks and --extension use the installed copies, but pi still loads the .pi/extensions of the project too (ADR 0044, issue #702); to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
+        printf 'pi-tester: project copies missing or different from the installed ones: %s (expected on a branch that changes them); the checks and --extension use the installed copies, but pi still loads the .pi/extensions of the project too (ADR 0044, issue #702); to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
           "${differs}" >&2
       fi
 
@@ -1074,14 +1074,16 @@ provision:
       PIDENYLIST
         install -d -o root -g root -m 0755 /usr/local/lib/shift2eu /usr/local/lib/shift2eu/pi-tester \
           /usr/local/lib/shift2eu/pi-tester/extensions
-        # Lima runs this step on every boot: install only the files that are absent, so a boot keeps what make
-        # vm-pi-tester installed last; a VM rebuild installs the template's copies.
-        [ -e /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts ] ||
+        # Lima runs this step on every boot, so the three files are installed as one set, guarded on the wrapper:
+        # both installers write it last, so it marks a complete installation. With the wrapper there a boot
+        # installs nothing and keeps what make vm-pi-tester installed last (a deny file missing behind it stays
+        # missing, and the wrapper then refuses to start the tester visibly: reinstall with make vm-pi-tester);
+        # without it the step installs all three from the template, the deny files first, over any already there.
+        if [ ! -e /usr/local/lib/shift2eu/pi-tester/pi-tester.sh ]; then
           install -o root -g root -m 0644 "${tmp}/deny-env-printing.ts" /usr/local/lib/shift2eu/pi-tester/extensions/deny-env-printing.ts
-        [ -e /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json ] ||
           install -o root -g root -m 0644 "${tmp}/deny-env-printing.json" /usr/local/lib/shift2eu/pi-tester/deny-env-printing.json
-        [ -e /usr/local/lib/shift2eu/pi-tester/pi-tester.sh ] ||
           install -o root -g root -m 0755 "${tmp}/pi-tester.sh" /usr/local/lib/shift2eu/pi-tester/pi-tester.sh
+        fi
       )
 
       # The shellcheck release binary, pinned by its SHA-256 above, root-owned in /usr/local/bin like gh. make

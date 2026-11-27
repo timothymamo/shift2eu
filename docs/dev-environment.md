@@ -3214,8 +3214,12 @@ files and hands pi `--extension` with the installed extension; a copy of any of 
 folder that is missing or differs is not used for the checks or for `--extension`, and the pane's stderr
 shows one line naming the project and installed paths and `make vm-pi-tester`; the line is expected on a
 branch that changes one of the three files. pi still loads the project's `.pi/extensions` beside the
-installed extension (a residual, issue #702). Lima runs provisioning on every boot, so it installs only the
-files that are absent: a boot keeps what `make vm-pi-tester` installed last. After merging a change to `dev/pi-tester.sh`,
+installed extension (a residual, issue #702). Lima runs provisioning on every boot, so it installs the three
+files as one set, guarded on the installed wrapper, which both installers write last and which so marks a
+complete installation: with the wrapper there a boot installs nothing and keeps what `make vm-pi-tester`
+installed last; without it, provisioning installs all three from the template, over any deny file already
+there. A deny file missing behind an installed wrapper stays missing, and the wrapper then refuses to start
+the tester visibly; reinstall with `make vm-pi-tester`. After merging a change to `dev/pi-tester.sh`,
 `.pi/extensions/deny-env-printing.ts` or `.pi/deny-env-printing.json`, run `make vm-pi-tester` from the host
 clone (or rebuild the VM) so the tester starts with it; until then it starts with the copy installed before.
 Like the gh wrapper, this guards against a branch silently changing what the tester starts with; it is no

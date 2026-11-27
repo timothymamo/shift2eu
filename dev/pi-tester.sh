@@ -262,7 +262,7 @@ compare_copy "${script}" "${PWD}/dev/pi-tester.sh"
 compare_copy "${extension}" "${PWD}/.pi/extensions/deny-env-printing.ts"
 compare_copy "${list}" "${PWD}/.pi/deny-env-printing.json"
 if [ -n "${differs}" ]; then
-  printf 'pi-tester: %s are missing or differ from the installed copies (expected on a branch that changes them); the checks and --extension use the installed copies, but pi still loads the .pi/extensions of the project too (ADR 0044, issue #702); to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
+  printf 'pi-tester: project copies missing or different from the installed ones: %s (expected on a branch that changes them); the checks and --extension use the installed copies, but pi still loads the .pi/extensions of the project too (ADR 0044, issue #702); to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
     "${differs}" >&2
 fi
 

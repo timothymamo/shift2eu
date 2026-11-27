@@ -1854,8 +1854,11 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 # /usr/local/lib/shift2eu/pi-tester, where dev/lima.yaml installs them on a new VM and .dot-agent-deck.toml's
 # tester command runs them. The maintainer runs it after a merge that changes any of the three; agents never
 # do. Like vm-gh-wrapper: the script (dev/vm-pi-tester.sh) is generated first and sent over limactl's standard
-# input only when it is whole, the VM's output goes through $(VM_OUTPUT), and make fails unless it holds the
-# line "vm-pi-tester: done". Safe to run again.
+# input only when it is whole, as `limactl shell --workdir / <instance> env -u SHIFT2EU_PI_TESTER_ROOT sh -s`
+# (the tests' root hook unset, so the installation lands in /usr/local), the VM's output goes through
+# $(VM_OUTPUT), and make fails unless it holds both the line naming that directory, "vm-pi-tester: installed
+# the tester's wrapper and env-printing refusal in /usr/local/lib/shift2eu/pi-tester", and "vm-pi-tester:
+# done". Safe to run again.
 .PHONY: vm-pi-tester
 vm-pi-tester: ## Install the tester's root-owned launch wrapper and env-printing refusal in the VM (after a merge that changes them)
 	$(LIMA_INSTANCE_CHECK)
@@ -1868,6 +1871,10 @@ vm-pi-tester: ## Install the tester's root-owned launch wrapper and env-printing
 	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-pi-tester: done'; then \
 		echo "vm-pi-tester: the VM never printed vm-pi-tester: done, so the installation may not have finished; run make vm-pi-tester again" >&2; \
+		exit 1; \
+	fi; \
+	if ! printf '%s\n' "$$out" | grep -Fqx "vm-pi-tester: installed the tester's wrapper and env-printing refusal in /usr/local/lib/shift2eu/pi-tester"; then \
+		echo "vm-pi-tester: the VM never said it installed in /usr/local/lib/shift2eu/pi-tester, so the installation went elsewhere or did not finish; run make vm-pi-tester again" >&2; \
 		exit 1; \
 	fi
 

@@ -7,7 +7,7 @@
 # agents never do.
 #
 # Usage: dev/vm-pi-tester.sh <dev/pi-tester.sh> <.pi/extensions/deny-env-printing.ts> <.pi/deny-env-printing.json> |
-#          limactl shell --workdir / <instance> sh -s
+#          limactl shell --workdir / <instance> env -u SHIFT2EU_PI_TESTER_ROOT sh -s
 # (make vm-pi-tester generates the script first and sends it only when it is whole.)
 #
 # The script replaces each of the three files whole, the wrapper last. It is one function, called on its last line, so a
