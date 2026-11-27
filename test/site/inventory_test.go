@@ -1951,6 +1951,10 @@ var azureExpandSource = regexp.MustCompile(`(?i)\bmv-expand\s+[A-Za-z_][A-Za-z0-
 // azureBareProperties matches the name `properties` wherever a query writes it.
 var azureBareProperties = regexp.MustCompile(`(?i)\bproperties\b`)
 
+// azureBagPackOpen matches the start of a `bag_pack(` call, the only place a
+// branch writes the keys of a reduced properties bag.
+var azureBagPackOpen = regexp.MustCompile(`(?i)\bbag_pack\s*\(`)
+
 // azureResourceGraphQuery returns the KQL the guide's Azure section builds for
 // its Resource Graph call.
 func azureResourceGraphQuery(t *testing.T, guide string) string {
@@ -2232,6 +2236,12 @@ func azureResourceGraphQueryProblems(query string, hdInsightExcluded []string) [
 // storageProfile and kafkaRestProperties with them (audit finding and review
 // finding N3 on PRD #571's milestone 4; three properties of a cluster had reached
 // neither).
+//
+// A field is named only as a whole, as a segment of one of the property paths the
+// branch writes or as the quoted key of a `bag_pack(...)` call, and compared
+// whatever its case: a field whose name merely holds an excluded one inside it, a
+// key `'storageProfileless'` or the path role.hardwareProfile.vmSize, is no naming
+// of that field (review suggestion on PR #685).
 func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []string {
 	var problems []string
 
@@ -2276,7 +2286,7 @@ func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []s
 	}
 
 	for _, excluded := range hdInsightExcluded {
-		if strings.Contains(strings.ToLower(branch), strings.ToLower(excluded)) {
+		if azureHDInsightBranchNamesField(branch, excluded) {
 			problems = append(problems, fmt.Sprintf("names %q, want it nowhere: PRD #571's *Only the fields the program reads* excludes it from every projection of an HDInsight cluster and from the guide's search and messaging calls, and the program reads no field of it", excluded))
 		}
 	}
@@ -2290,6 +2300,119 @@ func azureHDInsightBranchProblems(branch string, hdInsightExcluded []string) []s
 	}
 
 	return problems
+}
+
+// azureHDInsightBranchNamesField reports whether the branch names field, as one
+// of the segments of a property path it writes or as the quoted key of one of its
+// `bag_pack(...)` calls. Both comparisons are whole and case-insensitive, so a
+// field whose name merely holds an excluded one inside it is no naming of it.
+func azureHDInsightBranchNamesField(branch, field string) bool {
+	return slices.ContainsFunc(azureFieldPathSegments(branch), func(segment string) bool {
+		return strings.EqualFold(segment, field)
+	}) || slices.ContainsFunc(azureBagPackKeys(branch), func(key string) bool {
+		return strings.EqualFold(key, field)
+	})
+}
+
+// azureFieldPathSegments returns the segments of every property path the branch
+// writes, each without its index: properties.computeProfile.roles gives
+// properties, computeProfile and roles, and role.dataDisksGroups[0].disksPerNode
+// gives role, dataDisksGroups and disksPerNode.
+func azureFieldPathSegments(branch string) []string {
+	var segments []string
+
+	for _, loc := range azureFieldPath.FindAllStringIndex(branch, -1) {
+		for _, segment := range strings.Split(withoutSpace(branch[loc[0]:loc[1]]), ".") {
+			if at := strings.IndexByte(segment, '['); at >= 0 {
+				segment = segment[:at]
+			}
+
+			segments = append(segments, segment)
+		}
+	}
+
+	return segments
+}
+
+// azureBagPackKeys returns the quoted keys of every `bag_pack(...)` call in the
+// branch: the argument at an even position of a call, when it is one quoted string
+// and nothing else. A quoted value, one at an odd position, is no key, and neither
+// is any other expression.
+func azureBagPackKeys(branch string) []string {
+	var keys []string
+
+	for _, loc := range azureBagPackOpen.FindAllStringIndex(branch, -1) {
+		for i, argument := range azureCallArguments(branch[loc[1]:]) {
+			if i%2 != 0 {
+				continue
+			}
+
+			if key, ok := azureQuotedLiteral(argument); ok {
+				keys = append(keys, key)
+			}
+		}
+	}
+
+	return keys
+}
+
+// azureCallArguments returns the arguments of the call whose opening parenthesis
+// the offset after names, one string per top-level comma, with the call's closing
+// `)` left out: a comma inside a quoted string or inside a nested call is neither
+// one's to split on.
+func azureCallArguments(after string) []string {
+	var (
+		arguments []string
+		opened    int
+		quote     byte
+		start     int
+	)
+
+	for i := 0; i < len(after); i++ {
+		switch c := after[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '(' || c == '[':
+			opened++
+		case c == ')' || c == ']':
+			if opened == 0 {
+				return append(arguments, after[start:i])
+			}
+
+			opened--
+		case c == ',' && opened == 0:
+			arguments = append(arguments, after[start:i])
+
+			start = i + 1
+		}
+	}
+
+	return nil
+}
+
+// azureQuotedLiteral returns the value of an argument that is one quoted string
+// and nothing else, and false for any other expression.
+func azureQuotedLiteral(argument string) (string, bool) {
+	trimmed := strings.TrimSpace(argument)
+	if len(trimmed) < 2 {
+		return "", false
+	}
+
+	quote := trimmed[0]
+	if quote != '\'' && quote != '"' {
+		return "", false
+	}
+
+	literal := trimmed[1 : len(trimmed)-1]
+	if trimmed[len(trimmed)-1] != quote || strings.IndexByte(literal, quote) >= 0 {
+		return "", false
+	}
+
+	return literal, true
 }
 
 // azureExpandsInPlace reports whether the path at offset at is the source of an
