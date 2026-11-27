@@ -12,4 +12,10 @@
 // touch the network. This file is the package's only non-test file and
 // imports nothing; the depguard rule test-docs-are-pure holds it.
 // internal/jsscan, the page-script scan, is a helper only this tree imports.
+//
+// The package also holds the inventory guide's checks, the read-only one among
+// them: every cloud CLI command docs/guide/inventory.md and the programs it ships
+// tell a visitor to run must only read (issue #716, CLAUDE.md rule 1), so the
+// package refuses a guide or a program that would have a visitor write to their
+// own account.
 package site
