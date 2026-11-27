@@ -98,7 +98,8 @@ name = "tester"
 # variables (its DeepSeek key, the basics, the deck's pane variables), no GitHub token or other agent's key.
 # make vm-pi-tester updates the installed copy after a merge that changes it. agent = "pi", because the deck
 # cannot see the agent behind a launcher. --approve trusts the project: .pi/settings.json loads the skills
-# from .claude/skills, and pi also loads the project's .pi/extensions/deny-env-printing.ts.
+# from .claude/skills, and pi also loads the project's .pi/extensions/deny-env-printing.ts (a residual: issue
+# #702 starts pi with --no-extensions and explicit extension paths).
 command = "/usr/local/lib/shift2eu/pi-tester/pi-tester.sh --provider deepseek --model deepseek-flash --thinking high --approve"
 agent = "pi"
 description = "Writes failing tests first (unit, contract, golden, e2e) and confirms they pass after the coder implements"

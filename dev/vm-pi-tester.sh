@@ -10,7 +10,7 @@
 #          limactl shell --workdir / <instance> sh -s
 # (make vm-pi-tester generates the script first and sends it only when it is whole.)
 #
-# The script installs the three files whole or not at all. It is one function, called on its last line, so a
+# The script replaces each of the three files whole, the wrapper last. It is one function, called on its last line, so a
 # stream cut short runs nothing: a here-document or function cut before its end is a syntax error, and
 # without the last line nothing is called. Each file travels byte for byte inside its own here-document, never
 # on a command line; a file that holds its here-document's delimiter line, or does not end with a newline, is
@@ -18,11 +18,14 @@
 #   1. writes the three files to a temporary directory, and refuses them unless sh -n parses the wrapper and
 #      its last line is the wrapper's exec line;
 #   2. creates /usr/local/lib/shift2eu/pi-tester and its extensions directory, root-owned 0755;
-#   3. installs each file, root-owned (the wrapper 0755, the two refusal files 0644), as a .new file beside
-#      its destination and moves it over the destination, so a tester started meanwhile finds either the old
-#      file or the new one, never none or half of one;
-#   4. prints "vm-pi-tester: done", which the make recipe requires.
-# Running it again changes nothing.
+#   3. installs each file, root-owned (the two refusal files 0644 first, then the wrapper 0755), as a .new file
+#      beside its destination and moves it over the destination, so a tester started meanwhile finds either the
+#      old file or the new one, never none or half of one;
+#   4. prints the directory it installed into and "vm-pi-tester: done", which the make recipe requires.
+# Running it again changes nothing. SHIFT2EU_PI_TESTER_ROOT, empty by default, is a prefix for
+# /usr/local/lib/shift2eu, so the tests can run the script against a temporary root; make vm-pi-tester runs it
+# under env -u SHIFT2EU_PI_TESTER_ROOT, so in the VM it is always unset, and the line naming the directory shows
+# where a run installed.
 set -eu
 
 usage="usage: $0 <dev/pi-tester.sh> <.pi/extensions/deny-env-printing.ts> <.pi/deny-env-printing.json>"
@@ -57,7 +60,7 @@ check_file "${list}" SHIFT2EU_PITESTER_LIST
 cat <<'INSTALL'
 vm_pi_tester() {
   set -eu
-  dir=/usr/local/lib/shift2eu/pi-tester
+  dir="${SHIFT2EU_PI_TESTER_ROOT:-}/usr/local/lib/shift2eu/pi-tester"
   tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp}"' EXIT
   cat >"${tmp}/pi-tester.sh" <<'SHIFT2EU_PITESTER_WRAPPER'
@@ -84,12 +87,12 @@ SHIFT2EU_PITESTER_LIST
     return 1
   fi
   sudo install -d -o root -g root -m 0755 "${dir}" "${dir}/extensions"
-  sudo install -o root -g root -m 0755 "${tmp}/pi-tester.sh" "${dir}/.pi-tester.sh.new"
-  sudo mv -f "${dir}/.pi-tester.sh.new" "${dir}/pi-tester.sh"
   sudo install -o root -g root -m 0644 "${tmp}/deny-env-printing.ts" "${dir}/extensions/.deny-env-printing.ts.new"
   sudo mv -f "${dir}/extensions/.deny-env-printing.ts.new" "${dir}/extensions/deny-env-printing.ts"
   sudo install -o root -g root -m 0644 "${tmp}/deny-env-printing.json" "${dir}/.deny-env-printing.json.new"
   sudo mv -f "${dir}/.deny-env-printing.json.new" "${dir}/deny-env-printing.json"
+  sudo install -o root -g root -m 0755 "${tmp}/pi-tester.sh" "${dir}/.pi-tester.sh.new"
+  sudo mv -f "${dir}/.pi-tester.sh.new" "${dir}/pi-tester.sh"
   echo "vm-pi-tester: installed the tester's wrapper and env-printing refusal in ${dir}"
   echo "vm-pi-tester: done"
 }

@@ -11,8 +11,10 @@
 # 0. Reads the refusal's two files from the directory this script is installed in (the directory of $0,
 #    which must be an absolute path), never from the working directory. When a copy in the working directory
 #    (.pi/extensions/deny-env-printing.ts, .pi/deny-env-printing.json, dev/pi-tester.sh) is missing or not
-#    byte for byte the installed one, it is ignored: one line on stderr names the installed and the project
-#    paths and make vm-pi-tester, and pi still starts from the installed files.
+#    byte for byte the installed one, it is not used for the checks or for --extension: one line on stderr
+#    names the installed and the project paths and make vm-pi-tester, and pi starts with the installed files.
+#    pi still loads the project's .pi/extensions beside the installed extension (a residual, issue #702). The
+#    line is expected on a branch that changes one of the three files.
 # 1. Fails closed. pi logs an extension that fails to load and runs without it, so the env-printing refusal
 #    (ADR 0044) would fail open on its own. Before pi starts, the two installed files the refusal is made of
 #    are checked:
@@ -246,8 +248,9 @@ pi="$(command -v pi)" || {
   exit 1
 }
 
-# The project's copies: each one missing or not byte for byte the installed file is ignored, and named in one
-# line, with the installed file and the update step. Only paths are printed, never a file's content.
+# The project's copies: each one missing or not byte for byte the installed file is named in one line, with the
+# installed file and the update step; the checks and --extension use the installed files, but pi still loads the
+# project's .pi/extensions. Only paths are printed, never a file's content.
 differs=""
 # compare_copy <installed file> <project file> notes the project file when it is not the installed one.
 compare_copy() {
@@ -259,7 +262,7 @@ compare_copy "${script}" "${PWD}/dev/pi-tester.sh"
 compare_copy "${extension}" "${PWD}/.pi/extensions/deny-env-printing.ts"
 compare_copy "${list}" "${PWD}/.pi/deny-env-printing.json"
 if [ -n "${differs}" ]; then
-  printf 'pi-tester: ignoring the project copies that are missing or differ from the installed ones, starting pi from the installed files: %s; to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
+  printf 'pi-tester: %s are missing or differ from the installed copies (expected on a branch that changes them); the checks and --extension use the installed copies, but pi still loads the .pi/extensions of the project too (ADR 0044, issue #702); to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
     "${differs}" >&2
 fi
 

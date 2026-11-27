@@ -6,7 +6,7 @@
   not start when the refusal's files are not in place (issue #662; see "Amendment: the tester starts with
   only its model credential, and fails closed")
 - Amended: 2026-11-27, the tester starts from a root-owned copy of the wrapper and the refusal installed at
-  VM provisioning, and ignores the unit folder's copies (issue #692; see "Amendment: the tester starts
+  VM provisioning, and does not use the unit folder's copies for its checks or `--extension` (issue #692; see "Amendment: the tester starts
   from a root-owned installed copy")
 
 ## Context
@@ -381,17 +381,22 @@ reach.
   amendment above on those, naming the installed file when it refuses. It passes pi
   `--extension <installed extension>` before the deck's arguments (pi 1.6.1's flag for loading an extension
   file), so pi always loads the installed refusal. The allow list and the `PATH` check are unchanged.
-- **The project's copy is ignored, with one line.** When `dev/pi-tester.sh`, `.pi/extensions/deny-env-printing.ts`
-  or `.pi/deny-env-printing.json` in the working directory is missing or differs byte for byte (`cmp -s`)
-  from the installed file, the wrapper still starts pi from the installed files and prints one line on
-  stderr naming each project path, its installed path and `make vm-pi-tester`. It prints no file's content
-  and no value.
+- **The project's copy is not used for the checks or for `--extension`, with one line.** When
+  `dev/pi-tester.sh`, `.pi/extensions/deny-env-printing.ts` or `.pi/deny-env-printing.json` in the working
+  directory is missing or differs byte for byte (`cmp -s`) from the installed file, the wrapper still starts
+  pi with the installed files and prints one line on stderr naming each project path, its installed path,
+  that pi still loads the project's `.pi/extensions` (see Consequences, issue #702) and `make vm-pi-tester`.
+  The line is expected on a branch that changes one of the three files. It prints no file's content and no
+  value.
 - **The update path is the maintainer's.** A VM rebuild (`make vm-delete vm-create`) installs the template's
   copy; `make vm-pi-tester`, a host target run from the host clone like `make vm-gh-wrapper`, installs the
   host clone's three files into an existing VM (`dev/vm-pi-tester.sh`, over `limactl shell`'s standard
-  input, whole or not at all, ending with `vm-pi-tester: done`). The maintainer runs one of them after a
-  merge that changes any of the three files; agents never do. Until then the tester starts from the copy
-  installed before, and its pane shows the one line.
+  input; each file is replaced whole, the wrapper last, and it ends by naming the directory it installed
+  into and `vm-pi-tester: done`; the recipe runs it under `env -u SHIFT2EU_PI_TESTER_ROOT`, the tests' root
+  prefix). Lima runs the provisioning on every boot, so provisioning installs only absent files, so a boot
+  keeps what `make vm-pi-tester` installed last; a VM rebuild installs the template's copy. The maintainer
+  runs one of them after a merge that changes any of the three files; agents never do. Until then the tester
+  starts from the copy installed before, and its pane shows the one line.
 
 Alternatives considered for this amendment:
 
@@ -415,7 +420,11 @@ Consequences of this amendment:
   refusal, which is what the review point asked. pi 1.6.1's `--no-extensions` turns off all extension
   discovery (explicit `--extension` paths still load), which would close it but also stop the global
   extensions under `~/.pi/agent`, the deck's own pi extension among them, from loading; that needs its own
-  check and is left for a later decision.
+  check and is left for a later decision: issue #702 (start pi with `--no-extensions` and explicit
+  extension paths).
+- The tester `command` itself lives in the project's `.dot-agent-deck.toml`, so a branch could point it
+  elsewhere; that is the same same-uid residual, and the deck's trust approval (`dot-agent-deck trust
+  approve`) is what makes a changed command visible.
 - Like ADR 0031's gh wrapper, this is a guard against a branch silently changing the wrapper, not a security
   boundary against a determined agent: the tester runs as the VM's one user, who has passwordless sudo, so
   it can replace the installed files or start pi without the wrapper at will. The limits of the amendment

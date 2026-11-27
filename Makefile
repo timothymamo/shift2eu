@@ -1864,7 +1864,7 @@ vm-pi-tester: ## Install the tester's root-owned launch wrapper and env-printing
 		echo "vm-pi-tester: dev/vm-pi-tester.sh printed no whole script (its last line is not vm_pi_tester); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" env -u SHIFT2EU_PI_TESTER_ROOT sh -s 2>&1)"; status=$$?; \
 	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-pi-tester: done'; then \
 		echo "vm-pi-tester: the VM never printed vm-pi-tester: done, so the installation may not have finished; run make vm-pi-tester again" >&2; \
