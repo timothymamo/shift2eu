@@ -382,6 +382,20 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		return guide + "\n\n" + open + "\n" + command + "\n" + close + "\n"
 	}
 
+	// plantedLine is the line the text appended below starts on, and appended
+	// returns the guide with lines of text of its own after its last section.
+	plantedLine := len(strings.Split(guide, "\n")) + 2
+
+	appended := func(lines ...string) string {
+		return guide + "\n\n" + strings.Join(lines, "\n") + "\n"
+	}
+
+	// at names the backstop's problem for a line: the check that does not depend on
+	// the Markdown or the shell reading names the line and the CLI it cannot place.
+	at := func(line int, cli string) string {
+		return fmt.Sprintf("line %d names the CLI %q", line, cli)
+	}
+
 	tests := []struct {
 		name string
 		// mutated is the guide with the case's plant.
@@ -517,6 +531,174 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 			command: "aws secretsmanager get-secret-value --secret-id shop-db",
 			path:    "secretsmanager get-secret-value",
 		}},
+	}, {
+		// The plants below are for the backstop: a CLI name the Markdown and shell
+		// reading cannot place fails the check wherever it sits, so no shape of the
+		// guide can hide a write behind one the extraction skipped.
+		name:         "a write in a bash -c argument",
+		mutated:      appended(`bash -c 'aws --region eu-west-1 ec2 create-tags --resources i-0123456789abcdef0'`),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in a bash -c argument a path names",
+		mutated:      appended(`bash -c '/usr/local/bin/aws ec2 create-tags --resources i-0123456789abcdef0'`),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in a bash -c argument after two spaces",
+		mutated:      appended(`bash -c 'aws  ec2 create-tags --resources i-0123456789abcdef0'`),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in a bash -c argument after a tab",
+		mutated:      appended("bash -c 'aws\tec2 create-tags --resources i-0123456789abcdef0'"),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in a bash -c argument that quotes its command group",
+		mutated:      appended(`bash -c 'aws "ec2" create-tags --resources i-0123456789abcdef0'`),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in the body of a bash heredoc",
+		mutated:      appended("```bash", "bash <<'EOF'", awsWrite, "EOF", "```"),
+		wantProblems: []string{at(plantedLine+2, "aws")},
+	}, {
+		name:         "a write in the body of a heredoc piped to sh",
+		mutated:      appended("```bash", "cat <<EOF | sh", awsWrite, "EOF", "```"),
+		wantProblems: []string{at(plantedLine+2, "aws")},
+	}, {
+		name:         "a write in a blockquoted fence",
+		mutated:      appended("> ```bash", "> "+awsWrite, "> ```"),
+		wantProblems: []string{at(plantedLine+1, "aws")},
+	}, {
+		name:         "a write in an indented block behind sudo",
+		mutated:      appended("    sudo " + awsWrite),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in an indented block behind an environment assignment",
+		mutated:      appended("    AWS_PROFILE=shop " + awsWrite),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in an HTML block",
+		mutated:      appended("<pre><code>" + awsWrite + "</code></pre>"),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in a text fence",
+		mutated:      appended("```text", awsWrite, "```"),
+		wantProblems: []string{at(plantedLine+1, "aws")},
+	}, {
+		name:         "a write in a json fence",
+		mutated:      appended("```json", awsWrite, "```"),
+		wantProblems: []string{at(plantedLine+1, "aws")},
+	}, {
+		name:         "a write in a code span of two backticks",
+		mutated:      appended("Tag it by hand: ``" + awsWrite + "``."),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in a code span that spans two lines",
+		mutated:      appended("Tag it by hand: `aws ec2 create-tags --resources", "  i-0123456789abcdef0`."),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		name:         "a write in a code span of a heading",
+		mutated:      appended("## Tag it with `" + awsWrite + "`"),
+		wantProblems: []string{at(plantedLine, "aws")},
+	}, {
+		// CommonMark: a fence opens with at most three spaces of indent, and a
+		// backtick fence's info string holds no backtick, so neither line opens a
+		// fence that could swallow the block of commands after it.
+		name:    "a fence indented four spaces swallows no write",
+		mutated: appended("    ```text", "```bash", awsWrite, "```"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "aws",
+			command: awsWrite,
+			path:    "ec2 create-tags",
+		}},
+	}, {
+		name:    "a fence whose info string holds a backtick swallows no write",
+		mutated: appended("```text `x`", "```bash", awsWrite, "```"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "aws",
+			command: awsWrite,
+			path:    "ec2 create-tags",
+		}},
+	}, {
+		// az rest: one GET is what decides, and an address, a resource, a body or a
+		// method the check would not read hide a write in a read's clothes.
+		name:    "an az rest that addresses another API",
+		mutated: fence("```bash", "```", "az rest --method get --url https://example.com/x"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "az",
+			command: "az rest --method get --url https://example.com/x",
+			path:    "rest --url https://example.com/x",
+		}},
+	}, {
+		name:    "an az rest that passes a resource",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --resource https://graph.microsoft.com"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "az",
+			command: "az rest --method get --url https://management.azure.com/x --resource https://graph.microsoft.com",
+			path:    "rest --resource",
+		}},
+	}, {
+		name:    "an az rest whose method is written as a short flag with its value",
+		mutated: fence("```bash", "```", "az rest -mpost --url https://management.azure.com/x"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "az",
+			command: "az rest -mpost --url https://management.azure.com/x",
+			path:    "rest -mpost",
+		}},
+	}, {
+		name:    "an az rest whose method flag is truncated",
+		mutated: fence("```bash", "```", "az rest --meth put --url https://management.azure.com/x"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "az",
+			command: "az rest --meth put --url https://management.azure.com/x",
+			path:    "rest --meth",
+		}},
+	}, {
+		// A read that points the CLI somewhere else or turns its checks off writes
+		// to a cloud even where its command path reads.
+		name:    "an aws read that names another endpoint",
+		mutated: fence("```bash", "```", "aws ec2 describe-instances --endpoint-url https://example.com"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "aws",
+			command: "aws ec2 describe-instances --endpoint-url https://example.com",
+			path:    "ec2 describe-instances --endpoint-url",
+		}},
+	}, {
+		name:    "an aws read that skips certificate verification",
+		mutated: fence("```bash", "```", "aws ec2 describe-instances --no-verify-ssl"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "aws",
+			command: "aws ec2 describe-instances --no-verify-ssl",
+			path:    "ec2 describe-instances --no-verify-ssl",
+		}},
+	}, {
+		name:    "an aws read that trusts another certificate bundle",
+		mutated: fence("```bash", "```", "aws ec2 describe-instances --ca-bundle ./ca.pem"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "aws",
+			command: "aws ec2 describe-instances --ca-bundle ./ca.pem",
+			path:    "ec2 describe-instances --ca-bundle",
+		}},
+	}, {
+		name:    "a gcloud read that impersonates a service account",
+		mutated: fence("```bash", "```", "gcloud compute instances list --impersonate-service-account sa@example-project.iam.gserviceaccount.com"),
+		want: []write{{
+			where:   lastSectionWhere,
+			cli:     "gcloud",
+			command: "gcloud compute instances list --impersonate-service-account sa@example-project.iam.gserviceaccount.com",
+			path:    "compute instances list --impersonate-service-account",
+		}},
+	}, {
+		name:         "a CLI a variable names",
+		mutated:      fence("```bash", "```", `cli=aws; "$cli" ec2 create-tags --resources i-0123456789abcdef0`),
+		wantProblems: []string{`"$cli"`},
 	}, {
 		name:         "a fence label the check does not know",
 		mutated:      fence("```powershell", "```", "Get-EC2Instance -Region eu-central-1"),
@@ -676,6 +858,9 @@ func TestCloudReadVerbs(t *testing.T) {
 		{cli: "aws", words: []string{"opensearchserverless", "batch-get-collection", "--ids"}, verb: "opensearchserverless batch-get-collection", read: true},
 		{cli: "aws", words: []string{"configservice", "select-resource-config", "--expression", "SELECT 1"}, verb: "configservice select-resource-config", read: true},
 		{cli: "aws", words: []string{"ec2", "describe-instances", "--output", "json"}, verb: "ec2 describe-instances", read: true},
+		{cli: "aws", words: []string{"ec2", "describe-instances", "--endpoint-url", "https://example.com"}, verb: "ec2 describe-instances --endpoint-url"},
+		{cli: "aws", words: []string{"ec2", "describe-instances", "--no-verify-ssl"}, verb: "ec2 describe-instances --no-verify-ssl"},
+		{cli: "aws", words: []string{"s3api", "list-buckets", "--ca-bundle=./ca.pem"}, verb: "s3api list-buckets --ca-bundle"},
 		{cli: "aws", words: []string{"ec2", "create-tags", "--resources", "i-0123456789abcdef0"}, verb: "ec2 create-tags"},
 		{cli: "aws", words: []string{"ec2", "delete-volume", "--volume-id", "vol-0123456789abcdef0"}, verb: "ec2 delete-volume"},
 		{cli: "aws", words: []string{"ec2"}, verb: "ec2"},
@@ -686,6 +871,18 @@ func TestCloudReadVerbs(t *testing.T) {
 		{cli: "az", words: []string{"servicebus", "topic", "subscription", "list", "--namespace-name", "x"}, verb: "servicebus topic subscription list", read: true},
 		{cli: "az", words: []string{"graph", "query", "--graph-query", "Resources"}, verb: "graph query", read: true},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x"}, verb: "rest --method get", read: true},
+		{cli: "az", words: []string{"rest", "--method", "get", "--uri", "https://management.azure.com/x"}, verb: "rest --method get", read: true},
+		{cli: "az", words: []string{"rest", "--method", "get", "-u", "https://management.azure.com/x"}, verb: "rest --method get", read: true},
+		{cli: "az", words: []string{"rest", "--method", "get"}, verb: "rest --method get", read: true},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url"}, verb: "rest --method get", read: true},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://example.com/x"}, verb: "rest --url https://example.com/x"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--uri", "https://example.com/x"}, verb: "rest --uri https://example.com/x"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--resource", "https://graph.microsoft.com"}, verb: "rest --resource"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--headers", "x=y"}, verb: "rest --headers"},
+		{cli: "az", words: []string{"rest", "--method", "post", "--body", "{}", "--url", "https://management.azure.com/x"}, verb: "rest --body"},
+		{cli: "az", words: []string{"rest", "-mpost", "--url", "https://management.azure.com/x"}, verb: "rest -mpost"},
+		{cli: "az", words: []string{"rest", "-m=post", "--url", "https://management.azure.com/x"}, verb: "rest -m=post"},
+		{cli: "az", words: []string{"rest", "--meth", "put", "--url", "https://management.azure.com/x"}, verb: "rest --meth"},
 		{cli: "az", words: []string{"rest", "--method", "GET", "--url", "https://management.azure.com/x"}, verb: "rest --method GET", read: true},
 		{cli: "az", words: []string{"rest", "-m", "get", "--url", "https://management.azure.com/x"}, verb: "rest --method get", read: true},
 		{cli: "az", words: []string{"rest", "--method=post", "--url", "https://management.azure.com/x"}, verb: "rest --method post"},
@@ -699,6 +896,7 @@ func TestCloudReadVerbs(t *testing.T) {
 		{cli: "gcloud", words: []string{"compute", "instances", "list", "--project=x"}, verb: "compute instances list", read: true},
 		{cli: "gcloud", words: []string{"compute", "instances", "list", "shop-web"}, verb: "compute instances list shop-web", read: true},
 		{cli: "gcloud", words: []string{"asset", "search-all-resources", "--scope=projects/x"}, verb: "asset search-all-resources", read: true},
+		{cli: "gcloud", words: []string{"compute", "instances", "list", "--impersonate-service-account", "sa@example-project.iam.gserviceaccount.com"}, verb: "compute instances list --impersonate-service-account"},
 		{cli: "gcloud", words: []string{"compute", "instances", "delete", "list"}, verb: "compute instances delete list"},
 		{cli: "gcloud", words: []string{"compute", "instances", "delete", "shop-web"}, verb: "compute instances delete shop-web"},
 		{cli: "gcloud", words: []string{"compute", "instances", "create", "shop-web"}, verb: "compute instances create shop-web"},
