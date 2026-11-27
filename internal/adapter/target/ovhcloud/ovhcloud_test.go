@@ -153,7 +153,7 @@ func TestCatalogSnapshotHeader(t *testing.T) {
 		t.Errorf("Snapshot().SourceURL = %s, want %s", text.Quote(snapshot.SourceURL), text.Quote(wantSourceURL))
 	}
 
-	wantRetrievedOn := time.Date(2026, time.November, 25, 0, 0, 0, 0, time.UTC)
+	wantRetrievedOn := time.Date(2026, time.November, 27, 0, 0, 0, 0, time.UTC)
 	if !snapshot.RetrievedOn.Equal(wantRetrievedOn) {
 		t.Errorf("Snapshot().RetrievedOn = %s, want %s",
 			snapshot.RetrievedOn.Format(time.RFC3339), wantRetrievedOn.Format(time.RFC3339))
@@ -1127,28 +1127,32 @@ func bestOf(c mapping.Candidate) bestFit {
 	return bestFit{Name: c.Offering.Name, Fit: c.Fit, Missing: c.Missing}
 }
 
-// TestNewCategoryBestOfferingAndFit pins PRD #552 milestone 5's mapping
-// criterion for the four categories the snapshot gains: a resource of each is
-// pointed at the offering that takes it over, with fit direct when the offering
-// lists every capability the resource lists and partial naming each capability it
-// lacks otherwise. Every row goes through mapping.Map on the embedded catalog, so
-// the offering's capabilities, the tiers the snapshot records and the mapping's
-// ordering (direct before partial, then by offering name) are pinned together.
+// TestCategoryBestOfferingAndFit pins the mapping criterion of PRD #552
+// milestone 5 and PRD #571 milestone 5 for the categories those milestones add:
+// a resource of each is pointed at the offering that takes it over, with fit
+// direct when the offering lists every capability the resource lists and partial
+// naming each capability it lacks otherwise. Every row goes through mapping.Map on
+// the embedded catalog, so the offering's capabilities, the tiers the snapshot
+// records and the mapping's ordering (direct before partial, then by offering
+// name) are pinned together.
 //
 // The capabilities are the ones a tier variant exists for: OVHcloud adds node
-// level high availability on the Valkey and MongoDB multi-node plans and zone
-// level in the 3-AZ regions, serves point-in-time restore on the Advanced MongoDB
-// plan alone, forwards UDP on its load balancer, and records neither sharding on
-// a cache ("Cluster mode (sharding) is not supported") nor IPv6 on a load
-// balancer. A private registry has no tier: PRD #552 milestone 5 records one
-// offering, because no quoted page says it keeps serving through the loss of a
-// zone, so a zone-level request is partial there.
+// level high availability on the Valkey, MongoDB, OpenSearch and Kafka multi-node
+// plans and zone level in the 3-AZ regions, serves point-in-time restore on the
+// Advanced MongoDB plan alone, forwards UDP on its load balancer, and records
+// neither sharding on a cache ("Cluster mode (sharding) is not supported") nor
+// IPv6 on a load balancer. A private registry has no tier: PRD #552 milestone 5
+// records one offering, because no quoted page says it keeps serving through the
+// loss of a zone, so a zone-level request is partial there. OpenSearch and Kafka
+// have no Advanced tier: PRD #571 milestone 5 records no capability it adds over
+// Production, so the plain offering is already direct for every capability the
+// vocabulary holds.
 //
 // The rows that list both node-high-availability and zone-high-availability
 // guard the naming convention: a 3-AZ offering records zone level alone, because
 // ADR 0011 makes zone level imply node level, and a resource that lists both is
 // still direct there.
-func TestNewCategoryBestOfferingAndFit(t *testing.T) {
+func TestCategoryBestOfferingAndFit(t *testing.T) {
 	t.Parallel()
 
 	cat := catalogOf(t)
@@ -1268,6 +1272,34 @@ func TestNewCategoryBestOfferingAndFit(t *testing.T) {
 				Fit:     mapping.Partial,
 				Missing: []taxonomy.Capability{taxonomy.IPv6},
 			},
+		},
+		{
+			name:     "search.opensearch/no capabilities",
+			category: taxonomy.SearchOpenSearch,
+			want:     bestFit{Name: "Analytics for OpenSearch", Fit: mapping.Direct},
+		},
+		{
+			name:         "search.opensearch/node-high-availability",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability},
+			want:         bestFit{Name: "Analytics for OpenSearch Multi-node", Fit: mapping.Direct},
+		},
+		{
+			name:         "search.opensearch/zone-high-availability",
+			category:     taxonomy.SearchOpenSearch,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Analytics for OpenSearch Multi-node 3-AZ", Fit: mapping.Direct},
+		},
+		{
+			name:     "messaging.kafka/no capabilities",
+			category: taxonomy.MessagingKafka,
+			want:     bestFit{Name: "Analytics for Kafka", Fit: mapping.Direct},
+		},
+		{
+			name:         "messaging.kafka/zone-high-availability",
+			category:     taxonomy.MessagingKafka,
+			capabilities: []taxonomy.Capability{taxonomy.ZoneHighAvailability},
+			want:         bestFit{Name: "Analytics for Kafka 3-AZ", Fit: mapping.Direct},
 		},
 		{
 			name:     "registry.container/no capabilities",

@@ -10,8 +10,8 @@
 |---|---|
 | direct | 6 |
 | partial | 5 |
-| none | 7 |
-| total | 18 |
+| none | 8 |
+| total | 19 |
 
 ## Resources
 
@@ -24,6 +24,7 @@
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | no offering in the `Scaleway` catalog for `registry.container` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | no offering in the `Scaleway` catalog for `search.opensearch` |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  | depends-on `shop-orders` | no offering in the `Scaleway` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
@@ -49,6 +50,7 @@
 - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
 - `shop-cdn`: not classified
 - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
+- `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
 - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
@@ -64,10 +66,11 @@
 
 ### `shop`
 
-- Fit: 4 direct, 4 partial, 6 none
+- Fit: 4 direct, 4 partial, 7 none
 - Blockers:
   - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
   - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
+  - `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`

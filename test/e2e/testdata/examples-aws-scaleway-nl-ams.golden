@@ -11,8 +11,8 @@
 |---|---|
 | direct | 6 |
 | partial | 5 |
-| none | 7 |
-| total | 18 |
+| none | 8 |
+| total | 19 |
 
 ## Resources
 
@@ -25,6 +25,7 @@
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-images` | `AWS::ECR::Repository` | `registry.container` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `registry.container` |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €66.39 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-log-search` | `AWS::OpenSearchService::Domain` | `search.opensearch` | none |  |  | not estimated: no fit |  | no offering in the `Scaleway` catalog for `search.opensearch` |
 | `shop-order-events` | `AWS::SNS::Topic` | `messaging.topic` | none |  |  | not estimated: no fit | depends-on `shop-orders` | no offering in the `Scaleway` catalog for `messaging.topic` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
@@ -50,6 +51,7 @@
 - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
 - `shop-cdn`: not classified
 - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
+- `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
 - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
 - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
@@ -67,12 +69,13 @@
 
 ### `shop`
 
-- Fit: 4 direct, 4 partial, 6 none
-- Monthly estimate: €517.16 per month for 6 of 14 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $518.92 for 4 of 14 resources
+- Fit: 4 direct, 4 partial, 7 none
+- Monthly estimate: €517.16 per month for 6 of 15 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 15 resources
 - Blockers:
   - `shop-catalog-docs`: no offering in the `Scaleway` catalog for `database.mongodb`
   - `shop-images`: no offering in the `Scaleway` catalog for `registry.container`
+  - `shop-log-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-order-events`: no offering in the `Scaleway` catalog for `messaging.topic`
   - `shop-product-search`: no offering in the `Scaleway` catalog for `search.opensearch`
   - `shop-sessions`: no offering in the `Scaleway` catalog for `cache.redis`
@@ -87,8 +90,8 @@
 
 ## Cost estimate
 
-- Total: €587.58 per month for 8 of 18 resources (storage not included in 4 estimates)
+- Total: €587.58 per month for 8 of 19 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `nl-ams`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $518.92 for 4 of 18 resources
+- Source cost: `USD` $518.92 for 4 of 19 resources
