@@ -1,0 +1,83 @@
+name: Co-author trailers
+
+# The co-author trailer check (issues #663, #672, #689 and #706, ADR 0050): every Co-Authored-By trailer,
+# author address and committer address of the pull request's own commits must be one
+# .github/co-author-addresses.txt lists, since a squash merge credits every distinct author. The job
+# "Co-author trailers (base)" is a required status check on main (docs/dev-environment.md).
+#
+# pull_request_target, never pull_request, because the trigger is what makes the check hold: GitHub reads
+# this workflow from the base branch, never from the pull request, so for every pull request into main the
+# job's steps, the test/lint that runs, the Go it builds under and the allow list all come from main. A
+# pull request that changes this file, ci.yml, test/lint or test/architecture's pin of this file is still
+# checked by main's copies, and its own change counts from the next pull request after the merge.
+#
+# types: alone, and no branches:, branches-ignore:, paths: or paths-ignore: filter: a required check that
+# never reports blocks its pull request for good. A push moves the head (synchronize), and retargeting the
+# base branch is an edited event, so a pull request retargeted to main is checked again by main's copy.
+# No push trigger: on main the old job only skipped.
+#
+# Why pull_request_target is safe here, as in audit-paths.yml (ADR 0040): the job executes the base
+# branch's code only. The checkout has no ref: and no repository:, so it is the base branch's tip,
+# github.sha. The pull request's commits are then fetched as git objects, which the check reads with git
+# log and git show (no replace objects, no global or system git configuration), and no step checks them
+# out, switches to them, adds a worktree of them or builds them. The token reads contents only and is not
+# persisted in .git/config; the repository is public, so the fetch needs no credential. The job uses no
+# secret, no environment and no cache: under pull_request_target a cache entry is saved in the base
+# branch's scope, which every later run would restore. Every event value reaches the shell through env:
+# only, never interpolated into run:, and the pull request's number is checked to be a number before it
+# becomes part of a refspec.
+#
+# test/architecture/coauthortrailers_test.go holds this file exactly; the action pins are ci.yml's, so one
+# Renovate update keeps both workflows on the same actions.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+# Keyed on the pull request's number: under pull_request_target github.ref is the base branch, which every
+# pull request shares.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  coauthor-trailers:
+    name: Co-author trailers (base)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # No ref: and no repository: under pull_request_target this is the base branch's commit, github.sha.
+      # fetch-depth: 0 brings the whole history, which the merge base of the range needs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      # The pull request's head under refs/remotes/pull/head, as objects only: never checked out.
+      - name: Fetch the pull request's commits as objects, never checked out
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo >&2 "coauthor-trailers: the pull request number is not a number: the check fails closed"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/head"
+      # The checkout's go.mod, which is the base branch's: the base's test/lint builds under the base's Go
+      # and toolchain pin, never the pull request's.
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # The range is the commits a merge would add: the base branch's tip the checkout took, up to the pull
+      # request's head the fetch brought. The workflow runs on pull requests only, so the check is always
+      # required: a range the run cannot read (a force-push while it ran) fails closed, and the push's own
+      # run reports.
+      - name: The pull request's co-author trailers name the project's addresses
+        run: |
+          go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
+        env:
+          SHIFT2EU_COAUTHOR_RANGE: ${{ format('{0}..{1}', github.sha, github.event.pull_request.head.sha) }}
+          SHIFT2EU_COAUTHOR_CHECK: require

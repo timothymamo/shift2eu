@@ -95,6 +95,7 @@ supersedes it.
 - [0047. Add search.opensearch and messaging.kafka, price their storage per node, and keep every format version](adr/0047-add-search-opensearch-and-messaging-kafka-and-price-their-storage-per-node.md)
 - [0048. Record global offerings in target snapshot format version 2, add network.dns, and keep every format version](adr/0048-record-global-offerings-in-target-snapshot-format-v2-and-add-network-dns.md)
 - [0049. Write the PDF report with a standard-library writer, the core fonts and visible escapes](adr/0049-write-the-pdf-report-with-a-standard-library-writer.md)
+- [0050. Run the co-author check from the base branch's workflow under pull_request_target](adr/0050-run-the-co-author-check-from-the-base-branch-under-pull-request-target.md)
 
 ## Writing a page
 

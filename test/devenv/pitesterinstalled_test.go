@@ -99,10 +99,23 @@ func writePiTesterUnit(t *testing.T, root string, extension, list, wrapper piFil
 	return dir
 }
 
-// piTesterWantArgv is the argv pi starts with: the installed extension first, because the unit folder's copy
-// may be weakened or missing (issue #692), then every argument the deck's command passed unchanged.
-func piTesterWantArgv(installed piTesterInstalled, args []string) []string {
-	return append([]string{"--extension", installed.extension}, args...)
+// piTesterWantArgv is the argv pi starts with since ADR 0044's amendment "the tester loads no project extension
+// or setting" (issue #702): no project trust and no discovered extension, the installed refusal and the deck's
+// extension by --extension, the unit folder's skills by --skill - whether or not that directory exists - and then
+// every argument the deck's command passed unchanged. The shell reports PWD resolved, so the project is resolved
+// before its skills path is compared.
+func piTesterWantArgv(t *testing.T, installed piTesterInstalled, home, project string, args []string) []string {
+	t.Helper()
+
+	want := []string{
+		"--no-approve",
+		"--no-extensions",
+		"--extension", installed.extension,
+		"--extension", piTesterDeckDir(home),
+		"--skill", piTesterSkillsDir(resolvePiTesterDir(t, project)),
+	}
+
+	return append(want, args...)
 }
 
 // limaHeredoc returns the text dev/lima.yaml hands the VM between the marker lines of the <<'marker' heredoc,
@@ -260,8 +273,9 @@ func piTesterSameCopy(file piFile, installed string) bool {
 // pair per project copy that is missing or differs, and none for a copy that matches, so a maintainer is sent to
 // update exactly the files that need it (round 2 of the review and the audit).
 //
-// The wording is pinned against the audit's finding too: pi still discovers the project's .pi/extensions beside
-// the installed extension, so the line may not say the project's copies are ignored.
+// The wording is pinned against the audit's finding too: the line may not say the project's copies are ignored, and
+// since issue #702 it says what the wrapper settles - pi runs no extension and applies no trusted setting of the
+// project - and no more, since pi still reads the project's .pi/settings.json as data before trust.
 func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 	t.Parallel()
 
@@ -327,6 +341,7 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 			}
 
 			writePiTesterBin(t, binDir, record)
+			writePiTesterDeck(t, homeDir)
 
 			installed := writePiTesterInstalled(t, root, extension, list)
 			project := writePiTesterUnit(t, root, tc.projectExtension, tc.projectList, tc.projectWrapper)
@@ -349,7 +364,7 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 
 			got := readPiRecord(t, record)
 
-			if diff := cmp.Diff(piTesterWantArgv(installed, piTesterArgs), got.argv); diff != "" {
+			if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, piTesterArgs), got.argv); diff != "" {
 				t.Errorf("pi did not start with the installed extension and the deck's arguments: the unit folder's copy must never decide what the tester loads (-want +got):\n%s", diff)
 			}
 
@@ -433,14 +448,24 @@ func TestPiTesterIgnoresTheProjectsCopies(t *testing.T) {
 				}
 			}
 
-			// The audit's finding: pi still discovers the project's .pi/extensions beside the installed extension
-			// that --approve trusts, so the line may not claim the project's copies are ignored.
+			// The audit's finding: the line may not claim the project's copies are ignored, whatever pi now does with
+			// them, so it says only what the wrapper settles (issue #692, the audit's round 2).
 			if strings.Contains(strings.ToLower(line), "ignoring") {
-				t.Errorf("the wrapper's one line is %q, whose wording says it ignores the project copies: pi still discovers the project's .pi/extensions, so a maintainer must not be told those copies play no part (issue #692, the audit's round 2)", line)
+				t.Errorf("the wrapper's one line is %q, whose wording says it ignores the project copies: a maintainer must not be told those copies play no part (issue #692, the audit's round 2)", line)
 			}
 
-			if !strings.Contains(line, ".pi/extensions") || !strings.Contains(line, "still loads") {
-				t.Errorf("the wrapper's one line is %q, which does not say that pi still loads the project's .pi/extensions: the installed extension is loaded beside the project's, never instead of it, so the line has to name both \".pi/extensions\" and \"still loads\" (issue #692, ADR 0044)", line)
+			// Issue #702: pi runs no extension and applies no trust-gated setting of the project any more, so the line
+			// says so, and the clause it carried before (pi still loads the project's .pi/extensions) is gone. The
+			// wording names what the wrapper really settles: pi still reads the project's .pi/settings.json as data
+			// before trust (sessionDir, the startup UI, first-time setup), which --no-approve cannot stop.
+			const noProjectLoad = "the checks and --extension use the installed copies, and pi loads no extension and no trusted setting of the project (--no-extensions, --no-approve: ADR 0044, issue #702)"
+
+			if !strings.Contains(line, noProjectLoad) {
+				t.Errorf("the wrapper's one line is %q, which does not say %q: pi loads no extension and applies no trusted setting of the unit folder since issue #702, so a maintainer must not be told the project's copies still reach pi, nor that pi reads nothing of the project at all (ADR 0044)", line, noProjectLoad)
+			}
+
+			if strings.Contains(line, "pi still loads the .pi/extensions of the project too") {
+				t.Errorf("the wrapper's one line is %q, which still carries the clause from before issue #702: pi no longer loads the project's .pi/extensions, since the wrapper starts it with --no-extensions and --no-approve (ADR 0044)", line)
 			}
 
 			assertNoSecrets(t, "the wrapper's stdout", stdout, piTesterSecrets())
