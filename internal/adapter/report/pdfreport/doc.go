@@ -128,11 +128,12 @@
 // type, category, region, workload, fit, best offering, relations and
 // "affected by a blocker on" notes, every candidate offering with its fit and
 // missing capabilities, the reasons, the required changes, the blockers and,
-// with estimates on, the estimate's breakdown), How this report is worked out, and About this report
-// (the version line, every catalog snapshot with its source URL, retrieval
-// date and default region for estimates, the regions, "Estimates: on" or
-// "Estimates: off", the inventory file and the source). The words follow the
-// Markdown report's, amounts included ("€2,500.00").
+// with estimates on, the estimate's breakdown), How this report is worked
+// out, and About this report (the version line, every catalog snapshot with
+// its source URL, retrieval date and default region for estimates, the
+// regions, "Estimates: on" or "Estimates: off", the inventory file and the
+// source). The words follow the Markdown report's, amounts included
+// ("€2,500.00").
 //
 // A comparison report is: the title naming every target, the header facts with
 // one catalog and one region line per target, then Comparison (a Summary table
