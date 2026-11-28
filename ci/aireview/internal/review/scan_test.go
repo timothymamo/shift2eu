@@ -353,6 +353,42 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
 		},
 		{
+			// PRD #584 milestone 1b: the PDF report's contact banner shows the
+			// project's own address, so the scan must not report the project's own
+			// domain as real data. The apex, the one service label the site uses
+			// (www) and the address are the project's own, so they are no finding.
+			name:      "the project's own domain at its apex, its www label and in its address is no finding",
+			diff:      goldenAdds(golden, `"hosts": "shift2eu.com www.shift2eu.com info@shift2eu.com"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
+			// The project's own domain is no hiding place either (round 5, S1):
+			// an allow-list entry that let any name below it through hid a host a
+			// customer chose, and an entry matched without its dot let a name that
+			// only ends in the domain through. Only the apex and www are the
+			// project's own; everything else is a finding.
+			name: "a host name below the project's own domain, or a name that only ends in it, is found",
+			diff: goldenAdds(golden,
+				`"x": "x.shift2eu.com"`,
+				`"deeper": "a.b.shift2eu.com"`,
+				`"lookalike": "evilshift2eu.com"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 3}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+				{Path: golden, Line: 3, Kind: review.ScanHostname},
+			},
+		},
+		{
+			// RFC 2606's example domains stay the sanitised values CLAUDE.md
+			// rule 2 asks the fixtures for, whatever the name above them holds, so
+			// the project's domain below one is no finding: the example-domain
+			// rule of the scan answers before the provider rule does.
+			name:      "the project's domain below an example domain is no finding",
+			diff:      goldenAdds(golden, `"host": "shift2eu.com.example.net"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
 			// RFC 2606's example domains are the sanitised values CLAUDE.md
 			// rule 2 asks the fixtures for, so they stay no finding at any depth
 			// (S1).
