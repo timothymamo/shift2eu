@@ -120,15 +120,16 @@ func auditGoModReadFragmentOf(script []string) ([]string, string) {
 	for _, line := range fragment {
 		trimmed, printable := auditStepLineOf(line)
 		if !printable {
-			return nil, fmt.Sprintf(`%s's install step holds %q between its read of go.mod's Go and the install, and that line holds a byte outside printable ASCII: bash treats no Unicode space, no vertical tab, no form feed and no carriage return as a blank, while strings.TrimSpace strips them all, so a line that begins with one of them and then "#" reads as a comment to a TrimSpace and runs as a command under bash. Every line this test runs must be printable ASCII, and a line is a comment only when it begins with "#" after its ASCII spaces and tabs, so the whole fragment - the read, the checks and their echoes, and the write of the checked value to $GITHUB_ENV - stays what the step's own lines are (issues #710 and #713)`,
-				auditWorkflow, trimmed)
+			return nil, auditPrintableASCIIProblemOf(
+				fmt.Sprintf(`%s's install step holds %q between its read of go.mod's Go and the install`, auditWorkflow, trimmed),
+				`the whole fragment - the read, the checks and their echoes, and the write of the checked value to $GITHUB_ENV`)
 		}
 
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
-		if _, ok := auditFragmentShapeOf(trimmed); ok {
+		if _, ok := auditLineShapeOf(auditFragmentLineShapes, trimmed); ok {
 			continue
 		}
 
@@ -188,16 +189,25 @@ var auditFragmentLineShapes = []auditFragmentLineShape{
 	},
 }
 
-// auditFragmentShapeOf returns the shape trimmed matches, and false for a line
-// no shape of the fragment holds (issue #713).
-func auditFragmentShapeOf(trimmed string) (auditFragmentLineShape, bool) {
-	for _, shape := range auditFragmentLineShapes {
+// auditLineShapeOf returns the shape of shapes trimmed matches, and false for a
+// line none of them holds (issue #713).
+func auditLineShapeOf(shapes []auditFragmentLineShape, trimmed string) (auditFragmentLineShape, bool) {
+	for _, shape := range shapes {
 		if shape.pattern.MatchString(trimmed) {
 			return shape, true
 		}
 	}
 
 	return auditFragmentLineShape{}, false
+}
+
+// auditPrintableASCIIProblemOf returns the reason this file refuses a line that
+// holds a byte outside printable ASCII, given what holds the line (subject, which
+// quotes it) and the whole the caller keeps to the step's own lines (whole)
+// (issues #710 and #713).
+func auditPrintableASCIIProblemOf(subject, whole string) string {
+	return fmt.Sprintf(`%s, and that line holds a byte outside printable ASCII: bash treats no Unicode space, no vertical tab, no form feed and no carriage return as a blank, while strings.TrimSpace strips them all, so a line that begins with one of them and then "#" reads as a comment to a TrimSpace and runs as a command under bash. Every line this test runs must be printable ASCII, and a line is a comment only when it begins with "#" after its ASCII spaces and tabs, so %s stays what the step's own lines are (issues #710 and #713)`,
+		subject, whole)
 }
 
 // auditModulesLineShapes are the exact line shapes the checks job's "Download the
@@ -267,18 +277,6 @@ var auditModulesLineShapes = []auditFragmentLineShape{
 	},
 }
 
-// auditModulesShapeOf returns the shape trimmed matches, and false for a line no
-// shape of the modules step holds (issue #713).
-func auditModulesShapeOf(trimmed string) (auditFragmentLineShape, bool) {
-	for _, shape := range auditModulesLineShapes {
-		if shape.pattern.MatchString(trimmed) {
-			return shape, true
-		}
-	}
-
-	return auditFragmentLineShape{}, false
-}
-
 // auditStepLineOf returns line trimmed of its leading and trailing ASCII spaces
 // and tabs, which is how bash reads a blank, and false for a line that holds a
 // byte outside printable ASCII (0x20 to 0x7e) anywhere inside it, a tab there
@@ -306,15 +304,16 @@ func auditModulesStepScriptOf(script []string) ([]string, string) {
 	for _, line := range script {
 		trimmed, printable := auditStepLineOf(line)
 		if !printable {
-			return nil, fmt.Sprintf(`%s's checks job, step %q, holds %q, and that line holds a byte outside printable ASCII: bash treats no Unicode space, no vertical tab, no form feed and no carriage return as a blank, while strings.TrimSpace strips them all, so a line that begins with one of them and then "#" reads as a comment to a TrimSpace and runs as a command under bash. Every line this test runs must be printable ASCII, and a line is a comment only when it begins with "#" after its ASCII spaces and tabs, so the whole step - the guard, the value it takes and the checks that hold every Go command to it - stays what the step's own lines are (issues #710 and #713)`,
-				auditWorkflow, auditGoModulesStepName, trimmed)
+			return nil, auditPrintableASCIIProblemOf(
+				fmt.Sprintf(`%s's checks job, step %q, holds %q`, auditWorkflow, auditGoModulesStepName, trimmed),
+				`the whole step - the guard, the value it takes and the checks that hold every Go command to it`)
 		}
 
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
 
-		if _, ok := auditModulesShapeOf(trimmed); ok {
+		if _, ok := auditLineShapeOf(auditModulesLineShapes, trimmed); ok {
 			continue
 		}
 
@@ -859,8 +858,8 @@ func TestAuditFragmentLineShapesHoldTheFragmentToTheStepsOwnLines(t *testing.T) 
 	}
 
 	for _, line := range auditGoModReadStep {
-		if _, ok := auditFragmentShapeOf(strings.TrimSpace(line)); !ok {
-			t.Errorf("auditFragmentShapeOf(%q) = no shape, want one: every line of the read and the checks is a shape the fragment this file runs holds (issue #713)", strings.TrimSpace(line))
+		if _, ok := auditLineShapeOf(auditFragmentLineShapes, strings.TrimSpace(line)); !ok {
+			t.Errorf("auditLineShapeOf(auditFragmentLineShapes, %q) = no shape, want one: every line of the read and the checks is a shape the fragment this file runs holds (issue #713)", strings.TrimSpace(line))
 		}
 	}
 
@@ -932,9 +931,9 @@ func TestAuditFragmentLineShapesHoldTheFragmentToTheStepsOwnLines(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			shape, ok := auditFragmentShapeOf(tc.line)
+			shape, ok := auditLineShapeOf(auditFragmentLineShapes, tc.line)
 			if ok != tc.shaped {
-				t.Errorf("auditFragmentShapeOf(%q) matched the shape %q: %v, want a shape: %v: the fragment holds the exact shapes the install step uses, in full, so a line that differs from one in its command, its quoting, its redirection or a substitution inside a message is no shape at all (issue #713)",
+				t.Errorf("auditLineShapeOf(auditFragmentLineShapes, %q) matched the shape %q: %v, want a shape: %v: the fragment holds the exact shapes the install step uses, in full, so a line that differs from one in its command, its quoting, its redirection or a substitution inside a message is no shape at all (issue #713)",
 					tc.line, shape.name, ok, tc.shaped)
 			}
 		})
