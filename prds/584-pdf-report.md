@@ -1,8 +1,10 @@
 # PRD #584: The site's PDF report download
 
-**Status:** In progress: milestone 1 done (the PDF writer `pdfreport` and `--format pdf`), milestone 2
-next. The maintainer decided all twelve questions under *Decisions* as
-recommended (2026-11-25); the ADR is [0049](../docs/adr/0049-write-the-pdf-report-with-a-standard-library-writer.md).
+**Status:** In progress: milestone 1 done (the PDF writer `pdfreport` and `--format pdf`), milestone 1b
+next (the PDF's visual styling and the contact banner, added by the maintainer on 2026-11-28), then
+milestone 2. The maintainer decided all twelve questions under *Decisions* as
+recommended (2026-11-25), and milestone 1b's five on 2026-11-28; the ADR is
+[0049](../docs/adr/0049-write-the-pdf-report-with-a-standard-library-writer.md), amended for 1b.
 **Issue:** #584
 
 ## Problem
@@ -64,7 +66,8 @@ the WebAssembly module and offered through the page script's one existing downlo
 
 The PDF is one document per run, A4 portrait (595 × 842 pt). Text uses three of the PDF's 14 standard
 (core) fonts, which every PDF reader has and the file therefore never embeds: Helvetica for the
-report's own words, Helvetica-Bold for headings and table header cells, and Courier for every value
+report's own words, Helvetica-Bold for headings and table header cells (from milestone 1b also badge
+words, tile figures and the banner's eyebrow, heading and address), and Courier for every value
 from the inventory or a catalog. Courier plays the part of the Markdown report's code spans: a reader
 can tell a value from the report's own words.
 
@@ -128,6 +131,142 @@ what the escapes mean.
   "comparison of N targets".
 - **Footer**, every page: "Page N of M" and the shift2eu version line (below).
 
+### Look (milestone 1b)
+
+Milestone 1 writes black text and black hairline rules. Milestone 1b gives the PDF the site's look
+(*Decided by the maintainer (2026-11-28)*), drawn with a few PDF path and colour operators (ADR 0049,
+amended). It is not a copy of the site: every section, value and detail of milestone 1 stays, in the
+same order and words, and only the contact banner (below) is added.
+
+**Palette.** The colours are the site's light-theme tokens in `site/style.css`, nothing else. Each
+component is written as a fixed decimal with three places, `byte × 1000 / 255` rounded to the nearest
+thousandth in integer arithmetic (`(byte × 1000 + 127) / 255`, ADR 0049); the column shows the result.
+
+| Name (`site/style.css`) | Hex | Written as | Where used |
+|---|---|---|---|
+| `--ink` | `#14213d` | `0.078 0.129 0.239` | Body text and values, table cells, the total tile's rule and figure |
+| `--muted` | `#4a5568` | `0.290 0.333 0.408` | Page header and footer, the title block's header facts, tile captions, "none" and "not estimated" notes |
+| `--mast` | `#0b2a66` | `0.043 0.165 0.400` | The title band and the contact banner's fill |
+| `--mast-ink` | `#ffffff` | `1.000 1.000 1.000` | The title and the banner heading on navy |
+| `--mast-link` | `#c9d8ff` | `0.788 0.847 1.000` | The banner's eyebrow on navy |
+| `--mast-text` | `#e6ebf5` | `0.902 0.922 0.961` | The banner's text on navy |
+| `--accent` | `#0b3d91` | `0.043 0.239 0.569` | Section headings, the estimate tile's figure |
+| `--gold` | `#ffcc00` | `1.000 0.800 0.000` | The title band's and per-target headings' left rule, the banner's top rule and its email box |
+| `--gold-ink` | `#0b2a66` | `0.043 0.165 0.400` | The email address in the gold box |
+| `--direct-ink` / `--direct-bg` | `#0f6b3a` / `#e3f4ea` | `0.059 0.420 0.227` / `0.890 0.957 0.918` | Direct badge (word and icon / fill), the Direct tile's rule and figure |
+| `--partial-ink` / `--partial-bg` | `#874600` / `#fdf0d5` | `0.529 0.275 0.000` / `0.992 0.941 0.835` | Partial badge, the Partial tile's rule and figure |
+| `--none-ink` / `--none-bg` | `#a3201a` / `#fde4e1` | `0.639 0.125 0.102` / `0.992 0.894 0.882` | None badge, the None tile's rule and figure |
+| `--info-bg` / `--info-rule` | `#e8eefb` / `#0b3d91` | `0.910 0.933 0.984` / `0.043 0.239 0.569` | The required-changes box (fill / left rule) |
+| `--warn-bg` / `--warn-rule` | `#fdf0d5` / `#a86400` | `0.992 0.941 0.835` / `0.659 0.392 0.000` | The blockers box (fill / left rule) and its warning icon |
+| `--warn-ink` | `#5c3a00` | `0.361 0.227 0.000` | The blockers box's heading |
+| `--ring` | `#dde2ea` | `0.867 0.886 0.918` | Table row rules, tile and card outlines, the rule above a section heading, header and footer rules |
+| `--surface-2` | `#eef1f6` | `0.933 0.945 0.965` | Table header rows, the band heading each block of *Resource details* |
+| `--bg` | `#f6f7f9` | `0.965 0.969 0.976` | Workload cards' fill, even table rows |
+
+The page itself stays unpainted (white). `--warn-bg` and `--partial-bg` are the same colour on the
+site, so one written value serves both. No dark-theme token is used: a PDF has one look.
+
+**Shapes.** Every shape is a rectangle or a straight-line path; there are no curves and no rounded
+corners.
+
+- **Title block:** a `--mast` band across the text width on page 1, with a 4 pt `--gold` rule at its
+  left edge, holding "Migration assessment: <target>" (or the comparison's title) in Helvetica-Bold,
+  `--mast-ink`. The header facts follow below the band, `--muted`, values in Courier as today.
+- **Page header and footer:** their words in `--muted`, each separated from the body by a 0.5 pt
+  `--ring` rule.
+- **Section headings:** Helvetica-Bold in `--accent`, with a 0.5 pt `--ring` rule across the text width
+  above them, as the site's `#report .part`. A per-target section of a comparison is headed by the
+  target's display name in `--ink` with a 4 pt `--gold` left rule, as the site's `.part-target`.
+- **Fit badges:** a filled rectangle in the fit's `-bg` colour, holding the fit's icon and its word,
+  "Direct", "Partial" or "None", in Helvetica-Bold, both in the fit's `-ink` colour. A badge can carry a
+  count before the word ("3 Direct"), as a workload card's fit counts do. Badges stand wherever a fit is
+  shown: the resources table's Fit cell, the comparison's stacked cells, the candidate table of
+  *Resource details*, the summary tiles and the workload cards. The word is always there.
+- **Summary tiles:** the summary table becomes one row of tiles: one per fit, then the total, then, with
+  estimates on, the monthly estimate. Each tile has a 0.5 pt `--ring` outline and a 3 pt rule along its
+  top in its fit's ink (`--ink` for the total, `--accent` for the estimate); it holds the fit's badge
+  (the total and estimate tiles: their label), the count as a big Helvetica-Bold figure in the same
+  colour as the rule, and its caption ("of N resources", "resources in total", "per month, estimated") in
+  `--muted`. The comparison's summary table stays a table (one column per target), with badges in its
+  row labels.
+- **Required-changes box:** the section on an `--info-bg` fill with a 4 pt `--info-rule` rule at its
+  left edge, as the site's `.notice`.
+- **Blockers box:** the section on a `--warn-bg` fill with a 4 pt `--warn-rule` rule at its left edge,
+  as the site's `.notice.warn`, its heading in `--warn-ink` after the warning icon. The "affected by a
+  blocker on" notes stay inside it. The comparison's blockers on every target use the same box.
+- **Workload cards:** one card per workload, the text width wide, stacked: a `--bg` fill with a 0.5 pt
+  `--ring` outline, the workload's name in Courier, then its fit counts as badges, its estimate total and
+  source cost, and its blockers, as today's lines.
+- **Tables:** the header row on a `--surface-2` fill, every even body row on `--bg`, and a 0.5 pt
+  `--ring` rule under every row in place of today's black hairlines. Cell text in `--ink`.
+- ***Resource details*:** each block's ID on a `--surface-2` band across the text width; the block's
+  candidate table, blockers and required changes in the same shapes as above.
+- **The contact banner:** see *The contact banner* below.
+
+**Icons.** Vector paths of the operators above, no font glyph and no image, each drawn in a square the
+height of its badge's text:
+
+- **Direct: a check mark** (the site's `✓`): a stroked polyline of three points.
+- **Partial: a half-filled disc** (the site's `◐`): a circle drawn as a regular 16-sided polygon,
+  stroked, with its left half filled. Its vertices are a constant table of integers in thousandths of a
+  point for the one icon size, never computed with floating point.
+- **None: a cross** (the site's `✕`): two stroked diagonal lines.
+- **Warning, in the blockers box's heading: a triangle** filled in `--warn-rule`, with an exclamation
+  mark as two small `--mast-ink` (white) rectangles inside it.
+
+The three fit icons are the shapes `htmlreport` and the site use (`fragment.go`'s glyphs and the
+stylesheet's `::before` content), so a reader who knows the page recognises them. The triangle is the
+PDF's own: the site's blockers carry the cross, but in the PDF the cross means fit "none", and a
+blocker is not a fit.
+
+**Colour is never the only signal.** Every badge keeps its word beside its colour and icon, and the
+three icons differ in shape, so a fit reads the same printed in greyscale or by a reader who cannot tell
+the colours apart. Every coloured text is a dark ink on a light fill, or `--mast-ink`, `--mast-link` or
+`--mast-text` on `--mast`, or `--gold-ink` on `--gold`, the site's own pairs, so it stays legible in
+greyscale. A box's meaning is in its heading's words, not only its fill.
+
+**The contact banner.** The site's "Planning a migration?" band (`site/index.html`,
+`section.contact-band`) in the PDF, once per document:
+
+- a `--mast` fill the text width wide with a 3 pt `--gold` rule along its top (the site's inset gold
+  shadow);
+- the eyebrow "Planning a migration?" in Helvetica-Bold, `--mast-link`;
+- the heading "Questions about your results, or how to move forward?" in Helvetica-Bold, `--mast-ink`;
+- the text "We're happy to help you read an assessment, weigh the EU options, or plan the move itself.
+  Email info@shift2eu.com." in Helvetica, `--mast-text`. The apostrophe is the ASCII `'` (U+0027),
+  the character `site/index.html` uses;
+- a `--gold` box holding "info@shift2eu.com" in Helvetica-Bold, `--gold-ink`, in place of the site's
+  gold button. The site's button reads "Email info@shift2eu.com"; the PDF's box holds the address alone,
+  since the text just before it already says "Email".
+
+It is **plain text on a filled box**: no link annotation, URI, action or anything else ADR 0049 forbids.
+A viewer may make the address clickable on its own, as with any URL-shaped text (*ADR 0036* below).
+
+Where it sits:
+
+- **Single-target report:** right after the last of the sections from Summary to Cost estimate that the
+  report shows (Cost estimate with estimates on; otherwise Workloads, Blockers, Required changes or
+  Resources, whichever is last), and before *Resource details*.
+- **Comparison:** right after the *Comparison* section (its summary, resources and blockers tables) and
+  before the first per-target section. The per-target sections hold no banner.
+
+The reason: that is where the site places it, right after the results it shows. At the very end it would
+sit behind pages of resource details, how-it-works and about text for a large inventory, where few
+readers would reach it.
+
+**Boxes across pages.** A box is the blockers box, the required-changes box, a workload card, a summary
+tile row, a *Resource details* block's ID band and the banner.
+
+- A box's header (its heading, or a table's header row) never ends a page: when the header and its first
+  row or line do not both fit in the space left, the box starts on the next page.
+- A box that continues on a new page is drawn again there: its fill, its rules and its outline are drawn
+  on each page for the part of the box on that page, so no text of the box stands outside its fill. Its
+  heading is not repeated; a table's header row repeats as today.
+- The banner, a summary tile row and a workload card are never split: when one does not fit in the space
+  left, it moves whole to the next page. A workload card taller than a page's body, which only a
+  hostile inventory makes, continues as a box does.
+- A badge stays on its line, beside its word.
+
 ### Single-target report
 
 The sections follow the Markdown report's order and words (`internal/adapter/report/markdown/doc.go`),
@@ -142,6 +281,7 @@ then add the detail sections. With the layout of today's reports:
 | Blockers, the "affected by a blocker on" notes included | `## Blockers` | In one box | Nothing |
 | Workloads, only when the assessment shows workloads: per workload its fit counts, with estimates on its total and the source's cost per currency, and its blockers | `## Workloads` | Workload boxes (no source cost) | Nothing beyond the Markdown report |
 | Cost estimate, only with estimates on: total, basis, region, hours basis, billing caps, source cost | `## Cost estimate` | Total and one line | Nothing beyond the Markdown report |
+| **Contact banner** (milestone 1b), right after the last of the sections above that the report shows | Not shown | The site's "Planning a migration?" band, after the report | The banner's plain text on a filled box (*Look*) |
 | **Resource details** (new): one block per resource, in the assessment's order | Not shown | Not shown | See below |
 | **How this report is worked out** (new) | Not shown | Not shown | See below |
 | **About this report** (new) | Header lines only | Header line only | See below |
@@ -209,9 +349,11 @@ The comparison follows the Markdown comparison report's order:
      estimate. Stacking keeps three targets readable on A4 portrait, where the Markdown table's column
      per value would not fit;
    - the blockers on every target.
-3. One section per target, headed by its display name, holding that target's single-target sections
-   from Summary to Resource details, one heading level lower.
-4. **How this report is worked out** and **About this report**, once, at the end, covering every target.
+3. **The contact banner** (milestone 1b), once, right after the *Comparison* section and before the
+   first per-target section (*Look*).
+4. One section per target, headed by its display name, holding that target's single-target sections
+   from Summary to Resource details, one heading level lower, without the banner.
+5. **How this report is worked out** and **About this report**, once, at the end, covering every target.
 
 The comparison ranks no target and recommends none, as today.
 
@@ -248,6 +390,8 @@ The comparison ranks no target and recommends none, as today.
   bytes of invalid UTF-8 (`0xff`) give 8,192 characters (`\xff` is 4 each). The unit test of the
   split-at-a-line path uses that 8,192-character case.
 - A section heading never ends a page.
+- From milestone 1b, boxes follow *Look*'s *Boxes across pages*: a box's header never ends a page, a box
+  that spans pages is drawn again on each, and the banner, a tile row and a workload card move whole.
 
 ## How it fits the architecture
 
@@ -547,6 +691,66 @@ Test levels:
   `docs/architecture.md` and the CLI guide (`docs/guide/assess.md`) describe the format. The Markdown,
   JSON and HTML reporters' goldens do not change.
 
+### The PDF's styling (milestone 1b)
+
+Every milestone 1 criterion above keeps holding on the restyled goldens. Their tests change only where
+they name the operator table (below) or must expect the banner's text where it sits.
+
+- [ ] *Unit:* every golden of milestone 1 is regenerated with `-update` and matches byte for byte. No
+  golden is added or dropped: each carries the styling, and each carries the banner once.
+- [ ] *Unit:* the test-only reader's operator table is exactly ADR 0049's amended set, each with its
+  operand shape, and nothing else: `BT`, `ET`, `q`, `Q`, `f`, `S` and `h` with no operand; `Tf` with a
+  font resource name and an integer; `Tm` with six integers; `Tj` with a literal string; `re` with four
+  integers; `w` with one decimal; `rg` and `RG` with three decimals; `m` and `l` with two decimals. `G`,
+  milestone 1's grey operator, is gone. A test pins the table's keys and shapes.
+- [ ] *Unit:* a content stream built in-test with an operator outside the table fails the reader, for
+  each of `G`, `g`, `k`, `K`, `B`, `b`, `c`, `v`, `y`, `F`, `f*`, `W`, `n`, `J`, `j`, `d`, `cs`, `scn`, `sh`,
+  `gs`, `Do`, `BI`, `TJ`, `'` and `"`; so does a listed operator with an operand of the wrong shape (an
+  integer for `rg`, a decimal for `re`, a missing or an extra operand).
+- [ ] *Unit:* every number in every content stream has its written form: an integer is ASCII digits
+  only; a decimal is ASCII digits, `.`, and exactly three digits; neither has a sign or an exponent.
+  Every `rg` and `RG` component is between `0.000` and `1.000`, every `m` and `l` coordinate within the
+  page (0 to 595 and 0 to 842), and every `rg`/`RG` triple of every golden is a row of *Look*'s palette,
+  written exactly as the table gives it.
+- [ ] *Unit:* the colour conversion, from a 0 to 255 byte, gives `(byte × 1000 + 127) / 255` thousandths
+  written with three places: `0` is `0.000`, `11` is `0.043`, `255` is `1.000`, and every palette entry's
+  hex gives the table's value. The no-floating-point test of milestone 1 passes unchanged.
+- [ ] *Unit:* badge words: in every golden, every rectangle filled in a fit's `-bg` colour is a badge,
+  holding one icon path and one text run, both in that fit's `-ink` colour, the text being the fit's word
+  ("Direct", "Partial", "None"), alone or after a count. Every fit the page shows as a word in a Fit cell,
+  a stacked comparison cell, a candidate table, a tile or a workload card is in such a badge. No `-bg`
+  fill holds another fit's word.
+- [ ] *Unit:* icons: each badge's icon is its fit's shape: three points stroked for direct; a 16-sided
+  closed polygon stroked plus a filled half for partial; two separate stroked lines for none. The
+  blockers box's heading carries the filled triangle. No icon is a font glyph.
+- [ ] *Unit:* the banner: every golden holds, once, the four runs "Planning a migration?", "Questions
+  about your results, or how to move forward?", the text paragraph (its wrapped lines joined, the ASCII
+  apostrophe included) and "info@shift2eu.com", in that order, all on one page and inside one `--mast`
+  rectangle, the address inside a `--gold` one. In a single-target golden they follow the last section
+  from Summary to Cost estimate that the golden shows and precede *Resource details*; in a comparison
+  golden they follow the *Comparison* section and precede the first per-target section.
+- [ ] *Unit:* boxes across pages, in the long golden and the hostile ones and in a layout test that
+  builds a box near a page's end: a box's heading or header row is never the last text on a page; every
+  text run of a box that spans pages lies inside a fill or outline of that box drawn on its own page; the
+  banner, a tile row and a workload card that fits a page's body never span two pages.
+- [ ] *Unit:* the structural invariants of milestone 1 hold for every golden and in the fuzz test, with
+  the amended operator table, and the banned names gain `/Link`, `/XObject`, `/ExtGState`, `/Pattern`,
+  `/Shading` and `/ColorSpace`: each page's `/Resources` holds only `/Font`. No `/Annots`, `/URI` or
+  other milestone 1 banned name appears, the banner's address included. The object types stay
+  milestone 1's set.
+- [ ] *Unit:* the text extracted from each golden still holds every section, value and detail milestone 1's
+  text tests check, in the same order; the only new text is the banner's.
+- [ ] *Review:* the PR states every golden PDF's size before and after, and the WebAssembly module's raw
+  size and gzip size before and after. The module does not construct `pdfreport` until milestone 2, so
+  both are expected unchanged; the budget tests are unchanged and pass.
+- [ ] *Review:* the PR records a look at the bundled examples' PDFs, single and comparison, in the four
+  viewers of *Decided, as recommended*, 10, and one printed or previewed in greyscale, in which every fit
+  still reads by its word and icon.
+- [ ] *Review:* ADR 0049 is amended (*Amended 2026-11-28 (PRD #584 milestone 1b)*), and `pdfreport`'s
+  `doc.go`, `docs/architecture.md` and the CLI guide (`docs/guide/assess.md`) describe the styling and the
+  banner. The scope rows hold: no embedded font, no third-party dependency, no tagged PDF, no
+  compression. The Markdown, JSON and HTML reporters' goldens do not change.
+
 ### The site's PDF download (milestone 2)
 
 - [ ] *Native parity:* given the same inventory and options, the web adapter's PDF bytes equal what
@@ -695,7 +899,8 @@ These hold unchanged and are not amended:
 ## Milestones
 
 Each milestone ships as one PR, in this order, and each gets the security audit (`security-audit` skill).
-Milestones 1 and 2 touch the handling of hostile text and the site's trust model.
+Milestones 1 and 2 touch the handling of hostile text and the site's trust model; milestone 1b changes
+the content streams' operator set.
 
 1. [x] **The PDF writer, `pdfreport`, `--format pdf` and the ADR.**
    - The reporter, standard library only, with:
@@ -729,7 +934,29 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
        (compression) and 9 (tagged PDF): not in milestones 1 and 2. Milestone 3 amends the ADR with the
        final decisions on both.
    - The site does not change in this milestone.
-2. [ ] **The site's switch to the PDF download.** Depends on 1.
+
+- [ ] **1b. The PDF's visual styling and the contact banner.** Depends on 1. Added by the maintainer on
+  2026-11-28, between 1 and 2, so the site never offers the plain PDF (*Decided by the maintainer
+  (2026-11-28)*). The milestones keep their numbers.
+  - The drawing operators of ADR 0049's amended set and the colours of *Look*'s palette, written as
+    three-place decimals from integer arithmetic.
+  - The vector icons: check mark, half-filled disc, cross, and the blockers' warning triangle.
+  - Fit badges that always carry their word beside colour and icon.
+  - The summary tiles with the big fit counts, the total and the estimate.
+  - The required-changes box, the blockers box with the warning rule, and the workload cards.
+  - The title band, section headings, table header shading and row rules, and the *Resource details*
+    ID bands.
+  - The contact banner and its placement (*Look*).
+  - Page breaks that never split a box's header from its first row or line, redraw a box that spans
+    pages on each page, and move the banner, a tile row and a workload card whole.
+  - The test-only reader's operator allow list and the structural invariants, with a test that an
+    unlisted operator fails; the badge-word test; the banner and box tests.
+  - The regenerated goldens. The PR states every golden PDF's size before and after, and the
+    WebAssembly module's raw and gzip size before and after; the budget tests are unchanged.
+  - ADR 0049 amended; `pdfreport`'s `doc.go`, `docs/architecture.md` and the CLI guide.
+  - The site does not change in this milestone.
+
+2. [ ] **The site's switch to the PDF download.** Depends on 1b.
    - `internal/web`'s `Deps`, `Options` and `Result`, and `wire` constructing `pdfreport` and
      `htmlreport` only.
    - The glue's `Uint8Array` hand-over.
@@ -804,6 +1031,34 @@ Milestones 1 and 2 touch the handling of hostile text and the site's trust model
    - (1) the writer, `pdfreport`, `--format pdf`, the ADR;
    - (2) the site's switch;
    - (3) a polish round after PRD #297's first deploy.
+   - *Amended 2026-11-28:* the maintainer added milestone 1b, the PDF's styling and the contact banner,
+     between (1) and (2) (*Decided by the maintainer (2026-11-28)*).
+
+### Decided by the maintainer (2026-11-28)
+
+The maintainer checked milestone 1's PDFs in the four viewers (PASS) and found them very plain. They
+decided:
+
+1. **A new milestone, 1b, between 1 and 2,** so the site never offers the plain PDF. The milestones keep
+   their numbers; milestone 2 depends on 1b, and 1b on 1.
+2. **The contact banner in both the site's and the CLI's PDF:** the site's "Planning a migration?" band
+   (`site/index.html`, `section.contact-band`), its eyebrow, heading and text in the site's exact words,
+   and the site's gold button as a gold box holding `info@shift2eu.com`. Plain text only: no link
+   annotation, URI or action; ADR 0049's ban on them stays.
+3. **The site's look:** its colours (`site/style.css`), fit badges with icons, summary tiles with the big
+   fit counts, the blockers box with a warning rule, and workload cards (*Look*).
+4. **Colour is never the only signal:** every badge keeps its word (Direct, Partial, None) beside its
+   colour and icon, and the PDF reads the same printed in greyscale.
+5. **Not a copy of the site:** the PDF keeps every section and detail it has today (the detail sections,
+   *How this report is worked out*, the escapes, the header and footer, the comparison tables), in the
+   new styling. Nothing is dropped.
+
+**The banner's placement** (decided by the orchestrator, within decision 2): in a single-target report,
+right after the last of the sections from Summary to Cost estimate that the report shows and before
+*Resource details*; in a comparison, right after the *Comparison* section and before the per-target
+sections; once per document, never split across pages. The reason: that is where the site places it,
+right after the results it shows. At the very end it would sit behind pages of resource details,
+how-it-works and about text for a large inventory, where few readers would reach it.
 
 ### Decided in this PRD (the maintainer can overrule them)
 
@@ -944,7 +1199,7 @@ recommended*, followed by the number. ADR 0049 records the answers that shape mi
 
 ## Out of scope
 
-- Anything beyond the three milestones above.
+- Anything beyond the milestones above (1, 1b, 2 and 3).
 - Embedding fonts, or any glyph beyond WinAnsiEncoding.
 - Any server side: no rendering service, no upload, no HTTP API (ADR 0037).
 - The browser's print dialog or a print stylesheet as the download.
