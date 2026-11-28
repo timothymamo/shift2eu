@@ -1,6 +1,6 @@
 # PRD #730: The agent host's secrets in 1Password instead of the macOS Keychain
 
-**Status:** Draft; decisions 1, 3, 4 and 6 to 9 answered by the maintainer, 2026-11-28; 2, 5 and 10 open
+**Status:** Draft; all 10 decisions answered by the maintainer, 2026-11-28
 **Issue:** #730
 
 ## Problem
@@ -141,10 +141,12 @@ either way the boundary account mode built (the maintainer's uid cannot read the
 would leak through 1Password. So the LaunchDaemon reads nothing from 1Password, and nothing changes in
 ADR 0034's job.
 
-1Password holds a **backup** of the key, as a file attachment, used only to restore a lost key
-(`op read --out-file <path> --file-mode 0600`). The backup must not sit in the vault the host's service
-account reads: the maintainer's uid can read that token, and so would read the App's key through it, which
-is exactly what account mode forbids. Where the backup lives is decision 5.
+1Password holds a **backup** of the key, as a file attachment, used only to restore a lost key. The
+backup must not sit in the vault the host's service account reads: the maintainer's uid can read that
+token, and so would read the App's key through it, which is exactly what account mode forbids. So it
+lives in a vault no service account is granted (decision 5, accepted: (b)), read only with the
+maintainer's own sign-in on the admin machine; a restore is the download there and the carry to the host
+of account mode's step 4, never an `op read` on the host.
 
 ### The token stays out of what the command starts
 
@@ -294,11 +296,13 @@ it is ready. The maintainer's host steps are listed per milestone; agents never 
    1. Confirm the plan and that **Developer > Service accounts** exists in the account (decision 1).
    2. Install the CLI (`brew install 1password-cli`, or the `.pkg` with its signer and SHA-256 checked as
       the verify page says); `op --version` is 2.18.0 or later.
-   3. Create the vault `agent-host-shift2eu` (decision 3) and, in it, the items `claude` and `deepseek`
-      from the current values; put the App key's backup where decision 5 says.
-   4. Create the read-only service account `<host>-shift2eu` on that vault alone (decision 4), with the
-      expiry of decision 7; save its token in 1Password at once (it is shown once) and in a mode 0600 file
-      in the host's per-repo config directory, outside the workspace and the host clone.
+   3. On the admin machine, with your own sign-in (decision 2): create the vault `agent-host-shift2eu`
+      (decision 3) and, in it, the items `claude` and `deepseek` from the current values; put the App
+      key's backup in a vault no service account is granted (decision 5).
+   4. On the admin machine: create the read-only service account `<host>-shift2eu` on that vault alone
+      (decision 4), with no expiry (decision 7); save its token in 1Password at once (it is shown once).
+      On the host: put it in a mode 0600 file in the host's per-repo config directory, outside the
+      workspace and the host clone, never typed on a command line.
    5. Write the repo's env file of references (`CLAUDE_CODE_OAUTH_TOKEN=op://...`,
       `DEEPSEEK_API_KEY=op://...`) beside it, and add the `1password` backend to the switch script in the
       host-config repo.
@@ -339,6 +343,9 @@ Each is the maintainer's alone; the recommendation is this PRD's.
    restores. *Recommendation:* (c). (b) alone needs the desktop app unlocked in a logged-in session and a
    touch per command, which an SSH-only unattended host does not have (the app-integration page describes
    only the desktop app, nothing for SSH); creating vaults and service accounts needs a person anyway.
+   *Answered by the maintainer, 2026-11-28: (a) on the host*, which is reached over SSH and has only the
+   CLI, no desktop app and no Touch ID; every admin step (vaults, service accounts, rotation, the key's
+   restore) runs from a different machine with the maintainer's own sign-in.
 3. **Vault layout.** (a) one vault per repo, `agent-host-<repo>`; (b) one vault per host for every repo.
    *Recommendation:* (a): service account vault access is immutable, so per-repo vaults let each project's
    token read only its own secrets, and a leaked token costs one project. *Accepted by the maintainer,
@@ -352,6 +359,7 @@ Each is the maintainer's alone; the recommendation is this PRD's.
    no backup: a lost key is replaced by generating a new one on the App's page. *Recommendation:* (b).
    (a) lets any code running as your uid on the host read the key through the token file, which undoes
    account mode; (c) is safe too, since a new key costs one runbook, but (b) keeps your restore path.
+   *Accepted by the maintainer, 2026-11-28: (b).*
 6. **What stays in the Keychain, and for how long.** (a) nothing after a two-week soak: delete the items;
    (b) keep them as the fallback, refreshed at every rotation; (c) keep only the service account's token in
    the Keychain instead of a file. *Recommendation:* (a), with the soak starting at M2's host steps; the
@@ -376,7 +384,8 @@ Each is the maintainer's alone; the recommendation is this PRD's.
 10. **The env file of references: in the host-config repo or only on the host.** (a) committed to your
     private host-config repo (it holds names and `op://` paths, no value); (b) only on the host.
     *Recommendation:* (a): it is the list `new-project` writes and a rebuilt host needs, and it holds no
-    secret; keep it private, since vault and item names describe your setup.
+    secret; keep it private, since vault and item names describe your setup. *Accepted by the
+    maintainer, 2026-11-28: (a).*
 
 ## Decisions and open questions
 
