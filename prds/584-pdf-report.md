@@ -738,8 +738,14 @@ they name the operator table (below) or must expect the banner's text where it s
   `/Shading` and `/ColorSpace`: each page's `/Resources` holds only `/Font`. No `/Annots`, `/URI` or
   other milestone 1 banned name appears, the banner's address included. The object types stay
   milestone 1's set.
-- [x] *Unit:* the text extracted from each golden still holds every section, value and detail milestone 1's
-  text tests check, in the same order; the only new text is the banner's.
+- [ ] *Unit:* the text extracted from each golden still holds every section, value and detail milestone 1's
+  text tests check, in the same order. The only changes to the text are: the banner's text; the summary
+  table's "Fit" and "Resources" header replaced by the tiles, which show the same counts, with their
+  labels "Total" and "Estimate" and their captions "of N resources", "resources in total" and "per
+  month, estimated"; the fit words capitalised in their badges (Direct, Partial, None); and the workload
+  line's badges ("Fit: " then "1 Direct" and so on). (Unticked in review: milestone 1's text tests,
+  unchanged, and the banner's test hold the first sentence; they check that text is shown, not that no
+  other text is, so no test yet holds the second.)
 - [ ] *Review:* the PR states every golden PDF's size before and after, and the WebAssembly module's raw
   size and gzip size before and after. The module does not construct `pdfreport` until milestone 2, so
   both are expected unchanged; the budget tests are unchanged and pass.
