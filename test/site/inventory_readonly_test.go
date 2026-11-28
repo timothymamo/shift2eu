@@ -947,6 +947,14 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		mutated: appended(`bash -c 'aws ec2 create-tags --resources i-0123456789abcdef0' && aws ec2 describe-instances`),
 		want:    []string{at(plantedLine, "aws ec2 create-tags")},
 	}, {
+		// An empty word a shell text puts after the CLI's name with `''` is no
+		// bare mention: bash hands the CLI an empty argument, and the scan's
+		// unquoting leaves a word whose last path element is `.`, one of the
+		// guide's bare-mention words, so a write after it was accepted silently.
+		name:    "a write after a quoted empty argument",
+		mutated: fence("```bash", "```", "aws '' ec2 create-tags --resources i-0123456789abcdef0"),
+		want:    []string{at(plantedLine+1, "aws")},
+	}, {
 		name:    "a write in an eval argument",
 		mutated: appended(`eval "aws ec2 create-tags --resources i-0123456789abcdef0"`),
 		want:    []string{at(plantedLine, "aws ec2 create-tags")},
@@ -1187,6 +1195,13 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		name:    "an az rest whose address a value-less url flag clears",
 		mutated: fence("```bash", "```", "az rest --method get --url https://example.com/x | sort -u"),
 		want:    []string{at(plantedLine+1, "az rest --method get --url https://example.com/x sort -u")},
+	}, {
+		// The value-less URL flag's place is no address either when more words
+		// follow it: `foo bar` are positionals of the same sequence, and the
+		// address read before them is the one the endpoint check holds.
+		name:    "an az rest whose address a value-less url flag keeps",
+		mutated: fence("```bash", "```", "az rest --method get --url https://example.com/x | sort -u foo bar"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://example.com/x")},
 	}, {
 		// -b is az rest's short alias of the denied --body, and az rest only, so it
 		// is refused inside the sequence with its value run on, as -mpost is.
