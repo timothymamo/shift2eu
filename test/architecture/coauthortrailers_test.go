@@ -27,15 +27,15 @@ const (
 	// so the guard refuses it (issue #706, the auditor's finding L3).
 	coAuthorWorkflowYAMLPath = ".github/workflows/coauthor-trailers.yaml"
 
-	// ciWorkflowPath is the CI workflow that keeps the legacy co-author job during
-	// the two-step rollout (issue #706): the follow-up PR removes that job once the
-	// maintainer requires coAuthorCheckName, and the guard's exception with it.
+	// ciWorkflowPath is the CI workflow whose action pins the co-author workflow
+	// holds, and which may hold no co-author job of its own (issue #723).
 	ciWorkflowPath = ".github/workflows/ci.yml"
 
-	// legacyCoAuthorJobID and legacyCoAuthorCheckName are ci.yml's co-author job
-	// and the check it reports, kept from before the move (issues #663 and #689) so
-	// a co-author check still runs on every pull request until the maintainer
-	// requires coAuthorCheckName (issue #706).
+	// legacyCoAuthorJobID and legacyCoAuthorCheckName are the id and the check
+	// name of ci.yml's retired co-author job (issues #663 and #689), removed once
+	// the maintainer required coAuthorCheckName (issue #723). The name guard
+	// refuses both on every workflow but coauthor-trailers.yml, which holds the
+	// one job of that id.
 	legacyCoAuthorJobID     = "coauthor-trailers"
 	legacyCoAuthorCheckName = "Co-author trailers"
 )
@@ -61,8 +61,10 @@ const (
 // repository, an extra command beside the fetch, or a GOFLAGS that skips every
 // test.
 //
-// Every event value reaches the shell through env: alone, so no ${{ }} may stand
-// in a step outside its env: block, and no run: may hold one. The two action
+// Every event value reaches the shell through a step's env: alone, so no ${{ }}
+// may stand anywhere in the job's whole block outside a step's env: block: not in
+// a run: or a with:, nor in a job-level key such as if:, runs-on: or a job-level
+// env: (issue #723). The two action
 // pins are ci.yml's, so one Renovate update keeps both workflows on the same
 // actions.
 func TestCICoAuthorTrailersRunsFromTheBaseBranch(t *testing.T) {
@@ -193,11 +195,12 @@ const (
 	// co-author check's among them.
 	ruleTemplated = "holds a ${{ }} expression no allow-list entry pins"
 
-	// ruleLegacyName refuses the legacy job's name anywhere but on ci.yml's
-	// coauthor-trailers job, and ruleLegacyJobID its id anywhere but in ci.yml: the
-	// rollout keeps one legacy job and no second way to report it.
-	ruleLegacyName  = "is the legacy check's name outside ci.yml's coauthor-trailers job"
-	ruleLegacyJobID = "is the legacy job's id outside ci.yml"
+	// ruleLegacyName refuses the retired legacy check's name, and ruleLegacyJobID
+	// its job's id, on every workflow but coauthor-trailers.yml: ci.yml's legacy
+	// job is gone with the rollout (issue #723), and a job of either reports a
+	// co-author check beside the required one.
+	ruleLegacyName  = "is the retired legacy check's name"
+	ruleLegacyJobID = "is the retired legacy job's id outside " + coAuthorWorkflowPath
 )
 
 // coAuthorTemplatedJobNames is the allow list of job names that may hold a
@@ -420,9 +423,13 @@ func coAuthorNameScalar(num int, id, raw string) (string, error) {
 	// name GitHub reports; a reader that keeps it compares a name no check
 	// reports. Only a plain value is refused here: a quoted one holding " #" is
 	// read through its quotes above, and refused there if they do not close.
-	if before, comment, ok := strings.Cut(raw, " #"); ok {
-		return "", fmt.Errorf("line %d: the job %s holds the plain name value %q with a trailing comment, %q, want a single-line plain or quoted scalar with none: YAML ends the plain scalar where the comment starts, so GitHub reports %q, a name this reader compares only with the comment kept",
-			num, id, raw, "#"+comment, strings.TrimSpace(before))
+	// YAML starts a comment at a # after any white space, a tab as well as a
+	// space (issue #723, point 3).
+	for _, sep := range []string{" #", "\t#"} {
+		if before, comment, ok := strings.Cut(raw, sep); ok {
+			return "", fmt.Errorf("line %d: the job %s holds the plain name value %q with a trailing comment, %q, want a single-line plain or quoted scalar with none: YAML ends the plain scalar where the comment starts, so GitHub reports %q, a name this reader compares only with the comment kept",
+				num, id, raw, "#"+comment, strings.TrimSpace(before))
+		}
 	}
 
 	return raw, nil
@@ -443,9 +450,10 @@ func (p coAuthorNameProblem) String() string {
 
 // coAuthorNameProblems returns one problem per job of names whose name may
 // report a check beside the co-author check's own. The caller reads every
-// workflow but coauthor-trailers.yml, the one file allowed to report the new
-// check, so ci.yml's legacy coauthor-trailers job is the one job the legacy name
-// and id are allowed on (issue #706).
+// workflow but coauthor-trailers.yml, the one file allowed to report the check
+// and to hold a job of the id coauthor-trailers, so every job it is handed may
+// hold neither the legacy name nor that id, ci.yml's included (issues #706 and
+// #723).
 func coAuthorNameProblems(names []coAuthorJobName) []coAuthorNameProblem {
 	var problems []coAuthorNameProblem
 
@@ -464,11 +472,11 @@ func coAuthorNameProblems(names []coAuthorJobName) []coAuthorNameProblem {
 			problems = append(problems, coAuthorNameProblem{job: n, rule: ruleBaseName})
 		}
 
-		if value == legacyCoAuthorCheckName && (n.path != ciWorkflowPath || n.id != legacyCoAuthorJobID) {
+		if value == legacyCoAuthorCheckName {
 			problems = append(problems, coAuthorNameProblem{job: n, rule: ruleLegacyName})
 		}
 
-		if n.id == legacyCoAuthorJobID && n.path != ciWorkflowPath {
+		if n.id == legacyCoAuthorJobID {
 			problems = append(problems, coAuthorNameProblem{job: n, rule: ruleLegacyJobID})
 		}
 	}
@@ -1049,27 +1057,84 @@ func checkCoAuthorJob(t *testing.T, root, doc string) {
 			t.Errorf("line %d: a step of the coauthor-trailers job uses %q, want actions/checkout@… and actions/setup-go@… only (ADR 0050)",
 				item.num, uses)
 		}
+	}
 
-		// Every event value reaches the shell through env: alone: an expression
-		// anywhere else in the step, a run: line or a with: value, is spliced into
-		// the workflow's own text, where a shell or an action reads it as a word
-		// of the event's author (issue #672). No key of this job needs one, so
-		// there is no exception.
-		inEnv := make(map[int]bool, len(item.lines))
+	// Every event value reaches the shell through a step's env: alone, read over
+	// the job's whole block: an expression anywhere else - a run: line, a with:
+	// value, a job-level if:, runs-on:, timeout-minutes: or env: - is spliced
+	// into the workflow's own text, where a shell or an action reads it as a word
+	// of the event's author (issues #672 and #723). No key of this job needs one,
+	// so there is no exception.
+	for _, l := range coAuthorExpressionsOutsideStepEnv(job) {
+		t.Errorf("line %d: %q splices a ${{ }} expression outside a step's env: value, want every value handed to the shell in a step's env: (ADR 0050)",
+			l.num, l.text)
+	}
+}
 
-		if env, ok := ciBlock(item.lines, "env"); ok {
-			for _, l := range env {
-				inEnv[l.num] = true
-			}
-		}
+// coAuthorExpressionsOutsideStepEnv returns every line of the job block job, as
+// workflowJobs returns it, that holds a ${{ }} expression outside a step's env:
+// block, in document order. Only the env: key of an item of the job's steps:
+// list counts: a job-level env: reaches every step, and so is refused like any
+// other job-level key. A steps: list this reader cannot split is read as holding
+// no env:, so every expression in it is refused: the rule fails closed.
+func coAuthorExpressionsOutsideStepEnv(job []ciLine) []ciLine {
+	inStepEnv := make(map[int]bool)
 
-		for _, l := range item.lines {
-			if strings.Contains(l.text, "${{") && !inEnv[l.num] {
-				t.Errorf("line %d: %q splices a ${{ }} expression outside an env: value, want every value handed to the shell in env: (ADR 0050)",
-					l.num, l.text)
+	if steps, ok := ciKeyBlock(job, "steps"); ok {
+		if items, err := ciItems(steps); err == nil {
+			for _, item := range items {
+				env, ok := ciKeyBlock(item.lines, "env")
+				if !ok {
+					continue
+				}
+
+				for _, l := range env {
+					inStepEnv[l.num] = true
+				}
 			}
 		}
 	}
+
+	var out []ciLine
+
+	for _, l := range job {
+		if strings.Contains(l.text, "${{") && !inStepEnv[l.num] {
+			out = append(out, l)
+		}
+	}
+
+	return out
+}
+
+// ciKeyBlock returns the lines below key in block, read only at block's own key
+// indentation, so a key of the same name deeper in a value is never taken for
+// it, and whether block holds the key.
+func ciKeyBlock(block []ciLine, key string) ([]ciLine, bool) {
+	if len(block) == 0 {
+		return nil, false
+	}
+
+	indent := ciKeyIndent(block)
+
+	for i, l := range block {
+		if l.indent != indent || (l.text != key+":" && !strings.HasPrefix(l.text, key+": ")) {
+			continue
+		}
+
+		var below []ciLine
+
+		for _, b := range block[i+1:] {
+			if b.indent <= l.indent {
+				break
+			}
+
+			below = append(below, b)
+		}
+
+		return below, true
+	}
+
+	return nil, false
 }
 
 // checkCoAuthorBaseCheckoutStep pins the checkout (ADR 0050): under
@@ -1264,7 +1329,7 @@ func workflowLines(t *testing.T, name, doc string) []ciLine {
 func ciActionPin(t *testing.T, root, prefix string) string {
 	t.Helper()
 
-	lines := workflowLines(t, ".github/workflows/ci.yml", readWorkflow(t, root, ".github/workflows/ci.yml"))
+	lines := workflowLines(t, ciWorkflowPath, readWorkflow(t, root, ciWorkflowPath))
 
 	var pins []string
 
@@ -1280,8 +1345,8 @@ func ciActionPin(t *testing.T, root, prefix string) string {
 	}
 
 	if len(pins) != 1 {
-		t.Fatalf(".github/workflows/ci.yml pins %s at %v, want exactly one pin: the coauthor-trailers workflow holds ci.yml's pins, and Renovate updates both",
-			prefix, pins)
+		t.Fatalf("%s pins %s at %v, want exactly one pin: the coauthor-trailers workflow holds ci.yml's pins, and Renovate updates both",
+			ciWorkflowPath, prefix, pins)
 	}
 
 	return pins[0]
