@@ -872,3 +872,150 @@ func TestLayoutKeepsATilesFigureInsideItsTile(t *testing.T) {
 			got, figure)
 	}
 }
+
+// tileRunDescent is the clearance the test keeps between a tile's lowest
+// baseline and the tile's bottom edge, in points: the descent of Helvetica at the
+// caption's 8 pt, rounded up (the font's standard metrics give 0.212 × 8 pt =
+// 1.7 pt), so a line whose baseline sits on the tile's edge is not taken for a
+// line inside it.
+const tileRunDescent = 2
+
+// TestLayoutKeepsATilesCaptionInsideItsTile pins the summary's tile row for a
+// caption that wraps onto more lines than the row grows for: draw.go's tileRow
+// grows the row by a wrapped figure's extra lines alone, and a caption's lines
+// walk down from one fixed baseline (draw.go, tileRow), so a third caption line
+// lands below its tile's bottom edge, on the tile's outline. A five-tile row is
+// narrow enough for "of N resources" to take three lines once N is long.
+//
+// Criterion (PRD #584 milestone 1b, Unit): boxes across pages — the summary's
+// tiles: every run of a tile stays inside that tile's outline in both
+// directions, every tile of the row keeps one height, and the whole caption is
+// drawn, however many lines it takes.
+func TestLayoutKeepsATilesCaptionInsideItsTile(t *testing.T) {
+	t.Parallel()
+
+	// eighteenDigits is a resource count of eighteen digits, which the total's
+	// figure still holds on one line at the smallest size tileRow shrinks a
+	// figure to (18 × 4.448 pt = 80.1 pt inside a five-tile row's 82 pt), so the
+	// row does not grow for the figure, and its caption "of 999999999999999999
+	// resources" takes three lines of 82 pt: "of", the count, and "resources".
+	const eighteenDigits = 999_999_999_999_999_999
+
+	// sixteenDigits is the count whose caption takes two lines: "of 9999999999999999
+	// resources" wraps once, and its two lines clear the tile's bottom edge today.
+	const sixteenDigits = 9_999_999_999_999_999
+
+	tests := []struct {
+		name     string
+		draw     func(*pdfreport.TestDocument)
+		captions []string
+	}{
+		{
+			name: "an estimate beside four counts",
+			draw: func(d *pdfreport.TestDocument) {
+				d.TilesWithEstimate(euros(estimate.Ratio(math.MaxInt64, 1)))
+			},
+			captions: []string{
+				"of 6 resources", "of 6 resources", "of 6 resources", "resources in total", "per month, estimated",
+			},
+		},
+		{
+			name: "counts of sixteen digits",
+			draw: func(d *pdfreport.TestDocument) {
+				d.TilesWithEstimateAndCounts(1, 2, 3, sixteenDigits, "€1,234.00")
+			},
+			captions: []string{
+				"of 9999999999999999 resources",
+				"of 9999999999999999 resources",
+				"of 9999999999999999 resources",
+				"resources in total",
+				"per month, estimated",
+			},
+		},
+		{
+			name: "counts of eighteen digits",
+			draw: func(d *pdfreport.TestDocument) {
+				d.TilesWithEstimateAndCounts(1, 2, 3, eighteenDigits, "€1,234.00")
+			},
+			captions: []string{
+				"of 999999999999999999 resources",
+				"of 999999999999999999 resources",
+				"of 999999999999999999 resources",
+				"resources in total",
+				"per month, estimated",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := pdfreport.NewTestDocument()
+			test.draw(d)
+
+			pages, shapes := d.Pages(), d.Shapes()
+
+			if len(pages) != 1 {
+				t.Fatalf("the tile row draws %d page(s), want one: the sweep draws the row alone", len(pages))
+			}
+
+			tiles := tileRects(shapes[0])
+			if len(tiles) != len(test.captions) {
+				t.Fatalf("the tile row draws %d tile outlines, want %d", len(tiles), len(test.captions))
+			}
+
+			for _, tile := range tiles[1:] {
+				if tile.Y != tiles[0].Y || tile.H != tiles[0].H {
+					t.Errorf("the tile at x %d pt runs from y %d pt to y %d pt, and the row's first tile runs from y %d pt to y %d pt: every tile of the row keeps one height",
+						tile.X, tile.Y, tile.Y+tile.H, tiles[0].Y, tiles[0].Y+tiles[0].H)
+				}
+			}
+
+			for _, run := range pages[0] {
+				tile, ok := tileOf(tiles, run)
+				if !ok {
+					t.Fatalf("the tile row draws the run %s at x %d pt, outside every tile's outline", shortened(run.Text), run.X)
+				}
+
+				left := run.X * milli
+				right := left + pdfreport.TextWidth(run.Font, run.Size, run.Text)
+
+				if left < tile.X*milli || right > (tile.X+tile.W)*milli {
+					t.Errorf("the tile whose outline runs from x %d pt to x %d pt draws the run %s from x %s pt to x %s pt in the %d pt size, so the run reaches past its tile",
+						tile.X, tile.X+tile.W, shortened(run.Text), points(left), points(right), run.Size)
+				}
+
+				if run.Y <= tile.Y+tileRunDescent {
+					t.Errorf("the tile whose outline runs from y %d pt to y %d pt draws the run %s on the baseline %d pt, at or under the tile's bottom edge plus the %d pt descent margin, so the caption lands on the tile's outline",
+						tile.Y, tile.Y+tile.H, shortened(run.Text), run.Y, tileRunDescent)
+				}
+
+				if run.Y >= tile.Y+tile.H {
+					t.Errorf("the tile whose outline runs from y %d pt to y %d pt draws the run %s on the baseline %d pt, at or above the tile's top edge",
+						tile.Y, tile.Y+tile.H, shortened(run.Text), run.Y)
+				}
+			}
+
+			for i, tile := range tiles {
+				var drawn strings.Builder
+
+				for _, run := range pages[0] {
+					if isCaptionRun(run) && run.X >= tile.X && run.X < tile.X+tile.W {
+						drawn.WriteString(run.Text)
+					}
+				}
+
+				if got := strings.TrimRight(drawn.String(), " "); got != test.captions[i] {
+					t.Errorf("the tile at x %d pt draws the caption %q over its runs, want %q: a caption too wide for its tile must be wrapped onto more lines inside it, never cut short",
+						tile.X, got, test.captions[i])
+				}
+			}
+		})
+	}
+}
+
+// isCaptionRun reports whether the run is one line of a tile's caption: the
+// report's own words in the furniture size, which a tile's label and figure, in
+// Helvetica-Bold, are not.
+func isCaptionRun(run pdfreport.TestRun) bool { return run.Font == "F1" && run.Size == 8 }

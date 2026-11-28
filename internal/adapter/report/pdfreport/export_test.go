@@ -111,6 +111,17 @@ func (d *TestDocument) Tiles() {
 	d.doc.tileRow(fitTiles(1, 2, 3, 6))
 }
 
+// TilesWithEstimateAndCounts draws the summary's tile row of an assessment with
+// estimates and the counts given: one tile per fit, the total, then the
+// estimate's tile holding figure, as report.writeSummary draws it. A layout test
+// can then give the row a caption longer than any real inventory holds, "of N
+// resources" with an N of as many digits as it likes, beside an estimate.
+func (d *TestDocument) TilesWithEstimateAndCounts(direct, partial, none, total int, figure string) {
+	d.doc.tileRow(append(fitTiles(direct, partial, none, total), tile{
+		label: tileLabel("Estimate"), figure: figure, ink: accentColour, caption: "per month, estimated",
+	}))
+}
+
 // TilesWithEstimate draws the summary's tile row of an assessment with
 // estimates: one tile per fit, the total, then the estimate's tile holding
 // figure, as report.writeSummary draws it. A layout test can then give the row a
