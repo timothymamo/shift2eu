@@ -739,9 +739,9 @@ linters:
             - pkg: github.com/timothymamo/shift2eu/internal/web/
               desc: "only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)"
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport$
-              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown and JSON (PRD #297)"
+              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown, JSON and PDF (PRD #297, PRD #584)"
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport/
-              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown and JSON (PRD #297)"
+              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown, JSON and PDF (PRD #297, PRD #584)"
         # The site's composition root (PRD #297), the sibling of
         # composition-root, held in two parts.
         # cmd/shift2eu-web itself (build constraint js && wasm) is the thin
@@ -794,7 +794,9 @@ linters:
         # reporters, and the HTML reporter, into internal/web's Deps. Its
         # imports are a strict allow list naming each of those packages,
         # ending in $: no source adapter that reaches a cloud, no
-        # internal/cli, and no standard package at all.
+        # internal/cli, and no standard package at all. pdfreport$ is
+        # allowed as a permission only, for PRD #584 milestone 2's site
+        # PDF; wire does not construct it yet.
         web-composition-root-wire:
           list-mode: strict
           files:
@@ -804,6 +806,7 @@ linters:
             - github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport$
             - github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport$
             - github.com/timothymamo/shift2eu/internal/adapter/report/markdown$
+            - github.com/timothymamo/shift2eu/internal/adapter/report/pdfreport$
             - github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile$
             - github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud$
             - github.com/timothymamo/shift2eu/internal/adapter/target/scaleway$

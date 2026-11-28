@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/timothymamo/shift2eu/test/internal/execenv"
 )
@@ -38,14 +40,96 @@ var e2eToolchainCommands = []string{"go build", "go list"}
 
 // e2eToolchainFlags is the allow-list of flags an exempt command may carry:
 // after the subcommand, every literal argument that starts with "-" must be one
-// of these, or the exemption is lost (issue #195 round 4). The three are the
+// of these, or the exemption is lost (issue #195 round 4). The four are the
 // flags the tier passes today, and each keeps the go command from handing its
 // environment to a program the argument names: -trimpath and -o build a binary,
-// and -deps lists the packages it needs. A flag the go command gains later, or
-// one of the many that run another program with that environment (-ldflags with
-// -extld, -toolexec, -exec, -overlay, -C, -pgo, -compiler, ...), is refused
-// until review adds it here on purpose.
-var e2eToolchainFlags = []string{"-trimpath", "-o", "-deps"}
+// -deps lists the packages it needs, and -ldflags (e2eLinkerFlag) stamps a
+// package's variable at link time, admitted for the one value e2eLinkerStamps
+// describes. A flag the go command gains later, or one of the many that run
+// another program with that environment (-toolexec, -exec, -overlay, -C, -pgo,
+// -compiler, ...), is refused until review adds it here on purpose.
+var e2eToolchainFlags = []string{"-trimpath", "-o", "-deps", "-ldflags"}
+
+// e2eLinkerFlag is the go build flag that stamps a package's variable at link
+// time, which the e2e tier passes for the version of a second binary of
+// ./cmd/shift2eu (issue #584). The flag alone is not enough to admit: its value
+// can name another linker, a wrapper around the toolchain or a file the build
+// reads (-extld, -toolexec, -overlay, ...), which run a program with the go
+// command's environment, and the exemption exists because none of it may reach
+// a child of a test. So only a value e2eLinkerStamps describes keeps it.
+const e2eLinkerFlag = "-ldflags"
+
+// e2eLinkerStamp is the one form the name=value of a -X stamp may take: an
+// import path, a dot, a symbol, exactly one = and a plain value.
+var e2eLinkerStamp = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9_.:+-]*$`)
+
+// e2eLinkerStamps reports whether value is a -ldflags value the e2e tier may
+// carry: pairs of -X and the name=value it stamps, separated by ASCII spaces
+// and tabs, and nothing else, so the linker runs no other program and reads no
+// other file. cmd/go splits -ldflags with cmd/internal/quoted.Split, which
+// differs from a plain split on whitespace in two ways, and a value that could
+// tell them apart is refused outright, so this check reads every value it
+// admits exactly as cmd/go does:
+//   - a quote (' or ") at the start of a field opens a field that runs to the
+//     matching quote, spaces included, and ends there, so the text right after
+//     the closing quote starts a new field: 'main.a=b'-extld=x is two
+//     arguments, and one quoted span can carry a second linker flag (-extld,
+//     which runs a named program with the go command's environment). A quote
+//     further inside a field is an ordinary byte, and so is a backslash, which
+//     quoted.Split never unescapes; both are refused anyway, so no reading of
+//     either can matter;
+//   - quoted.Split separates fields only on space, tab, \n and \r, fewer
+//     characters than strings.Fields, which also splits on \v, \f, U+0085,
+//     U+00A0 and the rest of Unicode's white space. White space other than a
+//     space or a tab is refused, \n and \r too, which quoted.Split would split
+//     on: a stricter choice, as a stamp set on one line is all the e2e tier
+//     writes. Today the odd-field rule and e2eLinkerStamp would refuse such a
+//     value already; the guard stays on purpose, so the safety does not depend
+//     on that regexp staying strict.
+//
+// cmd/go also reads a value whose first byte is not "-" as pattern=flags (the
+// flags for the packages a pattern names), and a split on white space would
+// drop a leading space or tab unseen; so the value must start with "-" and end
+// with no white space.
+//
+// So the value starts with "-", ends with no white space and holds no quote, no
+// backslash and no white space other than a space or a tab. Each name=value
+// field must match e2eLinkerStamp and may not start with "-", and each field
+// before it must be exactly -X.
+func e2eLinkerStamps(value string) bool {
+	if !strings.HasPrefix(value, "-") || strings.TrimRight(value, " \t") != value {
+		return false
+	}
+
+	if strings.ContainsAny(value, `'"\`) {
+		return false
+	}
+
+	if strings.ContainsFunc(value, func(r rune) bool { return unicode.IsSpace(r) && r != ' ' && r != '\t' }) {
+		return false
+	}
+
+	fields := strings.FieldsFunc(value, func(r rune) bool { return r == ' ' || r == '\t' })
+	if len(fields) == 0 || len(fields)%2 != 0 {
+		return false
+	}
+
+	for i, field := range fields {
+		if i%2 == 0 {
+			if field != "-X" {
+				return false
+			}
+
+			continue
+		}
+
+		if strings.HasPrefix(field, "-") || !e2eLinkerStamp.MatchString(field) {
+			return false
+		}
+	}
+
+	return true
+}
 
 // e2eExecExempt reports whether the e2e tier may start the command named name
 // with its first argument sub, no Env of its own and the literal arguments
@@ -54,7 +138,29 @@ func e2eExecExempt(name, sub string, flags []string) bool {
 	if !slices.Contains(e2eToolchainCommands, name+" "+sub) {
 		return false
 	}
-	for _, flag := range flags {
+
+	for i := 0; i < len(flags); i++ {
+		flag := flags[i]
+
+		if flag == e2eLinkerFlag {
+			// The next literal the source writes is taken as the value. One the
+			// source builds at run time is no literal and never reaches this
+			// check (the collector drops non-literals), so the next literal
+			// after it is read instead: the exemption is lost when that literal
+			// is no stamp set (`"-ldflags", v, "-o"`), but kept when it is one
+			// (`"-ldflags", v, "-X a.b=c"`). That is the accepted non-literal
+			// gap (test/internal/execenv's doc.go), held by review, and harmless
+			// today: cmd/go then reads "-X a.b=c" as an unknown flag and fails
+			// at flag parsing before it runs any tool.
+			if i+1 >= len(flags) || !e2eLinkerStamps(flags[i+1]) {
+				return false
+			}
+
+			i++
+
+			continue
+		}
+
 		if strings.HasPrefix(flag, "-") && !slices.Contains(e2eToolchainFlags, flag) {
 			return false
 		}
@@ -91,6 +197,198 @@ func TestE2EExecExempt(t *testing.T) {
 			sub:   "list",
 			flags: []string{"-deps"},
 			want:  true,
+		},
+		{
+			// The stamp of the e2e tier's second binary (issue #584): pairs of -X
+			// and a name=value run no program and read no file.
+			name: "the -ldflags that stamps a build's version keeps the exemption",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-trimpath", "-o", "-ldflags",
+				"-X example.com/pkg.version=9.9.9-e2e -X example.com/pkg.commit=abc123def456",
+			},
+			want: true,
+		},
+		{
+			// The stamp the e2e tier's second binary carries (issue #584): the
+			// three internal/version variables, with the import paths and the
+			// date a real link line holds.
+			name: "the -ldflags the e2e tier stamps its binary with keeps the exemption",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-trimpath", "-o", "-ldflags",
+				"-X github.com/timothymamo/shift2eu/internal/version.version=9.9.9-e2e " +
+					"-X github.com/timothymamo/shift2eu/internal/version.commit=abc123def456 " +
+					"-X github.com/timothymamo/shift2eu/internal/version.date=2026-01-01T00:00:00Z",
+			},
+			want: true,
+		},
+		{
+			// The value can name another linker, a wrapper around the toolchain or
+			// a file the build reads, which is why the flag is admitted for -X
+			// stamps alone.
+			name:  "an -ldflags value that names another flag takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X example.com/pkg.version=9.9.9-e2e -toolexec /bin/sh"},
+		},
+		{
+			name:  "an -ldflags with no value takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags"},
+		},
+		{
+			// A value the source builds at run time is no literal, so the next
+			// literal argument is the one after it; here it is no stamp set. Had
+			// it been one, the exemption would stay: the accepted non-literal gap.
+			name:  "an -ldflags whose run-time value is followed by a literal that is no stamp set takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-o"},
+		},
+		{
+			name:  "an -ldflags value whose -X names no value takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X example.com/pkg.version"},
+		},
+		// The go command does not split the value on whitespace alone: cmd/go
+		// splits it with cmd/internal/quoted.Split, where a quote at the start of
+		// a field opens a field that runs to the matching quote and ends there,
+		// so the text right after the closing quote starts a new field. A field
+		// the value writes as one word can therefore carry a second flag. A quote
+		// further inside a field and a backslash are ordinary bytes that
+		// quoted.Split never unescapes; the checker refuses both anyway, so a
+		// value holding a quote or a backslash is no stamp set and the exemption
+		// is lost (issue #195).
+		{
+			name: "an -ldflags value with a single-quoted field that carries another flag takes the exemption away",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-ldflags",
+				"-X 'main.a=b'-linkmode=external -X 'main.c=d'-extld=/bin/false",
+			},
+		},
+		{
+			name: "an -ldflags value with a double-quoted field that carries another flag takes the exemption away",
+			cmd:  "go",
+			sub:  "build",
+			flags: []string{
+				"-ldflags",
+				`-X "main.a=b"-linkmode=external -X "main.c=d"-extld=/bin/false`,
+			},
+		},
+		{
+			// quoted.Split reads a backslash as an ordinary byte, with no
+			// unescaping; the checker refuses it anyway, so its reading never
+			// matters.
+			name:  "an -ldflags value with a backslash takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", `-X main.a=b\c`},
+		},
+		// The two splits differ on the other whitespace: cmd/internal/quoted
+		// splits -ldflags on the ASCII space, tab, newline and carriage return
+		// alone, while strings.Fields splits on every Unicode space. A
+		// vertical tab, a form feed, a next line or a no-break space therefore
+		// keeps the value one field for cmd/go while strings.Fields reads two
+		// stamps, so the checker must refuse all of them and read the value as
+		// cmd/go does: a stamp set carries the ASCII space and tab alone
+		// (issue #195).
+		{
+			name:  "an -ldflags value that separates two stamps with a vertical tab takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\v-X main.c=d"},
+		},
+		{
+			name:  "an -ldflags value that separates two stamps with a form feed takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\f-X main.c=d"},
+		},
+		{
+			// U+0085 NEXT LINE (NEL) is whitespace to unicode.IsSpace and
+			// strings.Fields, but no field separator to cmd/internal/quoted.
+			name:  "an -ldflags value that separates two stamps with a next line takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\u0085-X main.c=d"},
+		},
+		{
+			// U+00A0 NO-BREAK SPACE is whitespace to unicode.IsSpace and
+			// strings.Fields, but no field separator to cmd/internal/quoted.
+			name:  "an -ldflags value that separates two stamps with a no-break space takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\u00a0-X main.c=d"},
+		},
+		{
+			// cmd/go and strings.Fields agree on a newline, but a stamp set is
+			// one line of ASCII spaces and tabs; refusing the rest is stricter
+			// and simpler than following each split.
+			name:  "an -ldflags value that separates two stamps with a newline takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\n-X main.c=d"},
+		},
+		{
+			// A carriage return is refused as well; the odd-field rule refuses
+			// it too, but this pins the refusal the comment above documents, not
+			// the mechanism that produces it.
+			name:  "an -ldflags value that separates two stamps with a carriage return takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b\r-X main.c=d"},
+		},
+		// cmd/go reads a -ldflags value whose first byte is not "-" as
+		// pattern=flags, so a leading space or tab would turn the stamps into a
+		// package pattern, which a split on white space drops unseen. A stamp
+		// set starts with -X and ends with its last value: white space at either
+		// end is refused.
+		{
+			name:  "an -ldflags value with a leading space takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", " -X main.a=b -X main.c=d"},
+		},
+		{
+			name:  "an -ldflags value with a leading tab takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "\t-X main.a=b -X main.c=d"},
+		},
+		{
+			name:  "an -ldflags value with a trailing space takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b -X main.c=d "},
+		},
+		{
+			// A stamp is an import path and a symbol, one = and a plain value: a
+			// second = is no value the linker takes as this pair.
+			name:  "an -ldflags value whose -X names a second = takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X main.a=b=c"},
+		},
+		{
+			// -X names a symbol of a package, which an import path and a name
+			// separated by a dot give; a bare name is none.
+			name:  "an -ldflags value whose -X names no dotted symbol takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags", "-X a=b"},
+		},
+		{
+			name:  "an -ldflags written with = takes the exemption away",
+			cmd:   "go",
+			sub:   "build",
+			flags: []string{"-ldflags=-X example.com/pkg.version=9.9.9-e2e"},
 		},
 		{
 			name:  "a positional argument the source builds at run time is no flag",

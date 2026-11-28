@@ -21,12 +21,14 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport"
 	"github.com/timothymamo/shift2eu/internal/adapter/report/markdown"
+	"github.com/timothymamo/shift2eu/internal/adapter/report/pdfreport"
 	"github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile"
 	"github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud"
 	"github.com/timothymamo/shift2eu/internal/adapter/target/scaleway"
 	"github.com/timothymamo/shift2eu/internal/adapter/target/upcloud"
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/cli"
+	"github.com/timothymamo/shift2eu/internal/version"
 )
 
 func main() {
@@ -46,10 +48,12 @@ func main() {
 }
 
 // deps wires the adapters of the assess path: the inventory file, the embedded
-// OVHcloud, Scaleway and UpCloud catalogs, and the two report formats: the
-// Markdown reporter, the default, and the JSON reporter (docs/adr/0018), each
-// rendering both the single-target report and the comparison of several
-// targets. None of them uses the network or credentials.
+// OVHcloud, Scaleway and UpCloud catalogs, and the three report formats: the
+// Markdown reporter, the default, the JSON reporter (docs/adr/0018) and the PDF
+// reporter (docs/adr/0049), each rendering both the single-target report and
+// the comparison of several targets. The PDF reporter names the build in its
+// footer with the line `shift2eu version` prints. None of them uses the network
+// or credentials.
 func deps() cli.Deps {
 	return cli.Deps{
 		NewInventorySource: func(path string) analysis.InventorySource {
@@ -72,6 +76,10 @@ func deps() cli.Deps {
 				NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter {
 					return jsonreport.New(schemaVersion)
 				},
+			},
+			"pdf": {
+				NewReporter:           func(int) analysis.Reporter { return pdfreport.New(version.String()) },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return pdfreport.New(version.String()) },
 			},
 		},
 	}

@@ -20,7 +20,7 @@ internal/
     source/inventoryfile        the JSON inventory file
     source/{aws,azure,gcp}      read-only discovery   (+ sourcetest contract suite)
     target/{ovhcloud,scaleway,upcloud}  EU catalogs   (+ targettest contract suite)
-    report/{markdown,jsonreport,htmlreport}  renderers
+    report/{markdown,jsonreport,pdfreport,htmlreport}  renderers
   cli/                        Command-line parsing (driving adapter)
   web/                        The site's driving adapter
   config/                     Configuration loading

@@ -94,7 +94,8 @@ func planSize(p estimate.Plan) string {
 	return strconv.FormatInt(p.VCPUs, 10) + " vCPU, " + milliGiB(p.MemoryMilliGiB) + " GiB"
 }
 
-// region returns the text of a region, as values are: escaped, in Courier.
+// regionSegs returns prefix in Helvetica followed by the region as a value:
+// escaped, in Courier.
 func regionSegs(size int, prefix, region string) []seg {
 	return []seg{words(helvetica, size, prefix), value(size, region)}
 }
