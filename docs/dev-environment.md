@@ -3310,7 +3310,8 @@ pi, which runs the tester, has no permission prompts at all: it reads, edits and
 asking. The tester's wrapper starts it with `--no-approve --no-extensions` (issue #702): pi trusts no
 project, so it applies no trust-gated setting of `.pi/settings.json` (whose `shellCommandPrefix`, `packages`
 or `npmCommand` could run commands the refusal never sees), and discovers no extension; it still reads that
-file as data before trust (`sessionDir`, the startup UI, first-time setup). It loads exactly the root-owned installed copy
+file as data before trust (the startup UI, first-time setup), though its `sessionDir` no longer counts: the
+wrapper pins `--session-dir` (issue #717). It loads exactly the root-owned installed copy
 of `.pi/extensions/deny-env-printing.ts` and the deck's own extension
 (`~/.pi/agent/extensions/dot-agent-deck`) by `--extension`, and the skills of the unit folder's
 `.claude/skills` by `--skill`. The refusal refuses a bash command that prints the environment (the
@@ -3334,8 +3335,7 @@ shows one line naming the project and installed paths and `make vm-pi-tester`; t
 branch that changes one of the three files. pi loads no extension and no trusted setting of the project
 (`--no-extensions`, `--no-approve`, issue #702); the skills it reads by `--skill` are still the branch's text.
 What stays open (ADR 0044, What is left): pi reads the project's settings as data before trust and runs its
-migrations there (a branch's `.pi/hooks` or `.pi/tools` makes it wait for a key; a follow-up can pin
-`--session-dir`); the user-level config under `~/.pi/agent` (`settings.json`, `models.json`, `SYSTEM.md`,
+migrations there (a branch's `.pi/hooks` or `.pi/tools` makes it wait for a key); the user-level config under `~/.pi/agent` (`settings.json`, `models.json`, `SYSTEM.md`,
 `APPEND_SYSTEM.md`, `AGENTS.md`) is always trusted and writable by any process of the same uid, so a write
 there runs at the next tester start; and the deck's tester command in `.dot-agent-deck.toml` controls pi's
 later arguments, pinned word for word by `TestPiTesterCommandRunsTheLaunchWrapper`.
@@ -3368,6 +3368,9 @@ boundary against the VM user, who has sudo. The script:
   `--no-approve` would win (issue #702). After a `--` pi reads it as message text, so it could not re-trust
   the project there; it is dropped there too only to keep the rule simple, as is a `-a` given as another
   option's value (`--name -a`), which the deck never passes;
+- drops `--session-dir <value>` (both words) and `--session-dir=<value>`, printing one line
+  `pi-tester: argument --session-dir dropped ...` for each, since it pins pi's session directory itself and
+  pi keeps the last one; a bare `--session-dir` as the last argument is dropped alone (issue #717);
 - refuses to start, exiting 1, when `HOME` is not an absolute path, and when pi's agent directory
   `~/.pi/agent`, whose settings pi always trusts, is reached through a symbolic link (`~/.pi` or itself),
   is no directory, or lies physically (`cd -P`, `pwd -P`) in the working directory, so a `HOME` spelled
@@ -3378,8 +3381,16 @@ boundary against the VM user, who has sudo. The script:
   `~/.pi/agent/extensions`), is no directory or holds no `index.ts`, `index.js` or `package.json` that is a
   regular file and no symbolic link; the message names the step that writes it,
   `dot-agent-deck orchestrator setup`, after which the pane is restarted;
-- starts pi as `pi --no-approve --no-extensions --extension <installed refusal> --extension <deck extension>
-  --skill <unit folder>/.claude/skills <the remaining arguments>` under `env -i` with only the variables it lists, each with its reason: `DEEPSEEK_API_KEY`,
+- refuses to start, exiting 1 with `pi-tester: pi's session directory <path> ...`, when the working
+  directory's physical path cannot be resolved, or when `~/.pi/agent/sessions` or the unit's directory in it
+  is a symbolic link, is no directory, or lies physically in the working directory; a missing one is fine,
+  pi creates it;
+- starts pi as `pi --no-approve --no-extensions --session-dir ~/.pi/agent/sessions/--<P>-- --extension
+  <installed refusal> --extension <deck extension> --skill <unit folder>/.claude/skills <the remaining
+  arguments>`, where `<P>` is the unit folder's physical path (`pwd -P`) without its leading `/` and with
+  every `/`, `\` and `:` a `-`: pi 1.6.1's own default session directory for that folder, so its sessions
+  stay where they were and `--continue` or `/resume` finds them as before (the deck itself resumes no pi
+  session; ADR 0044, amendment for issue #717), under `env -i` with only the variables it lists, each with its reason: `DEEPSEEK_API_KEY`,
   `HOME`, `PATH`, the terminal, locale, `TMPDIR` and `XDG_*` variables, and the deck's pane variables
   (`DOT_AGENT_DECK_PANE_ID`, `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket and the like) that its pi
   extension and `dot-agent-deck work-done` need, plus the marker `SHIFT2EU_PI_TESTER=1`, which makes
@@ -3421,6 +3432,11 @@ unit cut before the merge. In the window right after the merge, a unit with the 
 `--approve`) run by the old installed wrapper (no `--no-approve`, no `--skill`) leaves pi to a saved trust
 decision or a trust prompt and loads no skills, so an unattended tester pane could stall at the prompt or
 run without skills: run `make vm-pi-tester` right after the merge.
+
+After merging issue #717's change, which changes the wrapper only (the tester command stays the same), the
+maintainer runs `make vm-pi-tester` from the host clone, so the installed wrapper pins `--session-dir`, and
+checks that a tester pane starts and a `pi --continue` in it resumes. Until then the installed wrapper leaves
+the session directory to pi, which a unit folder's `.pi/settings.json` can still choose.
 
 ## Containers and image verification
 

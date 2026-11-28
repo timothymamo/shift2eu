@@ -564,11 +564,11 @@ Consequences of this amendment:
 - What is left:
   - pi reads the project's settings for startup (`sessionDir`, the startup UI, first-time setup) as data
     before trust is resolved, so `--no-approve` does not stop it (`docs/security.md`, Understand project
-    trust): a branch can choose where pi writes the tester's session files, which could be a path in the
-    worktree a later commit picks up. Before trust, too, `runMigrations` renames `<unit>/.pi/commands` to
+    trust): a branch could choose where pi writes the tester's session files, which could be a path in the
+    worktree a later commit picks up; the amendment below (issue #717) pins `--session-dir`, which closes
+    that one. Before trust, too, `runMigrations` renames `<unit>/.pi/commands` to
     `.pi/prompts`, and a branch-added `.pi/hooks/` or `.pi/tools/` makes an interactive pi show a
-    deprecation warning and wait for a key, so an unattended pane stalls. No code of the project runs. A
-    follow-up can pin `--session-dir`.
+    deprecation warning and wait for a key, so an unattended pane stalls. No code of the project runs.
   - The user-level pi config is always trusted: `~/.pi/agent/settings.json` (`shellCommandPrefix`,
     `shellPath`, `packages`, `npmCommand`), `models.json`, `SYSTEM.md`, `APPEND_SYSTEM.md` and `AGENTS.md`
     are writable by any process of the same uid, branch code that `make check` runs included, and a write
@@ -580,8 +580,9 @@ Consequences of this amendment:
     folder, as instructions to the model, not code in pi's process; they were never inside this guard.
   - The deck's extension directory is under `HOME`, writable by the VM's one user, so a program the tester
     runs could change it for its next start; the same-uid limit stated above.
-  - `.dot-agent-deck.toml`'s tester command controls the later arguments (`--extension`, `--session-dir`,
-    `--system-prompt` and the like) and can point elsewhere; `TestPiTesterCommandRunsTheLaunchWrapper`
+  - `.dot-agent-deck.toml`'s tester command controls the later arguments (`--extension`,
+    `--system-prompt` and the like; a `--session-dir` among them is dropped since issue #717) and can point
+    elsewhere; `TestPiTesterCommandRunsTheLaunchWrapper`
     pins it word for word, and the deck's trust approval is what shows a change, as above.
 - A unit whose folder still has the old tester command (with `--approve`) keeps a working tester once the
   maintainer installs the new wrapper: the argument is dropped with the notice line in its pane, and merging
@@ -591,3 +592,80 @@ Consequences of this amendment:
   what pi loads from the unit folder, not what a program the tester runs can reach.
 - `.pi/settings.json` no longer configures the tester's trusted settings or extensions (pi still reads its
   startup settings, What is left); it stays for a pi run by hand with `--approve`.
+
+## Amendment: the tester's sessions go where the wrapper pins them
+
+Amended 2026-11-28, issue #717, a follow-up to the amendment above. pi reads the project's
+`.pi/settings.json` as data before trust, and its `sessionDir` there chose where pi writes the tester's
+session files, so a branch could send them into the worktree. Checked against pi 1.6.1's package (paths
+relative to it, as above); pi was not run for this:
+
+- **Which directory wins.** `dist/main.js` (about line 594) takes `--session-dir` first, then
+  `PI_CODING_AGENT_SESSION_DIR`, then the settings' `sessionDir` (`SettingsManager.getSessionDir()`, the
+  merged settings pi read before trust), then the default. `dist/cli/args.js` (about line 99) matches only
+  the exact word `--session-dir` followed by a value; pi keeps the last one. The wrapper's allow list has no
+  `PI_CODING_AGENT_SESSION_DIR`, so the environment never chooses it either.
+- **The default.** `getDefaultSessionDirPath(cwd)` in `dist/core/session-manager.js` is
+  `<agent dir>/sessions/--<P>--`, with `<P>` the resolved working directory (`process.cwd()`, a physical
+  path) without its leading slash or backslash and with every `/`, `\` and `:` a `-`; the agent directory
+  is `~/.pi/agent` (`getAgentDir()` in `dist/config.js`, no `PI_CODING_AGENT_DIR` since the wrapper does
+  not pass it).
+- **Resume.** `SessionManager.continueRecent`, `findById` and `list` filter sessions by their working
+  directory only when a session directory was given and is not that default
+  (`filterCwd = sessionDir !== undefined && !pathsEqual(dir, getDefaultSessionDirPath(cwd))`;
+  `pathsEqual` compares `path.resolve`d strings). A `--session-dir` equal to the default therefore behaves
+  exactly as no `--session-dir`.
+
+Decision:
+
+- **The wrapper pins pi's own default.** It passes `--session-dir ${HOME}/.pi/agent/sessions/--<P>--`
+  with `<P>` built from `pwd -P` as pi builds it, right after `--no-extensions`; the last line becomes
+  `allowlisted exec "${pi}" --no-approve --no-extensions --session-dir "${sessions}" --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"`,
+  and `dev/vm-pi-tester.sh`'s check accepts only it. The path is fixed under `HOME`, in the agent
+  directory the wrapper already checks lies outside the unit folder, and no branch writes it; being pi's
+  own default, the unit's existing sessions stay where they are and `--continue`, `--resume` and
+  `--session <id>` find them as before. When `pwd -P` cannot be resolved the wrapper fails closed.
+- **A `--session-dir` among the arguments is dropped.** `--session-dir <value>` (both words) and
+  `--session-dir=<value>` are removed with one stderr line each (`pi-tester: argument --session-dir
+  dropped with its value: ...`), as `--approve` is: pi keeps the last one, and the wrapper's comes first.
+  pi 1.6.1 reads `--session-dir=<value>` as an unknown flag, not a session directory; it is dropped too to
+  keep the rule simple. A bare `--session-dir` as the last argument, which pi ignores, is dropped alone.
+  Nothing else is dropped or reordered.
+- **A directory a branch could redirect is refused.** When `${HOME}/.pi/agent/sessions` or the unit's
+  directory in it is a symbolic link, exists and is not a directory, or exists and has its physical path in
+  the working directory (`in_unit`), the wrapper exits 1 with `pi-tester: pi's session directory <path>
+  <why>: ...` and pi does not start. A missing one is fine: pi creates it (`getDefaultSessionDir`,
+  `mkdirSync(..., { recursive: true })`).
+
+How the deck resumes a tester, checked read-only (dot-agent-deck 0.51.4, its `docs`, its pi extension under
+`~/.pi/agent/extensions/dot-agent-deck`, and the binary's strings): it passes pi no resume argument or
+environment. `dot-agent-deck docs interrupted-work` lists Pi as not restorable ("Not yet ... The deck does
+not yet learn which conversation the agent was in. Start over is offered"); after a reboot or a daemon stop
+`dot-agent-deck docs session-management` says the deck "restores the layout, not the agents'
+conversations" and starts each pane's command again, and the tester command in `.dot-agent-deck.toml` has
+no `--continue`, `--resume` or `--session`. The extension's `--resumed` (`inbox-receiver.js`) is an
+argument of its own `dot-agent-deck inbox wait`, not of pi; neither pi's package nor the extension reads
+`DOT_AGENT_DECK_RESUME_*` or `DOT_AGENT_DECK_FRESH_*`, and the binary holds no `session-dir` string. So a
+pane restart starts a fresh pi session in the pinned directory, as it did in the default one, and a resume
+by hand (`--continue`, `/resume`) finds the same sessions.
+
+Alternatives considered for this amendment:
+
+- **A directory of the wrapper's own (for example one per unit outside `~/.pi`).** It moves the unit's
+  sessions away from where pi and a person resuming by hand look for them, and pi would then filter by
+  working directory on every lookup; the default already lies outside the unit folder.
+- **Refuse a `--session-dir` argument instead of dropping it.** As for `--approve`: it would stop every
+  unit whose command passed one, for no protection the drop does not give.
+
+Consequences of this amendment:
+
+- The project's `.pi/settings.json` no longer chooses where the tester's sessions go, and neither does the
+  deck's command; the `sessionDir` residual of the amendment above is closed.
+- What is left: the sessions lie under `~/.pi/agent`, writable by any process of the same uid (a program
+  the tester runs could replace the directory with a link before the next start, which the refusal then
+  catches, or write session files), the same-uid limit stated above; pi still reads the project's other
+  startup settings (the startup UI, first-time setup) as data before trust, and runs its migrations there.
+- A pi upgrade that changes `getDefaultSessionDirPath` would leave the pinned directory a custom one: pi
+  would still use it, filtering by working directory, and a lookup by hand would find the unit's sessions
+  there. The tests pin the encoding; the release that changes it updates the wrapper.
+- After the merge the maintainer runs `make vm-pi-tester` and checks that a tester pane starts and resumes.
