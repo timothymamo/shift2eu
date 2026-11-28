@@ -125,12 +125,19 @@ process.stdout.write(JSON.stringify({
 // (TestPiTesterDropsTheApproveArguments).
 var piTesterArgs = []string{"--provider", "deepseek", "--model", "deepseek-flash", "--thinking", "high"}
 
-// piTesterExecLine is the wrapper's last line since ADR 0044's amendment "the tester loads no project extension or
-// setting" (issue #702): pi starts with no project trust and no discovered extension, loads the installed refusal
-// and the deck's extension by --extension and the unit folder's skills by --skill, and the wrapper's own flags come
-// before the deck's arguments, so a `--` among those cannot turn them into messages. dev/vm-pi-tester.sh accepts
-// exactly this line.
-const piTesterExecLine = `allowlisted exec "${pi}" --no-approve --no-extensions --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"`
+// piTesterExecLine is the wrapper's last line since issue #717 (within ADR 0044's amendment "the tester loads no
+// project extension and applies no trusted project setting", issue #702): pi starts with no project trust and no
+// discovered extension, writes its sessions where the wrapper pins them rather than where the unit folder's
+// .pi/settings.json would send them, loads the installed refusal and the deck's extension by --extension and the
+// unit folder's skills by --skill, and the wrapper's own flags come before the deck's arguments, so a `--` among
+// those cannot turn them into messages. dev/vm-pi-tester.sh accepts exactly this line.
+const piTesterExecLine = `allowlisted exec "${pi}" --no-approve --no-extensions --session-dir "${sessions}" --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"`
+
+// piTesterPreviousExecLine is the wrapper's last line from issue #702 until issue #717: it pinned the refusal, the
+// deck's extension and the skills, but left pi's session directory to pi's own default, which the unit folder's
+// .pi/settings.json still chose because pi reads it as data before trust (issue #717). dev/vm-pi-tester.sh now
+// refuses it like any other last line.
+const piTesterPreviousExecLine = `allowlisted exec "${pi}" --no-approve --no-extensions --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"`
 
 // piTesterOldExecLine is the wrapper's last line before issue #702, which dev/vm-pi-tester.sh now refuses like any
 // other last line: it started pi with project trust, so pi discovered and loaded the unit folder's
@@ -165,6 +172,44 @@ func writePiTesterAgentDir(t *testing.T, home string) {
 // directory .pi/settings.json used to load before issue #702.
 func piTesterSkillsDir(project string) string {
 	return filepath.Join(project, ".claude", "skills")
+}
+
+// piTesterSessionsRoot returns the directory pi keeps its sessions under, as the wrapper builds it on its last
+// line: ${HOME}/.pi/agent/sessions, spelled as HOME is, since the refusal names the path it built (issue #717).
+func piTesterSessionsRoot(home string) string {
+	return piTesterAgentDir(home) + "/sessions"
+}
+
+// piTesterSessionDir returns the directory the wrapper pins pi's sessions to with --session-dir (issue #717):
+// ${HOME}/.pi/agent/sessions/--<P>--, where P is the working directory's physical path without its leading slash
+// and with every slash, backslash and colon replaced by a dash. That is exactly pi's own default for that
+// directory (pi's getDefaultSessionDirPath), so a tester session the deck resumes is still found where pi wrote it.
+// The shell reports PWD resolved, so the working directory is resolved before it is encoded, and dir is the
+// directory pi is started in, which is not the unit folder when a case reaches it through a link.
+func piTesterSessionDir(t *testing.T, home, dir string) string {
+	t.Helper()
+
+	return filepath.Join(piTesterSessionsRoot(home), "--"+piTesterSessionPrefix(resolvePiTesterDir(t, dir))+"--")
+}
+
+// piTesterSessionPrefix encodes a physical working directory the way pi does, and the wrapper must: the leading
+// slash removed, every slash, backslash and colon replaced by a dash (issue #717).
+func piTesterSessionPrefix(dir string) string {
+	return strings.TrimPrefix(strings.NewReplacer("/", "-", `\`, "-", ":", "-").Replace(dir), "-")
+}
+
+// piTesterArgCount returns how many times arg stands in argv: a flag the wrapper owns has to stand exactly once
+// there, whatever the deck's command passes (issue #717).
+func piTesterArgCount(argv []string, arg string) int {
+	count := 0
+
+	for _, word := range argv {
+		if word == arg {
+			count++
+		}
+	}
+
+	return count
 }
 
 // writePiTesterDeck writes the deck's pi extension where the deck writes it - an index.ts under HOME - and returns
@@ -1357,10 +1402,14 @@ func TestPiTesterLaunchWrapperEndsWithItsExecLine(t *testing.T) {
 }
 
 // TestPiTesterStartsPiWithoutProjectTrustOrADiscoveredExtension pins ADR 0044's amendment (issue #702): pi starts
-// with `--no-approve --no-extensions`, so neither the unit folder's `.pi/extensions` nor its `.pi/settings.json` is
-// code pi runs or a setting pi reads; the installed refusal and the deck's extension come in by `--extension` and
-// the skills by `--skill`, even though the unit folder holds no `.claude/skills` (a path pi cannot find is pi's own
-// diagnostic, not this wrapper's refusal, and the skills are no part of it).
+// with `--no-approve --no-extensions`, so neither the unit folder's `.pi/extensions` is code pi runs nor its
+// `.pi/settings.json` a trust-gated setting pi applies; the installed refusal and the deck's extension come in by
+// `--extension` and the skills by `--skill`, even though the unit folder holds no `.claude/skills` (a path pi cannot
+// find is pi's own diagnostic, not this wrapper's refusal, and the skills are no part of it).
+// pi still reads that file as data before trust, so its `sessionDir` would choose where pi writes its sessions: the
+// wrapper pins `--session-dir` itself (issue #717). A fake pi writes no session file at all, so this case can pin the
+// argv the wrapper hands it and that the wrapper itself creates nothing under the planted sessionDir; what a real pi
+// does with the file is pi's, not observable here.
 func TestPiTesterStartsPiWithoutProjectTrustOrADiscoveredExtension(t *testing.T) {
 	t.Parallel()
 
@@ -1389,11 +1438,14 @@ func TestPiTesterStartsPiWithoutProjectTrustOrADiscoveredExtension(t *testing.T)
 		piFile{present: true, content: readRepoFile(t, denyListFile)})
 
 	// What a branch can leave in the unit folder: an extension pi would discover, and a settings file whose keys run
-	// commands (shellCommandPrefix, packages, npmCommand) once the project is trusted (ADR 0044, issue #702).
+	// commands (shellCommandPrefix, packages, npmCommand) once the project is trusted, and whose sessionDir would send
+	// pi's sessions into the unit folder if the wrapper left that to the project (ADR 0044, issue #702, issue #717).
 	plantedExtension := filepath.Join(project, ".pi", "extensions", "x.ts")
 	writeFileMode(t, plantedExtension, []byte("// an extension a branch planted, which pi must not load (issue #702)\n"), 0o644)
+
+	plantedSessions := filepath.Join(project, ".pi", "sessions-planted")
 	writeFileMode(t, filepath.Join(project, ".pi", "settings.json"),
-		[]byte(`{"extensions": ["extensions/x.ts"], "packages": ["@example/invented"], "shellCommandPrefix": "true"}`), 0o644)
+		[]byte(`{"extensions": ["extensions/x.ts"], "packages": ["@example/invented"], "shellCommandPrefix": "true", "sessionDir": "`+plantedSessions+`"}`), 0o644)
 
 	if _, err := os.Stat(piTesterSkillsDir(project)); err == nil {
 		t.Fatalf("%s exists, so this case cannot pin that the wrapper passes --skill even when the directory is missing (issue #702)", piTesterSkillsDir(project))
@@ -1407,7 +1459,19 @@ func TestPiTesterStartsPiWithoutProjectTrustOrADiscoveredExtension(t *testing.T)
 	got := readPiRecord(t, record)
 
 	if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, piTesterArgs), got.argv); diff != "" {
-		t.Errorf("pi's argv is not the wrapper's no-trust, no-discovery start: it has to be --no-approve --no-extensions, the installed refusal and the deck's extension by --extension, the unit folder's skills by --skill, and then the deck's arguments unchanged (-want +got):\n%s", diff)
+		t.Errorf("pi's argv is not the wrapper's no-trust, no-discovery start: it has to be --no-approve --no-extensions, the session directory the wrapper pins, the installed refusal and the deck's extension by --extension, the unit folder's skills by --skill, and then the deck's arguments unchanged (-want +got):\n%s", diff)
+	}
+
+	// The planted sessionDir is pi's to honour as data and the wrapper's to overrule: the fake pi writes no session,
+	// so the evidence here is that the wrapper pins the directory itself and creates nothing the project chose. The
+	// pinned directory is pi's to create too - the wrapper must not need it to exist - so this case pins only what
+	// the wrapper itself writes.
+	if n := piTesterArgCount(got.argv, "--session-dir"); n != 1 {
+		t.Errorf("pi's argv holds --session-dir %d time(s), want exactly 1: the wrapper passes its own after --no-extensions, and a second one would win if pi kept the last (issue #717): %q", n, got.argv)
+	}
+
+	if _, statErr := os.Stat(plantedSessions); statErr == nil {
+		t.Errorf("the wrapper created %s, the directory the unit folder's .pi/settings.json names in sessionDir: that file is data pi reads before trust, never a directory this wrapper makes (issue #717)", plantedSessions)
 	}
 
 	// The two flags are pinned by their place too: every flag the wrapper adds has to come before the deck's own
@@ -1532,6 +1596,141 @@ func TestPiTesterDropsTheApproveArguments(t *testing.T) {
 
 				if slices.Contains(got.argv, arg) {
 					t.Errorf("pi's argv holds %q, which the wrapper dropped with a line: an argument that reaches pi undoes --no-approve, since pi keeps the last of the two (issue #702): %q", arg, got.argv)
+				}
+			}
+		})
+	}
+}
+
+// piTesterSessionDirDropNotice starts the line the wrapper prints for each `--session-dir` it drops (issue #717):
+// the wrapper pins that flag itself, so one passed by the deck's command would choose where pi writes its sessions,
+// and pi keeps the last of two.
+const piTesterSessionDirDropNotice = "pi-tester: argument --session-dir dropped"
+
+// TestPiTesterDropsTheSessionDirArguments pins issue #717's second item: `--session-dir <value>` and
+// `--session-dir=<value>` among the wrapper's own arguments are dropped - both words for the two-word form -, each
+// with one line on stderr, so the directory the wrapper pins cannot be overruled from .dot-agent-deck.toml by a
+// unit whose command still passes one. Every other argument reaches pi unchanged and in its order, and a flag that
+// merely starts the same way does too.
+func TestPiTesterDropsTheSessionDirArguments(t *testing.T) {
+	t.Parallel()
+
+	// invented is the value the cases pass: a directory no run uses, named so a leak of it into pi's argv shows in
+	// the diff below rather than looking like the wrapper's own choice.
+	const invented = "/an/invented/session-dir"
+
+	// No case here may be named with an `=`: t.TempDir() takes its name from the test and the case, and the
+	// wrapper's last step hands the fake pi's path to `env -i`, which reads any word holding an `=` as a variable
+	// assignment and never runs the command. A directory the VM uses holds none, so this is the harness's limit,
+	// not the wrapper's.
+
+	cases := []struct {
+		name string
+		args []string
+		// dropped is how many --session-dir arguments the wrapper must drop, one stderr line each.
+		dropped int
+		// passed are the arguments that must reach pi, unchanged and in their order.
+		passed []string
+	}{
+		{
+			name:    "the two-word form, between the deck's own arguments",
+			args:    []string{"--provider", "deepseek", "--session-dir", invented, "--model", "deepseek-flash"},
+			dropped: 1,
+			passed:  []string{"--provider", "deepseek", "--model", "deepseek-flash"},
+		},
+		{
+			name:    "the equals form",
+			args:    []string{"--session-dir=" + invented, "--thinking", "high"},
+			dropped: 1,
+			passed:  []string{"--thinking", "high"},
+		},
+		{
+			name:    "both forms, in their order",
+			args:    []string{"--session-dir", invented, "--session-dir=" + invented},
+			dropped: 2,
+		},
+		{
+			name:    "the deck's command with a --session-dir last",
+			args:    append(slices.Clone(piTesterArgs), "--session-dir", invented),
+			dropped: 1,
+			passed:  piTesterArgs,
+		},
+		{
+			// A bare --session-dir as the last argument has no value to take: the wrapper drops the flag alone,
+			// so pi is never handed a flag missing its value while the wrapper's own --session-dir stands.
+			name:    "a bare --session-dir last, with no value",
+			args:    append(slices.Clone(piTesterArgs), "--session-dir"),
+			dropped: 1,
+			passed:  piTesterArgs,
+		},
+		{
+			name:   "an argument that only starts the same way is passed on",
+			args:   []string{"--session-directory=" + invented},
+			passed: []string{"--session-directory=" + invented},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+
+			binDir := filepath.Join(root, "bin")
+			homeDir := filepath.Join(root, "home")
+			record := filepath.Join(root, "pi-record")
+
+			for _, dir := range []string{binDir, homeDir} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatalf("create %s: %v", dir, err)
+				}
+			}
+
+			writePiTesterBin(t, binDir, record)
+			writePiTesterDeck(t, homeDir)
+
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			project := writePiTesterProject(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			stdout, stderr, err := runPiTester(t, installed.script, project, tc.args, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+			if err != nil {
+				t.Fatalf("the wrapper exited non-zero with %v: a --session-dir of the deck's command is dropped with a line, not a refusal, so the tester keeps starting (issue #717): %v\nstdout: %s\nstderr: %s",
+					tc.args, err, stdout, stderr)
+			}
+
+			got := readPiRecord(t, record)
+
+			if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, tc.passed), got.argv); diff != "" {
+				t.Errorf("pi did not start with the wrapper's own session directory and exactly the arguments that are not --session-dir, unchanged and in their order (-want +got):\n%s", diff)
+			}
+
+			// A second --session-dir would win over the wrapper's, since pi keeps the last of two: the flag has to
+			// stand exactly once, before every argument the deck passed.
+			if n := piTesterArgCount(got.argv, "--session-dir"); n != 1 {
+				t.Errorf("pi's argv holds --session-dir %d time(s), want exactly 1: a later one would choose where pi writes its sessions (issue #717): %q", n, got.argv)
+			}
+
+			lines := piTesterOutputLines(stderr)
+
+			if len(lines) != tc.dropped {
+				t.Fatalf("the wrapper printed %d line(s) on stderr with %v, want one per dropped --session-dir (%d): the maintainer is told what the wrapper overruled, and a run with nothing to drop prints nothing (issue #717): %q",
+					len(lines), tc.args, tc.dropped, lines)
+			}
+
+			for i, line := range lines {
+				if !strings.HasPrefix(line, piTesterSessionDirDropNotice) {
+					t.Errorf("the wrapper's line %d is %q, want it to start %q: the line names the argument it dropped, as the --approve lines do (issue #702, issue #717)", i+1, line, piTesterSessionDirDropNotice)
+				}
+			}
+
+			for _, arg := range got.argv {
+				if arg == invented {
+					t.Errorf("pi's argv holds %q, the value the wrapper dropped with its --session-dir: pi would take a later --session-dir over the wrapper's (issue #717): %q", arg, got.argv)
 				}
 			}
 		})
@@ -2110,6 +2309,290 @@ func TestPiTesterRefusesAnAgentDirectoryThatCouldBeTheUnitFolder(t *testing.T) {
 
 			if _, statErr := os.Stat(record); statErr == nil {
 				t.Errorf("the wrapper started pi with %s: pi trusts the settings and extensions of the agent directory it finds there, and a branch could write one inside the unit folder (issue #702)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+		})
+	}
+}
+
+// TestPiTesterEncodesAnAwkwardWorkingDirectoryIntoItsSessionDirectory pins the encoding the wrapper gives the
+// working directory in the session directory it hands pi (issue #717): every slash, backslash and colon becomes a
+// dash, as pi's own default does (its getDefaultSessionDirPath), so a tester session the deck resumes is still found
+// where pi wrote it. The unit folder is named with the two characters a slash hides behind, and the expected tail is
+// written out by hand - `-a-b-c--` - because piTesterSessionDir re-implements the same rule: a wrapper whose
+// `tr '/\\:' '---'` lost a character would still agree with the helper on a name the helper encodes.
+// The name holds no `=`: the wrapper hands the fake pi's path to `env -i`, which reads a word holding an `=` as a
+// variable assignment and never runs the command (TestPiTesterDropsTheSessionDirArguments records the same limit),
+// so a `=` would pin the harness rather than the wrapper.
+func TestPiTesterEncodesAnAwkwardWorkingDirectoryIntoItsSessionDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	binDir := filepath.Join(root, "bin")
+	homeDir := filepath.Join(root, "home")
+	record := filepath.Join(root, "pi-record")
+
+	for _, dir := range []string{binDir, homeDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+
+	writePiTesterBin(t, binDir, record)
+	writePiTesterDeck(t, homeDir)
+
+	installed := writePiTesterInstalled(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+	// The unit folder, named with the colon and the backslash the wrapper has to encode beside the slash. Its copies
+	// of the three files are the installed ones, so the wrapper prints no line about a copy that differs.
+	project := filepath.Join(root, `a:b\c`)
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatalf("create %s, the unit folder whose name holds a colon and a backslash: %v", project, err)
+	}
+
+	for _, file := range []struct{ path, content string }{
+		{denyExtensionFile, readRepoFile(t, denyExtensionFile)},
+		{piTesterScript, readRepoFile(t, piTesterScript)},
+		{denyListFile, readRepoFile(t, denyListFile)},
+	} {
+		writeFileMode(t, filepath.Join(project, file.path), []byte(file.content), 0o644)
+	}
+
+	stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+	if err != nil {
+		t.Fatalf("the wrapper exited non-zero in a unit folder named %s, which is no reason to refuse it: %v\nstdout: %s\nstderr: %s",
+			filepath.Base(project), err, stdout, stderr)
+	}
+
+	got := readPiRecord(t, record)
+
+	at := slices.Index(got.argv, "--session-dir")
+	if at < 0 || at+1 >= len(got.argv) {
+		t.Fatalf("pi's argv holds no --session-dir with a value, so the unit folder's .pi/settings.json chooses where pi writes its sessions (issue #717): %q", got.argv)
+	}
+
+	// Only the t.TempDir() part comes from the helper, and it holds neither a backslash nor a colon: the tail below is
+	// written out by hand, so the wrapper's own encoding of those two characters is what this case pins.
+	want := filepath.Join(piTesterSessionsRoot(homeDir), "--"+piTesterSessionPrefix(resolvePiTesterDir(t, root))+`-a-b-c--`)
+
+	if gotDir := got.argv[at+1]; gotDir != want {
+		t.Errorf("pi's --session-dir is %q, want %q: the working directory `a:b\\c` has to be encoded the way pi's own default encodes it - one dash per slash, per backslash and per colon - or pi looks for the tester's sessions in a directory other than the one it writes them to (issue #717)",
+			gotDir, want)
+	}
+}
+
+// piTesterSessionRefusalPrefix starts the one line the wrapper prints when the directory it pins pi's sessions to
+// cannot be used (issue #717).
+const piTesterSessionRefusalPrefix = "pi-tester: pi's session directory "
+
+// TestPiTesterRefusesASessionDirectoryItCannotUse pins issue #717's third item: the wrapper pins pi's session
+// directory so the unit folder's .pi/settings.json cannot choose it, and a pinned path that is a symbolic link, that
+// is not a directory, or whose physical path lies in the working directory a branch writes, would hand that choice
+// back. The wrapper then exits 1 with one line naming the path, and pi never starts. A missing directory is no
+// refusal - pi creates it - which every case that starts pi here pins, none of them creating one.
+func TestPiTesterRefusesASessionDirectoryItCannotUse(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// layout lays the sessions out as the case leaves it, and returns the HOME the wrapper is handed and the path
+		// a refusal has to name; an empty path means the case starts pi.
+		layout func(t *testing.T, root, project string) (home, want string)
+	}{
+		{
+			name: "the sessions root is a symbolic link",
+			layout: func(t *testing.T, root, _ string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				elsewhere := filepath.Join(root, "sessions-elsewhere")
+				if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+					t.Fatalf("create %s, the directory the sessions root links to: %v", elsewhere, err)
+				}
+
+				if err := os.Symlink(elsewhere, piTesterSessionsRoot(home)); err != nil {
+					t.Fatalf("link %s to %s: %v", piTesterSessionsRoot(home), elsewhere, err)
+				}
+
+				return home, piTesterSessionsRoot(home)
+			},
+		},
+		{
+			name: "the unit's session directory is a symbolic link",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				if err := os.MkdirAll(piTesterSessionsRoot(home), 0o700); err != nil {
+					t.Fatalf("create %s: %v", piTesterSessionsRoot(home), err)
+				}
+
+				elsewhere := filepath.Join(root, "sessions-elsewhere")
+				if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+					t.Fatalf("create %s, the directory the unit's session directory links to: %v", elsewhere, err)
+				}
+
+				sessions := piTesterSessionDir(t, home, project)
+				if err := os.Symlink(elsewhere, sessions); err != nil {
+					t.Fatalf("link %s to %s: %v", sessions, elsewhere, err)
+				}
+
+				return home, sessions
+			},
+		},
+		{
+			// Refused by the -L check, like the case above, and not by the in-unit one: a link from outside to a
+			// directory inside the unit folder is still a link, and pi never writes one. The in-unit branch is
+			// defence in depth: the wrapper builds the path under ${HOME}, and an agent directory inside the unit
+			// folder is refused before this check runs, so a real directory there is unreachable without a bind
+			// mount - which stays the one way a branch could get one.
+			name: "the unit's session directory is a symbolic link to a directory in the unit folder",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				if err := os.MkdirAll(piTesterSessionsRoot(home), 0o700); err != nil {
+					t.Fatalf("create %s: %v", piTesterSessionsRoot(home), err)
+				}
+
+				// A branch writes the unit folder, so a link from outside to a directory inside it would put pi's
+				// sessions where the branch can write one of the files back.
+				inUnit := filepath.Join(project, ".pi", "sessions-in-unit")
+				if err := os.MkdirAll(inUnit, 0o700); err != nil {
+					t.Fatalf("create %s, the directory inside the unit folder: %v", inUnit, err)
+				}
+
+				sessions := piTesterSessionDir(t, home, project)
+				if err := os.Symlink(inUnit, sessions); err != nil {
+					t.Fatalf("link %s to %s: %v", sessions, inUnit, err)
+				}
+
+				return home, sessions
+			},
+		},
+		{
+			name: "the sessions root is a regular file",
+			layout: func(t *testing.T, root, _ string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				// A file where the directory pi keeps its sessions under has to be: pi cannot write a session into it,
+				// and a wrapper that started pi would leave the pane with a pi that fails on its first write.
+				writeFileMode(t, piTesterSessionsRoot(home), []byte("not a directory, invented for this test (issue #717)\n"), 0o644)
+
+				return home, piTesterSessionsRoot(home)
+			},
+		},
+		{
+			name: "the unit's session directory is a regular file",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				if err := os.MkdirAll(piTesterSessionsRoot(home), 0o700); err != nil {
+					t.Fatalf("create %s: %v", piTesterSessionsRoot(home), err)
+				}
+
+				sessions := piTesterSessionDir(t, home, project)
+				writeFileMode(t, sessions, []byte("not a directory, invented for this test (issue #717)\n"), 0o644)
+
+				return home, sessions
+			},
+		},
+		{
+			name: "the unit's session directory is a real directory outside the working directory",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				sessions := piTesterSessionDir(t, home, project)
+				if err := os.MkdirAll(sessions, 0o700); err != nil {
+					t.Fatalf("create %s, the directory the wrapper pins pi's sessions to: %v", sessions, err)
+				}
+
+				return home, ""
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+
+			binDir := filepath.Join(root, "bin")
+			record := filepath.Join(root, "pi-record")
+
+			if err := os.MkdirAll(binDir, 0o700); err != nil {
+				t.Fatalf("create %s: %v", binDir, err)
+			}
+
+			writePiTesterBin(t, binDir, record)
+
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			project := writePiTesterProject(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			home, want := tc.layout(t, root, project)
+
+			stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, home, piTesterBasePath(t)))
+
+			if want == "" {
+				if err != nil {
+					t.Fatalf("the wrapper exited non-zero although the session directory it pins is a real directory outside the working directory: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+				}
+
+				got := readPiRecord(t, record)
+
+				if diff := cmp.Diff(piTesterWantArgv(t, installed, home, project, piTesterArgs), got.argv); diff != "" {
+					t.Errorf("pi did not start with the session directory the wrapper pins (-want +got):\n%s", diff)
+				}
+
+				return
+			}
+
+			if got := exitStatusOf(t, err); got != 1 {
+				t.Errorf("the wrapper exited %d with %s, want 1: a session directory a branch can choose is a refusal with one line, not a crash and not a start (issue #717)\nstdout: %s\nstderr: %s",
+					got, tc.name, stdout, stderr)
+			}
+
+			lines := piTesterOutputLines(stderr)
+
+			if len(lines) != 1 {
+				t.Fatalf("the wrapper printed %d line(s) on stderr with %s, want one: the refusal names the path it could not use, so a maintainer whose pane exited can fix it (issue #717): %q",
+					len(lines), tc.name, lines)
+			}
+
+			if !strings.HasPrefix(lines[0], piTesterSessionRefusalPrefix) {
+				t.Errorf("the wrapper's line is %q, want it to start %q: the line says which directory the wrapper refused to pin pi's sessions to (issue #717)", lines[0], piTesterSessionRefusalPrefix)
+			}
+
+			if !strings.Contains(lines[0], want) {
+				t.Errorf("the wrapper's line %q does not name %s, the path it refused: a message that names no path leaves the maintainer to guess which session directory broke (issue #717)", lines[0], want)
+			}
+
+			if _, statErr := os.Stat(record); statErr == nil {
+				t.Errorf("the wrapper started pi with %s: a session directory that is a link, or one inside the unit folder, hands a branch the choice the wrapper pins --session-dir to take away, so pi must not start (issue #717)\nstdout: %s\nstderr: %s",
 					tc.name, stdout, stderr)
 			}
 		})

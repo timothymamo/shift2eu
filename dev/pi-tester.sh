@@ -31,18 +31,34 @@
 #    these checks are the ones that do it.
 # 2. Starts pi with an allow-listed environment: `env -i` and only the variables named below, each copied
 #    when the parent has it set, plus the marker SHIFT2EU_PI_TESTER=1, and the arguments
-#    `--no-approve --no-extensions --extension <installed extensions/deny-env-printing.ts>
+#    `--no-approve --no-extensions --session-dir <HOME>/.pi/agent/sessions/--<P>--
+#    --extension <installed extensions/deny-env-printing.ts>
 #    --extension <HOME>/.pi/agent/extensions/dot-agent-deck --skill <working directory>/.claude/skills`
-#    followed by every other argument passed through unchanged (issue #702, ADR 0044 amendment). pi then
-#    trusts no project: it applies no trust-gated setting of the project's .pi/settings.json, whose
+#    followed by every other argument passed through unchanged (issue #702, issue #717, ADR 0044 amendment).
+#    pi then trusts no project: it applies no trust-gated setting of the project's .pi/settings.json, whose
 #    shellCommandPrefix, packages and npmCommand could run commands the refusal never sees, and discovers
 #    no extension of the project or of ~/.pi/agent; it loads exactly the installed refusal and the deck's
 #    extension, and the skills by --skill. pi still reads the project's .pi/settings.json as data before
-#    trust (sessionDir, the startup UI, first-time setup): see What this does not do.
+#    trust (the startup UI, first-time setup): see What this does not do. Its sessionDir no longer chooses
+#    where pi writes its sessions: --session-dir wins over it (issue #717). <P> is the working directory's
+#    physical path (pwd -P) without its leading slash and with every slash, backslash and colon a dash,
+#    which is pi 1.6.1's own default for that directory (getDefaultSessionDirPath), so pi finds, resumes and
+#    continues the unit's sessions as it did with no --session-dir. When the sessions root
+#    ${HOME}/.pi/agent/sessions or the unit's directory in it is a symbolic link, not a directory, or has its
+#    physical path in the working directory, the wrapper exits 1 with one line naming the path. A missing one
+#    is fine: pi creates it. A working directory whose pwd -P cannot be resolved is refused before that, by the
+#    agent directory's check below (in_unit fails closed); the session directory's own refusal of it is
+#    defence in depth and never runs.
 #    An --approve or -a among the arguments is dropped with one line on stderr each, since the last of
 #    --approve and --no-approve wins; units cut before the change still pass it. After a -- pi reads it as
 #    message text, which could not re-trust the project: it is dropped there too only to keep the rule
 #    simple. A -a given as another option's value (--name -a) is dropped as well; the deck never passes one.
+#    A --session-dir <value> (both words) or --session-dir=<value> is dropped the same way, one line each,
+#    since pi keeps the last --session-dir; a bare --session-dir as the last argument is dropped alone.
+#    As for -a, a --session-dir after -- or given as another option's value is dropped too, and takes the
+#    next word with it: the wrapper drops more than pi would read as a session directory, never less, so this
+#    is safe. A --session-dir --approve drops --approve as its value, without the --approve line; it is still
+#    dropped, which is what matters.
 #    Before the deck's extension, pi's agent directory ${HOME}/.pi/agent, whose settings, models and system
 #    prompt pi always trusts, is checked: neither ~/.pi nor ~/.pi/agent may be a symbolic link, it must be a
 #    directory, and its physical path (cd -P) must lie outside the working directory's physical path (pwd -P),
@@ -66,17 +82,20 @@
 # <working directory>/.claude/skills are still the branch's text, which pi reads as instructions (not code).
 # gh and git push keep working for a command the tester runs: the VM's gh (dev/gh-app-token.sh, ADR 0031)
 # reads the App's token from its file under HOME, not from the environment.
-# pi still reads the project's .pi/settings.json as data before trust (sessionDir, the startup UI, first-time
-# setup), and its migrations rename <working directory>/.pi/commands to .pi/prompts before trust; a branch's
-# .pi/hooks or .pi/tools makes an interactive pi show a deprecation warning and wait for a key, which stalls
-# an unattended pane. No code of the project runs. A follow-up can pin --session-dir.
+# pi still reads the project's .pi/settings.json as data before trust (the startup UI, first-time setup; its
+# sessionDir is overruled by --session-dir, issue #717), and its migrations rename <working directory>/.pi/commands
+# to .pi/prompts before trust; a branch's .pi/hooks or .pi/tools makes an interactive pi show a deprecation
+# warning and wait for a key, which stalls an unattended pane. No code of the project runs. The session directory
+# lies under ~/.pi/agent, which any process of the same uid can write (below), so the pin keeps the project's
+# settings from choosing it, not a program the tester runs.
 # The user-level config under ~/.pi/agent - settings.json (shellCommandPrefix, shellPath, packages,
 # npmCommand), models.json, SYSTEM.md, APPEND_SYSTEM.md, AGENTS.md - is always trusted and writable by any
 # process of the same uid, branch code that make check runs included, so a write there runs at the next
 # tester start, outside the refusal. A refusal of those keys was considered and not taken: it could break a
 # legitimate deck setup and moves no trust boundary while the tester shares the uid.
-# The later arguments of the deck's tester command (--extension, --session-dir, --system-prompt and the
-# like) come from .dot-agent-deck.toml, which TestPiTesterCommandRunsTheLaunchWrapper pins word for word.
+# The later arguments of the deck's tester command (--extension, --system-prompt and the like; a --session-dir
+# among them is dropped) come from .dot-agent-deck.toml, which TestPiTesterCommandRunsTheLaunchWrapper pins word
+# for word.
 #
 # PATH is checked first, before anything that looks a command up: an empty entry (a leading, middle or
 # trailing `:`) or one that is not absolute (`.`, `bin`) is the working directory or under it, the unit's
@@ -131,13 +150,28 @@ skills=${PWD}/.claude/skills
 # --approve and -a are dropped wherever they stand, one line each in their order: pi starts with --no-approve,
 # and an --approve after it would win. After a -- pi reads one as message text, which could not re-trust the
 # project; it is dropped there too only to keep the rule simple. A -a given as another option's value
-# (--name -a) is dropped as well; the deck never passes one. Every other argument is kept, unchanged and in order.
+# (--name -a) is dropped as well; the deck never passes one.
+# --session-dir <value> (both words) and --session-dir=<value> are dropped the same way, one line each (issue
+# #717): the wrapper pins pi's session directory itself, and pi keeps the last --session-dir it reads. A trailing
+# bare --session-dir, with no value after it, is dropped alone; pi would ignore it anyway. Every other argument
+# is kept, unchanged and in order.
+session_dir_value=""
 for arg; do
   shift
+  if [ -n "${session_dir_value}" ]; then
+    session_dir_value=""
+    continue
+  fi
   case "${arg}" in
   --approve | -a)
     printf "pi-tester: argument %s dropped: the tester's pi never trusts the project, because a trusted .pi/settings.json can run commands the env-printing refusal does not see (shellCommandPrefix, packages, npmCommand) (issue #702)\n" \
       "${arg}" >&2
+    ;;
+  --session-dir | --session-dir=*)
+    printf "pi-tester: argument --session-dir dropped with its value: the wrapper pins pi's session directory itself, so neither the deck's command nor the project's .pi/settings.json chooses where pi writes its sessions (issue #717)\n" >&2
+    if [ "${arg}" = --session-dir ]; then
+      session_dir_value=next
+    fi
     ;;
   *) set -- "$@" "${arg}" ;;
   esac
@@ -344,6 +378,44 @@ fi
 [ -d "${agent}" ] || refuse_agent "is missing or not a directory"
 ! in_unit "${agent}" || refuse_agent "lies in the working directory, the unit folder"
 
+# pi's session directory, which the wrapper pins with --session-dir so the project's .pi/settings.json, which pi
+# reads as data before trust, cannot choose it (issue #717). It is pi's own default for the working directory
+# (pi 1.6.1's getDefaultSessionDirPath): ${HOME}/.pi/agent/sessions/--<P>--, where P is the working directory's
+# physical path without its leading slash and with every slash, backslash and colon a dash. pi compares a given
+# --session-dir with that default and, when they are equal, finds, resumes and continues sessions exactly as
+# with no --session-dir at all.
+sessions_root=${agent}/sessions
+
+# refuse_sessions <directory> <why> stops the wrapper when pi's session directory could be chosen by a branch.
+refuse_sessions() {
+  printf "pi-tester: pi's session directory %s %s: the tester is not started, because the wrapper pins it so that the unit folder cannot choose where pi writes its sessions (issue #717)\n" \
+    "$1" "$2" >&2
+  exit 1
+}
+
+# Defence in depth: neither refusal below runs in practice. An empty pwd_real makes in_unit succeed, so the
+# agent directory's check above has already refused it, and the tr pipeline's status is tr's, which does not
+# fail on any input.
+[ -n "${pwd_real}" ] ||
+  refuse_sessions "${sessions_root}/--<working directory>--" "cannot be named: the working directory's physical path (pwd -P) cannot be resolved"
+sessions_name=$(printf '%s' "${pwd_real#/}" | tr '/\\:' '---') ||
+  refuse_sessions "${sessions_root}/--<working directory>--" "cannot be named from the working directory's physical path"
+sessions=${sessions_root}/--${sessions_name}--
+
+# Both the sessions root and the unit's directory in it must be reached through no link and, when they exist, lie
+# physically outside the working directory. A missing one is fine: pi creates it. The in_unit check is defence in
+# depth: a path under the agent directory, which is already checked to lie outside the unit folder and to be
+# reached through no link, that is itself no link cannot lie in the unit folder short of a bind mount.
+for session_path in "${sessions_root}" "${sessions}"; do
+  if [ -L "${session_path}" ]; then
+    refuse_sessions "${session_path}" "is a symbolic link, which pi never creates"
+  fi
+  if [ -e "${session_path}" ]; then
+    [ -d "${session_path}" ] || refuse_sessions "${session_path}" "is not a directory"
+    ! in_unit "${session_path}" || refuse_sessions "${session_path}" "lies in the working directory, the unit folder"
+  fi
+done
+
 # refuse_deck <why> stops the wrapper when the deck's pi extension is not where the deck writes it.
 refuse_deck() {
   printf "pi-tester: the deck's pi extension %s %s: the tester is not started, because without it the pane gets no task and its work-done is not delivered; run dot-agent-deck orchestrator setup, then restart the pane (issue #702)\n" \
@@ -388,4 +460,4 @@ if [ -n "${differs}" ]; then
     "${differs}" >&2
 fi
 
-allowlisted exec "${pi}" --no-approve --no-extensions --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"
+allowlisted exec "${pi}" --no-approve --no-extensions --session-dir "${sessions}" --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"
