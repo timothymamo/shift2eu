@@ -17,7 +17,10 @@ import (
 // GOWORK=off, and fails the run with a clear ::error when the read gives nothing
 // or more than one line, so a failed read cannot end the step with a bare
 // non-zero exit and a two-line read cannot build the tool with a value that is
-// no Go version.
+// no Go version. The value those two checks let through is held to the shapes
+// go.mod's go line takes by issue #713's third check, the shape pin of
+// auditworkflowgomodread_test.go: here, the empty-value and the one-line check
+// are read out of the step, and there the whole fragment runs.
 
 // auditGoDirective matches go.mod's go line: the Go version every build of the
 // module uses, and the one the checks job must build govulncheck with (issue
@@ -159,16 +162,24 @@ var auditGoModGoAssignment = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)=`)
 
 // auditGoModGoVariable returns the name of the shell variable a step holds
 // go.mod's Go in, and whether it holds one: the name an assignment that reads
-// go.mod's go line - naming go.mod, GoVersion or go mod edit - gives its value.
-// The version guard compares the built tool's Go with that variable, never with
-// a version written into the workflow (issue #658).
+// go.mod's go line - naming go.mod, GoVersion or go mod edit - gives its value,
+// or the name an assignment that takes the value the install step read and
+// checked gives it, through gomod_go and $GITHUB_ENV (issue #713). The version
+// guard compares the built tool's Go with that variable, never with a version
+// written into the workflow (issue #658).
 func auditGoModGoVariable(lines []string) (string, bool) {
 	for _, line := range auditCodeLines(lines) {
+		trimmed := strings.TrimSpace(line)
+
+		if m := auditGoModulesValueAssignment.FindStringSubmatch(trimmed); m != nil {
+			return m[1], true
+		}
+
 		if !strings.Contains(line, "go.mod") && !strings.Contains(line, "GoVersion") && !strings.Contains(line, "go mod edit") {
 			continue
 		}
 
-		if m := auditGoModGoAssignment.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+		if m := auditGoModGoAssignment.FindStringSubmatch(trimmed); m != nil {
 			return m[1], true
 		}
 	}
@@ -881,9 +892,12 @@ func auditGovulncheckToolchainReadsTheVariable(install, name, where string) []st
 	return nil
 }
 
-// auditGoModReadCheck is one of the two checks the read of go.mod's Go needs: the
-// condition that identifies its if block, and the block the step holds for it,
-// which is nil until one matches (issue #710).
+// auditGoModReadCheck is one of the two checks the read of go.mod's Go needs here:
+// the condition that identifies its if block, and the block the step holds for it,
+// which is nil until one matches (issue #710). The read's third check - that the
+// value is a Go version - is issue #713's shape pin in
+// auditworkflowgomodread_test.go's auditInstallGoModGoShapeCheck, which compares
+// the block's opening line with the one form the check takes.
 type auditGoModReadCheck struct {
 	label string
 	match func(condition string) bool
@@ -893,7 +907,11 @@ type auditGoModReadCheck struct {
 // auditGovulncheckGoModReadChecks returns what the step lacks to fail the run with
 // an ::error when the read of go.mod's Go gives nothing or more than one line: an
 // if block between the read and the install for each, with the block's own
-// ::error and exit 1 (issue #710). The step runs under set -euo pipefail, so a
+// ::error and exit 1 (issue #710). It checks those two and no more: the third
+// check of the read, that the value is a Go version, is issue #713's shape pin,
+// auditInstallGoModGoShapeCheck in auditworkflowgomodread_test.go, and the
+// fragment that runs all three is that file's
+// TestAuditGovulncheckGoModReadFailsTheStepClearly. The step runs under set -euo pipefail, so a
 // check that only prints, or that exits outside its block, either ends the step
 // with no message or goes on to build govulncheck with a value that is no Go
 // version at all.
@@ -1023,10 +1041,12 @@ func auditReadsWithGOWORKOff(lines []string, at int) bool {
 	return false
 }
 
-// auditGoModReadStep is the install step's read of go.mod's Go and the checks that
-// fail the run when it gives nothing or more than one line, as the case's lines
-// give them: the base shape every case of
-// TestAuditGovulncheckGoModReadFailsClearly is written from (issue #710).
+// auditGoModReadStep is the install step's read of go.mod's Go and the two checks
+// that fail the run when it gives nothing or more than one line, as the case's
+// lines give them: the base shape every case of
+// TestAuditGovulncheckGoModReadFailsClearly is written from (issue #710). The
+// read's third check, that the value is a Go version, is issue #713's shape pin in
+// auditworkflowgomodread_test.go, whose cases add those lines to this base.
 var auditGoModReadStep = []string{
 	`gomod_go="$(GOWORK=off go list -m -f '{{.GoVersion}}')" || gomod_go=""`,
 	`if [ -z "${gomod_go}" ]; then`,
@@ -1359,23 +1379,45 @@ func TestScheduledSecurityAuditWorkflowBuildsGovulncheckWithGoModsGo(t *testing.
 		}
 	})
 
-	// The install step's script is shell the step runs, so nothing in it may be
-	// a ${{ }} expression: Actions expands that before the shell starts, and the
-	// go.mod version this step reads is no value an expression could name
-	// (issue #710).
-	t.Run("the install step's script holds no ${{ }} expression", func(t *testing.T) {
+	// The read of go.mod's Go is the job's one read of it (issue #713): the
+	// install step hands the value it checked to the steps after it through
+	// $GITHUB_ENV, and the modules step takes it from there instead of computing
+	// it a second time, with no GOWORK=off and no checks of its own - a second
+	// read fails the run with a misleading message for an empty one and with no
+	// message at all for a failed one.
+	t.Run("the job reads go.mod's Go once and hands the value on", func(t *testing.T) {
 		t.Parallel()
 
-		step, _, _, ok := auditGovulncheckInstall(steps)
+		for _, problem := range auditGoModGoOncePerJob(t, steps) {
+			t.Error(problem)
+		}
+	})
+
+	// The install and modules steps' scripts are shell the steps run, so nothing
+	// in them may be a ${{ }} expression: Actions expands that before the shell
+	// starts, and the go.mod version these steps read is no value an expression
+	// could name (issues #710 and #713).
+	t.Run("the install and modules steps' scripts hold no ${{ }} expression", func(t *testing.T) {
+		t.Parallel()
+
+		install, _, _, ok := auditGovulncheckInstall(steps)
 		if !ok {
 			t.Fatalf("%s's checks job holds no go install of %s@: the step's script is what this case reads (issue #710)",
 				auditWorkflow, auditGovulncheckModule)
 		}
 
-		for _, line := range auditStepScript(t, step) {
-			if strings.Contains(line, "${{") {
-				t.Errorf("%s's checks job, step %q, holds %q: a ${{ }} expression is expanded before the step's shell runs, so what it names is no value the step reads from go.mod (issue #710)",
-					auditWorkflow, step.name, strings.TrimSpace(line))
+		modules, ok := auditGoModulesStep(steps)
+		if !ok {
+			t.Fatalf("%s's checks job holds no %q step: that step is the one that reads the version the install step checked, and its script is what this case reads (issue #713)",
+				auditWorkflow, auditGoModulesStepName)
+		}
+
+		for _, step := range []auditJobStep{install, modules} {
+			for _, line := range auditStepScript(t, step) {
+				if strings.Contains(line, "${{") {
+					t.Errorf("%s's checks job, step %q, holds %q: a ${{ }} expression is expanded before the step's shell runs, so what it names is no value the step reads from go.mod, and the version these steps share reaches the shell through the step's env: and through $GITHUB_ENV alone (issues #710 and #713)",
+						auditWorkflow, step.name, strings.TrimSpace(line))
+				}
 			}
 		}
 	})
