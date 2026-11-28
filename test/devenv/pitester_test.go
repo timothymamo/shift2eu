@@ -1656,6 +1656,14 @@ func TestPiTesterDropsTheSessionDirArguments(t *testing.T) {
 			passed:  piTesterArgs,
 		},
 		{
+			// A bare --session-dir as the last argument has no value to take: the wrapper drops the flag alone,
+			// so pi is never handed a flag missing its value while the wrapper's own --session-dir stands.
+			name:    "a bare --session-dir last, with no value",
+			args:    append(slices.Clone(piTesterArgs), "--session-dir"),
+			dropped: 1,
+			passed:  piTesterArgs,
+		},
+		{
 			name:   "an argument that only starts the same way is passed on",
 			args:   []string{"--session-directory=" + invented},
 			passed: []string{"--session-directory=" + invented},
