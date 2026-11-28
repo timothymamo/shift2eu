@@ -398,7 +398,7 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 
 	wantAggregateLines := []string{
 		"name: Lint",
-		"needs: [lint-target, lint-shell, coauthor-trailers]",
+		"needs: [lint-target, lint-shell]",
 		"if: ${{ !cancelled() }}",
 	}
 
@@ -416,9 +416,12 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 	for _, want := range []struct{ key, value string }{
 		{"name", "Lint"},
 		// lint-shell runs shellcheck and actionlint once (issue #164): the
-		// Lint check gates it as it gates the matrix, and coauthor-trailers
-		// (issue #663) too, so the required check needs no new name.
-		{"needs", "[lint-target, lint-shell, coauthor-trailers]"},
+		// Lint check gates it as it gates the matrix, so the required check
+		// needs no new name. It needs no co-author job (issue #723): that
+		// check is coauthor-trailers.yml's own and required on its own, so
+		// the Lint check must report nothing about it, which a Lint that
+		// still waited on it would either block or report wrongly.
+		{"needs", "[lint-target, lint-shell]"},
 		// Not always(): a run cancelled by a newer push must not report a red
 		// Lint, and a failed or skipped entry still runs this job, which fails.
 		{"if", "${{ !cancelled() }}"},
@@ -461,7 +464,6 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 	wantExactLines(t, fmt.Sprintf("env: block of the lint job's step on line %d", step.num), stepEnv, []string{
 		"RESULT: ${{ needs.lint-target.result }}",
 		"SHELL_RESULT: ${{ needs.lint-shell.result }}",
-		"COAUTHOR_RESULT: ${{ needs.coauthor-trailers.result }}",
 	})
 
 	run, ok := ciBlock(step.lines, "run")
@@ -489,19 +491,14 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 		`echo "lint-shell finished with result '$SHELL_RESULT', want 'success'" >&2`,
 		`exit 1`,
 		`fi`,
-		`if [ "$COAUTHOR_RESULT" != "success" ]; then`,
-		`echo "coauthor-trailers finished with result '$COAUTHOR_RESULT', want 'success'" >&2`,
-		`exit 1`,
-		`fi`,
 	}
 
 	if diff := cmp.Diff(wantScript, script); diff != "" {
-		t.Errorf("the lint job's run: script on line %d (-want +got):\n%s\nWant a non-success result of the matrix or of lint-shell to fail the Lint check, and nothing else",
+		t.Errorf("the lint job's run: script on line %d (-want +got):\n%s\nWant a non-success result of the matrix or of lint-shell to fail the Lint check, and nothing else: the co-author check is its own required workflow (issue #723), so no result of it can excuse or fail this one",
 			step.num, diff)
 	}
 
 	checkLintShellJob(t, jobs)
-	checkCoAuthorTrailersJob(t, jobs)
 }
 
 // checkCoAuthorTrailersJob pins the coauthor-trailers job the Lint check needs
