@@ -412,25 +412,34 @@ var publicTLDs = []string{
 var exampleDomains = []string{"example.com", "example.net", "example.org"}
 
 // providerDomains are the public domains of the sources, the targets and the
-// tools this repository names, and the project's own (its site and the contact
-// address every PDF report's banner shows, PRD #584 milestone 1b). Their apex
-// and a name exactly one label below it (a service's endpoint) are no finding;
-// a deeper name is one a customer chose (a bucket, a database, a registry), the
-// value most likely to be real.
+// tools this repository names. Their apex and a name exactly one label below
+// it (a service's endpoint) are no finding; a deeper name is one a customer
+// chose (a bucket, a database, a registry), the value most likely to be real.
 var providerDomains = []string{
 	"amazon.com", "amazonaws.com", "azure.com", "azure.net", "microsoft.com", "windows.net",
 	"google.com", "googleapis.com",
 	"ovh.com", "ovh.net", "ovhcloud.com", "scaleway.com", "scw.cloud", "upcloud.com",
 	"github.com", "githubusercontent.com", "ghcr.io", "go.dev", "golang.org",
-	"shift2eu.com",
 }
 
-// isAllowedHost reports whether host, lower-case, is an example domain's name
-// or a provider's own endpoint (scanLine).
+// ownHosts are the project's own names, matched exactly: its site's apex and
+// www, which the contact address every PDF report's banner shows
+// (info@shift2eu.com) also ends in (PRD #584 milestone 1b). The project serves
+// no other name, so unlike a provider's domain no label below it is allowed:
+// x.shift2eu.com is no endpoint of a service but a name someone chose, and
+// a finding.
+var ownHosts = []string{"shift2eu.com", "www.shift2eu.com"}
+
+// isAllowedHost reports whether host, lower-case, is an example domain's name,
+// one of the project's own names or a provider's own endpoint (scanLine).
 func isAllowedHost(host string) bool {
 	if slices.ContainsFunc(exampleDomains, func(domain string) bool {
 		return host == domain || strings.HasSuffix(host, "."+domain)
 	}) {
+		return true
+	}
+
+	if slices.Contains(ownHosts, host) {
 		return true
 	}
 
