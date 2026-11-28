@@ -187,16 +187,20 @@ defined in `.dot-agent-deck.toml`: **orchestrator**, **coder**, **tester**, **re
 | releaser | Claude Code, Sonnet | `pr-create`, `release-tag` |
 
 Tests and implementation come from different model families on purpose (`docs/adr/0003-...`).
-Skills live only in `.claude/skills`: Claude Code finds them there, and pi loads them through
-`.pi/settings.json` (which needs `pi --approve`). Keep skills agent-neutral: refer to files and shell
+Skills live only in `.claude/skills`: Claude Code finds them there, and the tester's pi loads them by
+`--skill` (its wrapper starts pi with `--no-approve --no-extensions`, issue #702; `.pi/settings.json` names
+them only for a pi run by hand with `--approve`). Keep skills agent-neutral: refer to files and shell
 commands, never to one agent's built-in tools. Rule 3 has a second layer in both agents: the deny rules of
-`.claude/settings.json`, and pi's project extension `.pi/extensions/deny-env-printing.ts`, which refuses
-the commands `.pi/deny-env-printing.json` lists (ADR 0044). The tester starts through
+`.claude/settings.json`, and in pi the installed copy of `.pi/extensions/deny-env-printing.ts`, which
+refuses the commands `.pi/deny-env-printing.json` lists (ADR 0044). The tester starts through
 `/usr/local/lib/shift2eu/pi-tester/pi-tester.sh`, a root-owned copy of `dev/pi-tester.sh` and of the
 refusal's two files that `dev/lima.yaml` installs (issue #692), which does not use the unit folder's copies
-for its checks or for `--extension` and names them in one line (pi still loads the project's
-`.pi/extensions`, a residual, issue #702), keeps the other agents' keys out of pi's environment (and, with its marker, out of login shells)
-and refuses to start pi unless node loads the installed extension (issue #662). After a merge that changes
+for its checks or for `--extension` and names them in one line. The wrapper starts pi with `--no-approve
+--no-extensions` (issue #702), so pi applies no trust-gated project setting (it still reads
+`.pi/settings.json` as data before trust) and discovers no extension, and loads only the installed refusal
+and the deck's extension by `--extension`; it drops an `--approve` or `-a` with one line, keeps the other
+agents' keys out of pi's environment (and, with its marker, out of login shells) and refuses to start pi
+unless node loads the installed extension (issue #662). After a merge that changes
 any of the three files the maintainer runs `make vm-pi-tester` (or rebuilds the VM); agents never do. It
 still runs as the same user, so the keys file and the App token file stay readable to it, guarded only by
 the deny patterns.

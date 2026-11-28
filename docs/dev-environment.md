@@ -3307,9 +3307,13 @@ mode already lets routine work run and still checks risky actions. Never use it 
 directly on the Mac.
 
 pi, which runs the tester, has no permission prompts at all: it reads, edits and runs commands without
-asking. Its `--approve` flag trusts the project for that process without a trust prompt, so pi loads the
-project's `.pi/settings.json` (and with it the skills) and its extension
-`.pi/extensions/deny-env-printing.ts`, which refuses a bash command that prints the environment (the
+asking. The tester's wrapper starts it with `--no-approve --no-extensions` (issue #702): pi trusts no
+project, so it applies no trust-gated setting of `.pi/settings.json` (whose `shellCommandPrefix`, `packages`
+or `npmCommand` could run commands the refusal never sees), and discovers no extension; it still reads that
+file as data before trust (`sessionDir`, the startup UI, first-time setup). It loads exactly the root-owned installed copy
+of `.pi/extensions/deny-env-printing.ts` and the deck's own extension
+(`~/.pi/agent/extensions/dot-agent-deck`) by `--extension`, and the skills of the unit folder's
+`.claude/skills` by `--skill`. The refusal refuses a bash command that prints the environment (the
 patterns in `.pi/deny-env-printing.json`, `env VAR=value cmd` allowed) and a file tool call on a path
 under `/proc` or `~/.config/dot-agent-deck`, or naming `daemon.env` or that directory
 ([ADR 0044](adr/0044-refuse-printing-the-environment-in-pi-with-a-project-extension.md)). That refusal
@@ -3327,8 +3331,15 @@ an agent can write (issue #692, ADR 0044's amendment of 2026-11-27). The wrapper
 files and hands pi `--extension` with the installed extension; a copy of any of the three in the unit's
 folder that is missing or differs is not used for the checks or for `--extension`, and the pane's stderr
 shows one line naming the project and installed paths and `make vm-pi-tester`; the line is expected on a
-branch that changes one of the three files. pi still loads the project's `.pi/extensions` beside the
-installed extension (a residual, issue #702). Lima runs provisioning on every boot, so it installs the three
+branch that changes one of the three files. pi loads no extension and no trusted setting of the project
+(`--no-extensions`, `--no-approve`, issue #702); the skills it reads by `--skill` are still the branch's text.
+What stays open (ADR 0044, What is left): pi reads the project's settings as data before trust and runs its
+migrations there (a branch's `.pi/hooks` or `.pi/tools` makes it wait for a key; a follow-up can pin
+`--session-dir`); the user-level config under `~/.pi/agent` (`settings.json`, `models.json`, `SYSTEM.md`,
+`APPEND_SYSTEM.md`, `AGENTS.md`) is always trusted and writable by any process of the same uid, so a write
+there runs at the next tester start; and the deck's tester command in `.dot-agent-deck.toml` controls pi's
+later arguments, pinned word for word by `TestPiTesterCommandRunsTheLaunchWrapper`.
+Lima runs provisioning on every boot, so it installs the three
 files as one set, guarded on the installed wrapper, which both installers write last and which so marks a
 complete installation: with the wrapper there a boot installs nothing and keeps what `make vm-pi-tester`
 installed last; without it, provisioning installs all three from the template, over any deny file already
@@ -3351,7 +3362,24 @@ boundary against the VM user, who has sudo. The script:
   default export and compiles every pattern of the list with `new RegExp` (no node refuses too). A tester
   pane that stops with `pi-tester: ... the tester is not started` has a broken or missing refusal, or no
   node: fix what it names, never start pi by hand around it;
-- starts pi under `env -i` with only the variables it lists, each with its reason: `DEEPSEEK_API_KEY`,
+- drops every argument that is exactly `--approve` or `-a`, printing one line
+  `pi-tester: argument <arg> dropped: ...` for each, and starts pi without it: a unit cut before issue #702's
+  merge still passes `--approve` from its `.dot-agent-deck.toml`, and the last of `--approve` and
+  `--no-approve` would win (issue #702). After a `--` pi reads it as message text, so it could not re-trust
+  the project there; it is dropped there too only to keep the rule simple, as is a `-a` given as another
+  option's value (`--name -a`), which the deck never passes;
+- refuses to start, exiting 1, when `HOME` is not an absolute path, and when pi's agent directory
+  `~/.pi/agent`, whose settings pi always trusts, is reached through a symbolic link (`~/.pi` or itself),
+  is no directory, or lies physically (`cd -P`, `pwd -P`) in the working directory, so a `HOME` spelled
+  `<parent>/./<unit>/h`, `<parent>//<unit>/h` or with a `..` before the unit folder's name, or one that
+  reaches the unit folder through a symbolic link, is refused too;
+- refuses to start, exiting 1, when the deck's pi extension `~/.pi/agent/extensions/dot-agent-deck` lies in
+  the working directory by its spelling or its physical path, is reached through a symbolic link (itself or
+  `~/.pi/agent/extensions`), is no directory or holds no `index.ts`, `index.js` or `package.json` that is a
+  regular file and no symbolic link; the message names the step that writes it,
+  `dot-agent-deck orchestrator setup`, after which the pane is restarted;
+- starts pi as `pi --no-approve --no-extensions --extension <installed refusal> --extension <deck extension>
+  --skill <unit folder>/.claude/skills <the remaining arguments>` under `env -i` with only the variables it lists, each with its reason: `DEEPSEEK_API_KEY`,
   `HOME`, `PATH`, the terminal, locale, `TMPDIR` and `XDG_*` variables, and the deck's pane variables
   (`DOT_AGENT_DECK_PANE_ID`, `DOT_AGENT_DECK_PANE_CAPABILITY`, the socket and the like) that its pi
   extension and `dot-agent-deck work-done` need, plus the marker `SHIFT2EU_PI_TESTER=1`, which makes
@@ -3384,6 +3412,15 @@ The refusal's limits and costs (ADR 0044, the amendment's consequences):
 
 A changed tester command needs the maintainer's approval in the deck (`dot-agent-deck trust`) before a
 tester pane starts with it.
+
+After merging issue #702's change, which changes both the wrapper and the tester command (it drops
+`--approve`), the maintainer runs, from the host clone: `make vm-pi-tester`, so the installed wrapper starts
+pi with `--no-approve --no-extensions`, and `dot-agent-deck trust approve` for the changed tester command.
+Until `make vm-pi-tester` runs, the installed wrapper is the old one, which still passes on `--approve` from a
+unit cut before the merge. In the window right after the merge, a unit with the new tester command (no
+`--approve`) run by the old installed wrapper (no `--no-approve`, no `--skill`) leaves pi to a saved trust
+decision or a trust prompt and loads no skills, so an unattended tester pane could stall at the prompt or
+run without skills: run `make vm-pi-tester` right after the merge.
 
 ## Containers and image verification
 
