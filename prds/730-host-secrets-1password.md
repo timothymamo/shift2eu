@@ -1,6 +1,6 @@
 # PRD #730: The agent host's secrets in 1Password instead of the macOS Keychain
 
-**Status:** Draft; decisions 1 to 10 open for the maintainer
+**Status:** Draft; decisions 1, 3, 4 and 6 to 9 answered by the maintainer, 2026-11-28; 2, 5 and 10 open
 **Issue:** #730
 
 ## Problem
@@ -58,7 +58,7 @@ outage and switch back to the Keychain.
 | Hosts | The Mac host that runs the VM and its token refresher | Debian or any other Linux host (the maintainer: unlikely, never planned); the admin machine's own credentials, beyond the one-time steps it runs |
 | shift2eu changes | `docs/dev-environment.md` (Credentials, The host clone's `.envrc` lines, Troubleshooting credentials, the refresh and account mode where they name the key's backup); the Makefile's host targets (`VM_ENV` refusals, `VM_SHELL_ENV`, the refresh's environment, the refusal hint); `.claude/settings.json` and `.pi/deny-env-printing.json` deny entries for `op`; `test/devenv` tests; one ADR | The product (`cmd/`, `internal/`, `site/`), `infra/`, CI workflows |
 | Stays on the host (the maintainer's private host-config repository, not shift2eu) | The switch script `agent-host-secret <repo> <name>` and its backend setting (`keychain` or `1password`); the per-repo env file of secret references; the service account's token file; the host bootstrap and its `new-project` step | Designing the bootstrap, `new-project` or the separate macOS setup user (this PRD only names what they need from 1Password) |
-| Secrets | The five above | Cloud credentials for integration tests (none exist yet; they will follow the same rule when they do); the maintainer's admin token and personal GitHub login |
+| Secrets | Those in the two tables above | Cloud credentials for integration tests (none exist yet; they will follow the same rule when they do); the maintainer's admin token and personal GitHub login |
 
 shift2eu never calls `op` itself: nothing in the Makefile or `dev/` reads 1Password. Every target that
 needs a secret keeps reading it from its environment, and the maintainer chooses what fills that
@@ -105,7 +105,8 @@ The host clone's `.envrc` keeps only what is not secret: `WORKSPACE_REPO`, the A
 ID, the key file's path (or, in account mode, the account and port). The secrets are listed in a per-repo
 env file of **secret references**, `op://<vault>/<item>/<field>` lines, kept in the host's config
 directory beside the token file, outside the workspace and outside the host clone. A reference names where
-a secret is, not its value, but the file stays out of git and out of anything the VM mounts all the same.
+a secret is, not its value, but the file stays out of shift2eu's git and out of anything the VM mounts all the same (whether
+it goes into the maintainer's private host-config repository is decision 10).
 
 The maintainer runs the commands that need secrets through the switch script, which for the `1password`
 backend amounts to:
@@ -259,8 +260,9 @@ Each criterion is observable from outside the code; `make check` runs the tests 
 - [ ] **AC7.** `.claude/settings.json` denies `op` commands and `.pi/deny-env-printing.json` lists `op`;
   the existing deny-rule tests cover the new entries, and `dev/lima.yaml` installs no `op`.
 - [ ] **AC8.** With sentinel values in every secret variable and the token, no host target's output,
-  the fake `limactl`'s recorded environment (but for the `VM_ENV` write's standard input) or a rendered
-  plist contains a sentinel.
+  the fake `limactl`'s recorded environment (but for the `VM_ENV` write's standard input), the
+  refresher's environment, a rendered plist, or (for the token's sentinel) a `daemon.env` written by a
+  replacing or a merging `make vm-env` contains a sentinel.
 - [ ] **AC9.** `docs/dev-environment.md` documents the `1password` and `keychain` backends, the `.envrc`
   with no secret lines, the env file of references, the one-command form, the targets that need it and
   those that never run under it, the token file, rotation, an outage, the rate limits with the figure
@@ -328,7 +330,9 @@ Each is the maintainer's alone; the recommendation is this PRD's.
    (d) Business. It sets the limits above and whether service accounts are offered at all.
    *Recommendation:* keep the plan you have if **Developer > Service accounts** is there: the tightest
    limits (1,000 a day for the account) are far above this use. Without it, Teams is the smallest plan
-   the docs name with 5,000 a day.
+   the docs name with 5,000 a day. *Answered by the maintainer, 2026-11-28: (b) Families*, which offers
+   service accounts. Its limits (rate-limits page): 1,000 reads an hour per token, and 1,000 reads and
+   writes together per 24 hours for the whole account, every service account of every repo included.
 2. **Service accounts, or your personal account with biometrics.** (a) a read-only service account per
    repo and host, its token in a file on the host; (b) your own account through the desktop app with Touch
    ID; (c) both: service accounts on the host, your own account on the admin machine for setup and
@@ -337,10 +341,12 @@ Each is the maintainer's alone; the recommendation is this PRD's.
    only the desktop app, nothing for SSH); creating vaults and service accounts needs a person anyway.
 3. **Vault layout.** (a) one vault per repo, `agent-host-<repo>`; (b) one vault per host for every repo.
    *Recommendation:* (a): service account vault access is immutable, so per-repo vaults let each project's
-   token read only its own secrets, and a leaked token costs one project.
+   token read only its own secrets, and a leaked token costs one project. *Accepted by the maintainer,
+   2026-11-28: (a).*
 4. **One service account per repo and host, or per host.** (a) `<host>-<repo>`, read-only on its one
    vault; (b) one per host on every repo vault. *Recommendation:* (a), your plan: the same blast-radius
    reason, well inside the 100 service accounts allowed; a second host gets its own, revoked on its own.
+   *Accepted by the maintainer, 2026-11-28: (a).*
 5. **Where the App key's backup lives.** (a) in the repo's host vault as `agents-app-key`, your starting
    plan; (b) in a vault only your personal account reads, never granted to a host's service account; (c)
    no backup: a lost key is replaced by generating a new one on the App's page. *Recommendation:* (b).
@@ -350,21 +356,23 @@ Each is the maintainer's alone; the recommendation is this PRD's.
    (b) keep them as the fallback, refreshed at every rotation; (c) keep only the service account's token in
    the Keychain instead of a file. *Recommendation:* (a), with the soak starting at M2's host steps; the
    fallback is then "restore the items from 1Password with your own account". (c) brings back the locked
-   Keychain over SSH; (b) means rotating every secret twice.
+   Keychain over SSH; (b) means rotating every secret twice. *Accepted by the maintainer, 2026-11-28: (a).*
 7. **The service account token's expiry and rotation.** (a) no expiry, rotated with the Claude token once
    a year and at once on any suspicion; (b) an expiry (the CLI's `--expires-in`) such as 90 days.
    *Recommendation:* (a), with the yearly rotation in the same calendar reminder as `claude setup-token`,
    and the item usage report read then. A run of `make vm-env` is always by hand, so an expired token
    shows as a refusal at the worst moment (a rebuild) without adding protection a rotation does not.
+   *Accepted by the maintainer, 2026-11-28: (a).*
 8. **How #644's Telegram pair reaches the VM.** (a) a host make target like PRD #646's
    `make vm-telemetry-key`, reading both from the environment and writing the sender's own file over
    standard input; (b) typed by hand in the VM. *Recommendation:* (a): it survives a rebuild, reuses the
-   same one-command switch and never touches `daemon.env`. #644 settles the details.
+   same one-command switch and never touches `daemon.env`. #644 settles the details. *Accepted by the
+   maintainer, 2026-11-28: (a).*
 9. **The setup user's Claude token, and who may create vaults.** (a) its token in a vault only your own
    account reads, read by you when the bootstrap needs it; (b) a service account for the setup user that
    may create vaults. *Recommendation:* (a): a service account cannot create service accounts, so the
    bootstrap needs you for that step anyway, and a write-capable token on the host would be the most
-   valuable thing on it.
+   valuable thing on it. *Accepted by the maintainer, 2026-11-28: (a).*
 10. **The env file of references: in the host-config repo or only on the host.** (a) committed to your
     private host-config repo (it holds names and `op://` paths, no value); (b) only on the host.
     *Recommendation:* (a): it is the list `new-project` writes and a rebuilt host needs, and it holds no
