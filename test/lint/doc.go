@@ -333,10 +333,9 @@
 // and passes github.sha..head.sha over the whole history with
 // SHIFT2EU_COAUTHOR_CHECK=require, so it never skips there and fails a range
 // that reads no commit (coAuthorCommitCount); every other run on a pull
-// request's shallow checkout skips. During the two-step rollout ci.yml's legacy
-// coauthor-trailers job also runs the check, from a detached worktree of the
-// base commit (issue #689); it checks issue #706's own pull request, and a
-// follow-up removes it once Co-author trailers (base) is required.
+// request's shallow checkout skips. ci.yml's legacy co-author job, which ran the
+// check from a detached worktree of the base commit (issue #689), is gone since
+// Co-author trailers (base) became required (issue #723).
 // TestCoAuthorFindings,
 // TestParseCoAuthorAllowList, TestCoAuthorRange, TestCoAuthorCommitCount and
 // TestCoAuthorAllowListFile pin its helpers and the list;

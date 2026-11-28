@@ -1,6 +1,11 @@
 # 0050. Run the co-author check from the base branch's workflow under pull_request_target
 
-- Status: Proposed
+- Status: Accepted. Amended 2026-11-28 (issue #723): the two-step rollout is done. Issue #706's pull
+  request (PR #711) added the workflow, the maintainer required `Co-author trailers (base)` on
+  2026-11-28, after the probe (PR #722, closed unmerged), and issue #723's pull request removed
+  `ci.yml`'s legacy `coauthor-trailers` job and `Lint`'s need of it (Decision, What the pin asserts,
+  Consequences). `ci.yml` holds no co-author job, `Co-author trailers (base)` is the only co-author
+  check, and the `${{` rule covers the job's whole block.
 - Date: 2026-11-27
 
 ## Context
@@ -117,7 +122,7 @@ does every workflow's.
   `persist-credentials: false`, the base copy of `test/lint`, the isolated git configuration. In the job,
   `${{ }}` appears only in `env:`. setup-go reads a plain `go.mod`, so the new workflow needs no
   exception for its `go-version-file`; PR #703's exception stays for the old job until the follow-up
-  removes both.
+  removes both (both removed by issue #723).
 - **Token and secrets.** Workflow-level `permissions: contents: read`, no job-level `permissions:`, no
   `secrets.` anywhere in the file, no `environment:`. The repository is public, so the fetch needs no
   credential.
@@ -137,9 +142,12 @@ does every workflow's.
      maintainer requires `Co-author trailers (base)`, and it is the first pull request checked by
      `main`'s definition alone.
 
+  Both steps are done (Status).
+
 ### What the pin asserts
 
-`test/architecture` pins the new workflow file exactly, and, for the transition, the old job in `ci.yml`:
+`test/architecture` pins the new workflow file exactly (and, until issue #723, pinned the old job in
+`ci.yml` for the transition):
 
 - `on:` holds `pull_request_target` alone, its `types:` exactly `[opened, synchronize, reopened,
   edited]`, and no other key (no `branches:`, `branches-ignore:`, `paths:`, `paths-ignore:`).
@@ -151,18 +159,22 @@ does every workflow's.
 - Exactly the four steps above, in that order, each with a closed set of keys and its `with:`, `env:` and
   `run:` held line by line, as PR #703's pin holds them today. The checkout has no `ref:` and no
   `repository:`. No step uses another action.
-- No `${{` in the job outside a step's `env:`, and the string `secrets.` nowhere in the file.
+- No `${{` anywhere in the job's whole block outside a step's `env:`: not in a step's `run:` or `with:`,
+  and not in a job-level key such as `if:`, `runs-on:`, `timeout-minutes:` or a job-level `env:`
+  (amended 2026-11-28, issue #723; PR #711's pin read the step lines only). The string `secrets.`
+  appears nowhere in the file.
 - A `run:` is either one plain line or a `|` block. `>`, `|-`, `|+`, `>-` and `>+` are refused (issue
   #706, part 2, through `ciRunScript`).
-- During the transition, `ci.yml`'s `coauthor-trailers` job keeps PR #703's pin (its four steps, `Lint`'s
-  `needs:` of `[lint-target, lint-shell, coauthor-trailers]`, its env and its script), and it is the
-  only job anywhere named `Co-author trailers`. The follow-up pull request turns this into: `ci.yml` has
-  no `coauthor-trailers` job and `Lint`'s `needs:` is exactly `[lint-target, lint-shell]`.
+- `ci.yml` has no `coauthor-trailers` job and `Lint`'s `needs:` is exactly `[lint-target, lint-shell]`
+  (amended 2026-11-28, issue #723; during the transition the old job kept PR #703's pin and `Lint`
+  needed it too).
 - A name guard over every other workflow under `.github/workflows/`, reading each job's name as a check
   run reports it (quoted, plain, or the job's id when it holds no `name:`): no name holds `(base)`; no
   name holds a `${{ }}` expression unless an allow list pins it (today only
-  `Lint ${{ matrix.goos }}/${{ matrix.goarch }} cgo=${{ matrix.cgo }}`); and the legacy name and job id
-  appear only on `ci.yml`'s `coauthor-trailers` job.
+  `Lint ${{ matrix.goos }}/${{ matrix.goarch }} cgo=${{ matrix.cgo }}`); and no job holds the retired
+  legacy name `Co-author trailers` or job id `coauthor-trailers`, `ci.yml`'s jobs included (amended
+  2026-11-28, issue #723: the guard's exception for the old job is gone with it). A plain name's
+  trailing comment is refused after a tab as after a space.
 
 This pin still runs from the pull request's own checkout, under the `Test` job of `ci.yml`. It does not
 close the gap: the trigger does. A pull request can loosen the pin, but it cannot change the run that
@@ -236,7 +248,8 @@ The repository side is this pull request and its follow-up. The ruleset is the m
    Re-running their old jobs cannot help, because no run exists. Their `Co-author trailers` runs, from
    their own `ci.yml`, do not count: the new check has a different name.
 5. **Merge the follow-up pull request** that removes the old job, only after step 3. It is the first pull
-   request checked by `main`'s definition alone.
+   request checked by `main`'s definition alone. (Done: steps 1 to 3 on 2026-11-28, with PR #711 and the
+   probe PR #722; the follow-up is issue #723's pull request.)
 6. **Before every merge from step 3 on,** check that the passing `Co-author trailers (base)` came from
    `main`'s workflow (the residual risk below: the required check matches the name and the app only).
    With `<head sha>` the pull request's head commit and `<n>` its number. The query lists every run of the name
@@ -314,7 +327,8 @@ pin** step.
   before merging it (Maintainer steps, step 1). The new workflow first runs on pull requests opened or
   updated after the merge.
 - The co-author check reports as its own required check, `Co-author trailers (base)`. Until the
-  follow-up merges it also still reports inside `Lint`, through the old job.
+  follow-up merged it also still reported inside `Lint`, through the old job; since issue #723 it
+  reports there no longer, and `Lint` gates only the lint matrix and `lint-shell`.
 - A re-run of a `pull_request_target` run replays the original event, with the same `github.sha` and
   head, so it only repeats a flaky failure. A run against `main`'s newer tip needs a new event (a push,
   **Update branch**, a title edit, or a close and reopen).
