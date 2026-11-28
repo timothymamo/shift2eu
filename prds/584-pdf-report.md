@@ -703,7 +703,7 @@ they name the operator table (below) or must expect the banner's text where it s
   font resource name and an integer; `Tm` with six integers; `Tj` with a literal string; `re` with four
   integers; `w` with one decimal; `rg` and `RG` with three decimals; `m` and `l` with two decimals. `G`,
   milestone 1's grey operator, is gone. A test pins the table's keys and shapes.
-- [ ] *Unit:* a content stream built in-test with an operator outside the table fails the reader, for
+- [x] *Unit:* a content stream built in-test with an operator outside the table fails the reader, for
   each of `G`, `g`, `k`, `K`, `B`, `b`, `c`, `v`, `y`, `F`, `f*`, `W`, `n`, `J`, `j`, `d`, `cs`, `scn`, `sh`,
   `gs`, `Do`, `BI`, `TJ`, `'` and `"`; so does a listed operator with an operand of the wrong shape (an
   integer for `rg`, a decimal for `re`, a missing or an extra operand).
@@ -723,13 +723,13 @@ they name the operator table (below) or must expect the banner's text where it s
 - [x] *Unit:* icons: each badge's icon is its fit's shape: three points stroked for direct; a 16-sided
   closed polygon stroked plus a filled half for partial; two separate stroked lines for none. The
   blockers box's heading carries the filled triangle. No icon is a font glyph.
-- [ ] *Unit:* the banner: every golden holds, once, the four runs "Planning a migration?", "Questions
+- [x] *Unit:* the banner: every golden holds, once, the four runs "Planning a migration?", "Questions
   about your results, or how to move forward?", the text paragraph (its wrapped lines joined, the ASCII
   apostrophe included) and "info@shift2eu.com", in that order, all on one page and inside one `--mast`
   rectangle, the address inside a `--gold` one. In a single-target golden they follow the last section
   from Summary to Cost estimate that the golden shows and precede *Resource details*; in a comparison
   golden they follow the *Comparison* section and precede the first per-target section.
-- [ ] *Unit:* boxes across pages, in the long golden and the hostile ones and in a layout test that
+- [x] *Unit:* boxes across pages, in the long golden and the hostile ones and in a layout test that
   builds a box near a page's end: a box's heading or header row is never the last text on a page; every
   text run of a box that spans pages lies inside a fill or outline of that box drawn on its own page; the
   banner, a tile row and a workload card that fits a page's body never span two pages.

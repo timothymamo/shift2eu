@@ -13,6 +13,7 @@ package pdfreport_test
 // and no text may be lost or cut at the break.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -238,4 +239,347 @@ func checkLayoutDrawsItsTextOnce(t *testing.T, filler, lines int, pages [][]pdfr
 		t.Fatalf("layout: %d filler line(s) and a block heading of %d line(s) draw %d characters over %d page(s), want %d: the document lost, cut or repeated text at its page breaks",
 			filler, lines, len(got), len(pages), len(want))
 	}
+}
+
+// The sweep of TestLayoutKeepsABoxHeaderOffTheFootOfAPage: a box of boxLines
+// item lines, drawn after a number of body lines that walks the box's header
+// down the page.
+const (
+	// boxFillerLines is how many body lines the sweep draws before the box: one
+	// more moves the box down by one body line (12 pt), from the top of the page
+	// to its foot, past the point where the heading and its first item no longer
+	// both fit and the box moves whole to the next page.
+	boxFillerLines = 56
+	// boxLines is how many item lines the box holds: more than a page's body, so
+	// a box that starts high on a page continues on the next one.
+	boxLines = 70
+)
+
+// boxHeadingText heads the box of the sweep.
+const boxHeadingText = "A boxed section near the foot of a page"
+
+// boxItemText returns the text of the box's item at index, counted from 0.
+func boxItemText(index int) string {
+	return fmt.Sprintf("Box line %d.", index+1)
+}
+
+// The box's fill is the report's own content area (layout.go's marginLeft and
+// contentWidth), which the sweep's document draws the box across.
+const (
+	boxBodyLeft  = 50
+	boxBodyWidth = 495
+)
+
+// TestLayoutKeepsABoxHeaderOffTheFootOfAPage pins the layout's box rule at the
+// level that can put a box's header at the foot of a page: a box's heading is
+// never the last text on a page, and a box that continues on the next page has
+// its frame drawn on every page its text reaches, so no text of it stands
+// outside its fill.
+//
+// Criterion (PRD #584 milestone 1b, Unit): boxes across pages — in a layout test
+// that builds a box near a page's end, a box's heading is never the last text on
+// a page, and every text run of a box that spans pages lies inside a fill of that
+// box drawn on its own page.
+func TestLayoutKeepsABoxHeaderOffTheFootOfAPage(t *testing.T) {
+	t.Parallel()
+
+	moved, spanning := 0, 0
+
+	for filler := 0; filler <= boxFillerLines; filler++ {
+		pages, shapes := drawBoxLayout(filler)
+
+		checkBoxLinesAreDrawnOnce(t, filler, pages)
+
+		headingPage := -1
+
+		for index, page := range pages {
+			if last := lowestLine(page); len(last) > 0 && last[0].Text == boxHeadingText {
+				t.Errorf("layout: %d filler line(s) draw %d page(s), and page %d ends its text with the box's heading, so the heading alone sits at the foot of the page: a box's heading never ends a page (PRD, Look, Boxes across pages)",
+					filler, len(pages), index+1)
+			}
+
+			for _, run := range page {
+				if !isBoxRun(run) {
+					continue
+				}
+
+				if run.Text == boxHeadingText {
+					headingPage = index
+				}
+
+				if !insideTheBoxFrame(shapes[index], run) {
+					t.Errorf("layout: %d filler line(s) draw the box's line %s on page %d outside the box's own fill, so the box is not drawn again on that page (PRD, Look, Boxes across pages)",
+						filler, shortened(run.Text), index+1)
+				}
+			}
+		}
+
+		if headingPage < 0 {
+			t.Fatalf("layout: %d filler line(s) draw no box heading", filler)
+		}
+
+		if headingPage > 0 {
+			moved++
+		}
+
+		if boxLinePages(pages) > 1 {
+			spanning++
+		}
+	}
+
+	if moved == 0 {
+		t.Fatalf("no case of the sweep of %d filler line counts moved the box to a page after its filler, so the sweep never reached the page break this test is about",
+			boxFillerLines)
+	}
+
+	if spanning == 0 {
+		t.Fatalf("no case of the sweep of %d filler line counts drew the box on more than one page, so no box of the sweep continued on a new page",
+			boxFillerLines)
+	}
+
+	t.Logf("%d cases of the sweep moved the box to a new page; %d drew it on more than one page", moved, spanning)
+}
+
+// drawBoxLayout draws the test's document: filler body lines, then the box.
+func drawBoxLayout(filler int) ([][]pdfreport.TestRun, [][]pdfreport.TestShape) {
+	d := pdfreport.NewTestDocument()
+
+	for range filler {
+		d.Body(fillerText)
+	}
+
+	d.Box(boxHeadingText, boxLines)
+
+	return d.Pages(), d.Shapes()
+}
+
+// isBoxRun reports whether the run belongs to the box of the sweep: its heading,
+// one of its item lines or an item's bullet.
+func isBoxRun(run pdfreport.TestRun) bool {
+	return run.Text == boxHeadingText || strings.HasPrefix(run.Text, "Box line ") || run.Text == "•"
+}
+
+// insideTheBoxFrame reports whether the run starts inside a fill of the box's
+// own width on the run's page.
+func insideTheBoxFrame(shapes []pdfreport.TestShape, run pdfreport.TestRun) bool {
+	for _, shape := range shapes {
+		if shape.Op != "f" {
+			continue
+		}
+
+		for _, rect := range shape.Rects {
+			if rect.X != boxBodyLeft || rect.W != boxBodyWidth {
+				continue
+			}
+
+			if run.X >= rect.X && run.X <= rect.X+rect.W && run.Y >= rect.Y && run.Y <= rect.Y+rect.H {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// boxLinePages returns how many pages draw a line of the box.
+func boxLinePages(pages [][]pdfreport.TestRun) int {
+	count := 0
+
+	for _, page := range pages {
+		for _, run := range page {
+			if isBoxRun(run) {
+				count++
+
+				break
+			}
+		}
+	}
+
+	return count
+}
+
+// checkBoxLinesAreDrawnOnce fails the test when a page break inside the box lost
+// or repeated one of its lines.
+func checkBoxLinesAreDrawnOnce(t *testing.T, filler int, pages [][]pdfreport.TestRun) {
+	t.Helper()
+
+	counts := make(map[string]int)
+
+	for _, page := range pages {
+		for _, run := range page {
+			counts[run.Text]++
+		}
+	}
+
+	if got := counts[boxHeadingText]; got != 1 {
+		t.Errorf("layout: %d filler line(s) draw the box's heading %d time(s), want once", filler, got)
+	}
+
+	for index := range boxLines {
+		if got := counts[boxItemText(index)]; got != 1 {
+			t.Errorf("layout: %d filler line(s) draw the box's item %s %d time(s), want once: a page break inside a box must neither lose nor repeat a line",
+				filler, boxItemText(index), got)
+
+			break
+		}
+	}
+}
+
+// The sweep of TestLayoutKeepsATileRowAndAWorkloadCardWhole: a block that moves
+// whole, drawn after a number of body lines that walks it down the page.
+const (
+	// blockFillerLines is how many body lines the sweep draws before the block:
+	// the same sweep helps the box of TestLayoutKeepsABoxHeaderOffTheFootOfAPage,
+	// one more line moving the block down by one body line (12 pt).
+	blockFillerLines = 56
+	// cardHeadingText heads the workload card of the sweep.
+	cardHeadingText = "A workload card near the foot of a page"
+	// cardLines is how many body lines the card holds: few enough that the card
+	// fits a page's body, so it moves whole rather than continuing.
+	cardLines = 3
+)
+
+// tileTexts are the words and figures the tile row of the sweep draws: the three
+// fits' badges, the counts, the two captions.
+var tileTexts = map[string]bool{
+	"Direct": true, "Partial": true, "None": true,
+	"1": true, "2": true, "3": true, "6": true,
+	"of 6 resources": true, "resources in total": true,
+}
+
+// TestLayoutKeepsATileRowAndAWorkloadCardWhole pins the layout's rule that a tile
+// row and a workload card that fits a page's body move whole to the next page:
+// none of their text reaches two pages. A report's Workloads section can put a
+// card at the foot of a page, but no report of today's data puts the tile row
+// there, so only the layout walks it through a page break.
+//
+// Criterion (PRD #584 milestone 1b, Unit): boxes across pages — the banner, a tile
+// row and a workload card that fits a page's body never span two pages.
+func TestLayoutKeepsATileRowAndAWorkloadCardWhole(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a tile row", func(t *testing.T) {
+		t.Parallel()
+
+		moved := 0
+
+		for filler := 0; filler <= blockFillerLines; filler++ {
+			pages := drawTilesLayout(filler)
+
+			if page := blockPage(t, filler, "tile row", pages, isTileRun); page > 0 {
+				moved++
+			}
+		}
+
+		if moved == 0 {
+			t.Fatalf("no case of the sweep of %d filler line counts moved the tile row to a page after its filler, so the sweep never reached the page break this test is about",
+				blockFillerLines)
+		}
+
+		t.Logf("%d cases of the sweep moved the tile row to a new page", moved)
+	})
+
+	t.Run("a workload card", func(t *testing.T) {
+		t.Parallel()
+
+		moved := 0
+
+		for filler := 0; filler <= blockFillerLines; filler++ {
+			pages, shapes := drawCardLayout(filler)
+
+			page := blockPage(t, filler, "workload card", pages, isCardRun)
+			if page > 0 {
+				moved++
+			}
+
+			for _, run := range pages[page] {
+				if !isCardRun(run) {
+					continue
+				}
+
+				if !insideTheBoxFrame(shapes[page], run) {
+					t.Errorf("layout: %d filler line(s) draw the card's line %s on page %d outside the card's own fill",
+						filler, shortened(run.Text), page+1)
+				}
+			}
+		}
+
+		if moved == 0 {
+			t.Fatalf("no case of the sweep of %d filler line counts moved the workload card to a page after its filler, so the sweep never reached the page break this test is about",
+				blockFillerLines)
+		}
+
+		t.Logf("%d cases of the sweep moved the workload card to a new page", moved)
+	})
+}
+
+// drawTilesLayout draws the test's document: filler body lines, then the tile
+// row.
+func drawTilesLayout(filler int) [][]pdfreport.TestRun {
+	d := pdfreport.NewTestDocument()
+
+	for range filler {
+		d.Body(fillerText)
+	}
+
+	d.Tiles()
+
+	return d.Pages()
+}
+
+// drawCardLayout draws the test's document: filler body lines, then the card.
+func drawCardLayout(filler int) ([][]pdfreport.TestRun, [][]pdfreport.TestShape) {
+	d := pdfreport.NewTestDocument()
+
+	for range filler {
+		d.Body(fillerText)
+	}
+
+	d.Card(cardHeadingText, cardLines)
+
+	return d.Pages(), d.Shapes()
+}
+
+// isTileRun reports whether the run belongs to the tile row of the sweep.
+func isTileRun(run pdfreport.TestRun) bool {
+	return tileTexts[run.Text]
+}
+
+// isCardRun reports whether the run belongs to the card of the sweep: its
+// heading, one of its lines or a line's bullet.
+func isCardRun(run pdfreport.TestRun) bool {
+	return run.Text == cardHeadingText || strings.HasPrefix(run.Text, "Card line ") || run.Text == "•"
+}
+
+// blockPage returns the page every run of a block that moves whole is drawn on,
+// and fails the test for a block whose text reaches a second page.
+func blockPage(t *testing.T, filler int, name string, pages [][]pdfreport.TestRun, isBlock func(pdfreport.TestRun) bool) int {
+	t.Helper()
+
+	found := -1
+
+	for index, page := range pages {
+		for _, run := range page {
+			if !isBlock(run) {
+				continue
+			}
+
+			if found < 0 {
+				found = index
+
+				continue
+			}
+
+			if index != found {
+				t.Fatalf("layout: %d filler line(s) draw the %s on page %d and page %d: a block that fits a page's body never spans two pages (PRD, Look, Boxes across pages)",
+					filler, name, found+1, index+1)
+			}
+		}
+	}
+
+	if found < 0 {
+		t.Fatalf("layout: %d filler line(s) draw no %s", filler, name)
+	}
+
+	return found
 }
