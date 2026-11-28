@@ -1,4 +1,5 @@
 name: Co-author trailers
+# Probe for PR #711 (issue #706): never merged.
 
 # The co-author trailer check (issues #663, #672, #689 and #706, ADR 0050): every Co-Authored-By trailer,
 # author address and committer address of the pull request's own commits must be one
