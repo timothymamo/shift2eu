@@ -68,7 +68,11 @@ import (
 // text-wide rule runs once per line, before any field sequence is read, so a line is
 // reported once; it refuses a denied flag's truncation as the sequence does, and
 // leaves the report to a sequence on the line that refuses it, so the message names
-// the command. `az rest` reads only as one GET of the management endpoint, with no
+// the command. Where no sequence on the line refuses it — the line's only sequence
+// is another CLI's read, as in `gcloud compute instances list --endpoint
+// https://example.com` — the text-wide refusal stands and names the first CLI whose
+// denied flag the field truncates (aws), and that read is still counted as
+// accepted: the line fails closed, as it does for a flag's full name. `az rest` reads only as one GET of the management endpoint, with no
 // resource, headers or body, and with its method flag spelt out.
 //
 // A single quote is no field separator, so a denied flag or an `az rest` flag that
@@ -218,7 +222,9 @@ var cloudCLIs = []cloudCLI{{
 	},
 	// `az rest --resource` addresses Microsoft Graph with the visitor's
 	// management token, and --headers and --body carry a request of the caller's
-	// choosing: no read passes any of them. The variables make the CLI skip TLS
+	// choosing: no read passes any of them. --body's short alias -b is refused
+	// in azRestReads, inside an az rest sequence only, since -b is a common short
+	// flag of other commands. The variables make the CLI skip TLS
 	// verification and trust another CA bundle where it has no flag to, and
 	// AZURE_CONFIG_DIR's config directory holds the cloud's endpoints and the
 	// caller's cached login.
@@ -393,7 +399,11 @@ func (c cloudCLI) denies(flag string) bool {
 // line, before the field loop; a line it refuses in full is reported once and not
 // read further, while scanText reports a truncation's problem only when no field
 // sequence on the line refuses it, so a truncation a read's own line gives keeps the
-// sequence's message, which names the command it stopped at. The name a field
+// sequence's message, which names the command it stopped at. A truncation no
+// sequence refuses, such as one on another CLI's read line, keeps this message,
+// which names the first CLI whose denied flag it truncates rather than the
+// command on the line, and the read it stands on is still counted as accepted:
+// the line fails either way, as it does for a full name. The name a field
 // gives ends at the first of the `:` and the `-`, `+` and `?` a parameter expansion
 // puts after it, whether or not a word follows the operator: a variable's name holds
 // none of them, so `${AWS_ENDPOINT_URL:-https://example.com}` reaches it as
@@ -444,8 +454,13 @@ func deniedToken(file string, line logicalLine) (problem string, denied, truncat
 // — `--u`, `--ur`, also with an inline value — is refused too, never completed to
 // `--url` or `--uri`: `--ur` is also a prefix of az rest's `--url-parameters` and
 // `--uri-parameters`, so what az's parser makes of it is nothing the check can rely
-// on, and a write it hid would skip the management-endpoint rule. The inline `=`
-// branches are a defence for reads called on unsplit words: the scan splits `=`
+// on, and a write it hid would skip the management-endpoint rule. A short URL flag
+// with its value run on — `-uhttps://example.com/x`, which argparse reads as `-u
+// https://example.com/x` — is refused as the method flag's run-on forms are, on the
+// management endpoint too. `-b`, az rest's short alias of the denied --body, is
+// refused here, with a value of its own or run on (`-bx`), and not in az's denied
+// flags, since -b is a common short flag of other commands that the text-wide rule
+// would then refuse everywhere. The inline `=` branches are a defence for reads called on unsplit words: the scan splits `=`
 // into a separator, so `--method=post` reaches it as `--method` and `post`.
 func azRestReads(words []string) (string, bool) {
 	var (
@@ -491,8 +506,19 @@ func azRestReads(words []string) (string, bool) {
 			}
 		case isURLFlagAbbreviation(name):
 			return azREST + " " + name, false
-		case isMethodAbbreviation(word):
+		case strings.HasPrefix(name, "-u"):
+			// A short URL flag with its value run on: `-u` alone took the case above.
 			return azREST + " " + word, false
+		case strings.HasPrefix(name, "-b"):
+			// az rest's short alias of the denied --body, alone or with its value
+			// run on.
+			return azREST + " " + name, false
+		case isMethodAbbreviation(word):
+			// A run-on short form, `-mpost` or an unsplit `-m=post`.
+			return azREST + " " + word, false
+		case isMethodAbbreviation(name):
+			// A truncation of --method with its value inline: `--meth=put`.
+			return azREST + " " + name, false
 		}
 	}
 
