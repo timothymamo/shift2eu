@@ -223,12 +223,14 @@ asset type on GCP, the Resource Manager type on Azure. Every zone is written wit
 |---|---|---|---|---|
 | AWS | `AWS::Route53::HostedZone` with `Config.PrivateZone` false | the same type with `PrivateZone` true; `AWS::Route53::HealthCheck`, `AWS::Route53Resolver::*`, `AWS::Route53Profiles::*` (from AWS Config, as today) | `route53 list-hosted-zones` (`--query` keeping `Id`, `Name` and `Config.PrivateZone`); per public zone, by its ID (`--hosted-zone-id "$id"`, never its name), `route53 get-dnssec` (`--query Status.ServeSignature` only, never the key-signing keys); for `dns-routing`, per public zone `route53 list-resource-record-sets --hosted-zone-id "$id"` reduced to a count of routed record sets, `--query 'length(ResourceRecordSets[?SetIdentifier \|\| HealthCheckId \|\| MultiValueAnswer \|\| TrafficPolicyInstanceId])'` (milestone 2 confirmed the predicate and added traffic-policy records), so no record's name, values, set identifier, health check ID or routing settings are written | `route53:ListHostedZones`, `route53:GetDNSSEC`; `route53:ListResourceRecordSets` optional, only for `dns-routing` |
 | GCP | `dns.googleapis.com/ManagedZone` with `visibility` `public` | the same type with visibility `private`; `dns.googleapis.com/Policy`, `dns.googleapis.com/ResponsePolicy` (from the asset search, as today) | The asset search's `ManagedZone` row stays the resource, as every GCP resource is (`gcp.jq`'s `details(...)` pattern); per project `gcloud dns managed-zones list --project="$project"` adds its details, `--format='json(kind,id,name,visibility,dnssecConfig.state)'` with the project added to each entry by the guide's `jq` filter (the list output carries no project; milestone 3 confirms), joined to the asset row on project and the zone's number (`id`: the asset row is `//dns.googleapis.com/projects/PROJECT_ID/managedZones/ZONE_NUMBER`, <https://docs.cloud.google.com/asset-inventory/docs/resource-name-format>; milestone 3 review), the inventory ID being the zone's name when it joins and the asset row's number when it does not; a zone missing from the list output stays `unclassified`. For `dns-routing`, per public zone `gcloud dns record-sets list --project="$project" --zone="$zone" --filter='routingPolicy:*' --format='value(type)'` reduced to a count of routed record sets, written with the project and the zone's number, never `rrdatas`, names or the policy | `roles/dns.reader` (read-only, "Provides read-only access to all Cloud DNS resources", <https://docs.cloud.google.com/dns/docs/access-control>); it includes `dns.resourceRecordSets.list`, which lets its holder read every record, so the guide offers a custom role with `dns.managedZones.list` alone for a user who does not want `dns-routing` |
-| Azure | `Microsoft.Network/dnszones` | `Microsoft.Network/privateDnsZones`, `Microsoft.Network/dnsResolvers` and their children, `Microsoft.Network/trafficManagerProfiles` (from Resource Graph, as today) | Resource Graph, as today, with the zone's `properties.zoneType` projected; for `dnssec`, the zone's DNSSEC configuration read with only its signed-state field kept: `az network dns dnssec-config show --resource-group "$rg" --zone-name "$zone"` with a `--query` keeping that one field, or, if Resource Graph lists the `dnssecConfigs` child, a `project` of the zone's ID and that field alone; never `signingKeys`, `publicKey` or `delegationSignerInfo` (milestone 4 checks which read and which field) | `Reader`, as today (milestone 4 checks it covers the DNSSEC read) |
+| Azure | `Microsoft.Network/dnszones` | `Microsoft.Network/privateDnsZones`, `Microsoft.Network/dnsResolvers` and their children, `Microsoft.Network/trafficManagerProfiles` (from Resource Graph, as today) | Resource Graph, as today, with the zone's `properties.zoneType` projected; for `dnssec`, the zone's DNSSEC configuration read with only its signed-state field kept: `az network dns dnssec-config show --resource-group "$rg" --zone-name "$zone"` with a `--query` keeping that one field, or, if Resource Graph lists the `dnssecConfigs` child, a `project` of the zone's ID and that field alone; never `signingKeys`, `publicKey` or `delegationSignerInfo`. Milestone 4 settled it: Resource Graph does not list `dnssecConfigs` (<https://learn.microsoft.com/en-us/azure/governance/resource-graph/reference/supported-tables-resources>), so a per-public-zone `az network dns dnssec-config show` with `--query "{id: id, type: type, provisioningState: provisioningState \|\| properties.provisioningState}"`, `Succeeded` being signed; an unsigned zone answers `(NotFound) DNSSEC is not enabled for DNS zone` (<https://learn.microsoft.com/en-us/azure/dns/dnssec-unsign>); the Resource Graph arm keeps `zoneType` alone, as the zone carries `signingKeys` (<https://learn.microsoft.com/en-us/dotnet/api/azure.resourcemanager.dns.dnszonedata>) | `Reader`, as today: its `*/read` covers `Microsoft.Network/dnszones/read` and `Microsoft.Network/dnszones/dnssecConfigs/default/read`, and also every record read, which no command uses (milestone 4, <https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/general#reader>, <https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/networking>) |
 
 **The per-zone loops** (milestones 2 to 4) read the zone list the first call wrote with
 `while IFS= read -r id; do ...; done`, pass a zone's ID wherever the API accepts one (Route 53's
 `--hosted-zone-id`; Cloud DNS and Azure take the zone name, with the project or resource group), quote
-every variable (`"$id"`, `"$zone"`, `"$project"`, `"$rg"`), and never use `eval`. The `test/site`
+every variable (`"$id"`, `"$zone"`, `"$project"`, `"$rg"`), and never use `eval`. Azure passes its
+values in the attached form (`--resource-group="$rg" --zone-name="$zone"`), as a resource group's name
+may start with `-` (milestone 4). The `test/site`
 check of the guide's commands asserts that no command holds an unquoted `$zone` or `$id`.
 
 **The record-set permissions.** `route53:ListResourceRecordSets`, and `dns.resourceRecordSets.list` in
@@ -265,15 +267,18 @@ Checked on 2026-11-25:
   review from "zone name"), as it joins `$sql` and the other details today: each zone stays one
   asset row, classified from its details, and `unclassified` when they are missing.
 - **Azure DNS zones sign with DNSSEC** ("How to sign your Azure Public DNS zone with DNSSEC",
-  <https://learn.microsoft.com/en-us/azure/dns/dnssec>); whether the feature is generally available and
-  where its state is read is milestone 4's check.
+  <https://learn.microsoft.com/en-us/azure/dns/dnssec>). Milestone 4: the Learn pages present it with no
+  preview banner (<https://learn.microsoft.com/en-us/azure/dns/dnssec-how-to>), it signs public zones
+  only ("The DNS zone must be hosted by Azure Public DNS"), and its CLI command group is still marked
+  experimental (<https://learn.microsoft.com/en-us/cli/azure/network/dns/dnssec-config>); the state is
+  read per zone with `az network dns dnssec-config show`, as Resource Graph does not list it.
 
 Capabilities the programs derive (only if open questions 3 and 4 add them):
 
 | Capability | When |
 |---|---|
 | `dnssec` | Route 53 `ServeSignature` `SIGNING`; Cloud DNS `dnssecConfig.state` `on` (or `transfer`); an Azure zone with a DNSSEC configuration that is signed |
-| `dns-routing` | Route 53: a count of routed record sets above 0 (weighted, latency, failover, geolocation, geoproximity, IP-based or multivalue answer, all of which carry a `SetIdentifier`, a health check, or a `TrafficPolicyInstanceId`, which a record set a traffic policy created carries); Cloud DNS: a count above 0 of record sets with a `routingPolicy` (weighted round robin, geolocation, failover); Azure DNS: none (routing is Traffic Manager's, a separate resource; an alias record to it is to be checked in milestone 4) |
+| `dns-routing` | Route 53: a count of routed record sets above 0 (weighted, latency, failover, geolocation, geoproximity, IP-based or multivalue answer, all of which carry a `SetIdentifier`, a health check, or a `TrafficPolicyInstanceId`, which a record set a traffic policy created carries); Cloud DNS: a count above 0 of record sets with a `routingPolicy` (weighted round robin, geolocation, failover); Azure DNS: none (routing is Traffic Manager's, a separate resource, `unclassified`; milestone 4: an alias or linked record set to a profile does answer by its routing method and endpoint health, <https://learn.microsoft.com/en-us/azure/dns/dns-alias>, <https://learn.microsoft.com/en-us/azure/dns/dns-traffic-manager-linked-records>, <https://learn.microsoft.com/en-us/azure/traffic-manager/traffic-manager-routing-methods>, but no count-only read exists, as Resource Graph's DNS record table skips public zones, <https://learn.microsoft.com/en-us/azure/dns/private-dns-arg>, so the guide tells the user to add `dns-routing` by hand) |
 
 A simple record set (one name, one type, one set of values) is what every target serves, and an alias
 record to a resource of the same source (Route 53 alias to a load balancer, Azure alias record) becomes,
@@ -468,7 +473,7 @@ catalog", never worse than `unclassified`.
    collected-directory paragraph and *Privacy*; synthetic fixtures, the recursive no-record-data test,
    golden and the GCP entries of the e2e category list. Depends on 1, PRD #552 milestone 3 and PRD #571
    milestone 3.
-4. [ ] **Azure classification in the guide.** `Microsoft.Network/dnszones` from Resource Graph with
+4. [x] **Azure classification in the guide.** `Microsoft.Network/dnszones` from Resource Graph with
    `zoneType` projected, the DNSSEC read with only its signed-state field kept (a `--query`, or a
    Resource Graph `project` of that field) if milestone 4's check confirms where it is, in the per-zone
    loop *The per-zone loops* describes; private zones and resolvers stay `unclassified`; synthetic
@@ -609,9 +614,13 @@ also wait on its answer)
   whether forwarding and peering zones are `private`; that `--filter='routingPolicy:*'` with
   `--format='value(type)'` counts exactly the routed record sets; whether a narrower predefined role than
   `roles/dns.reader` lists zones.
-- Milestone 4: whether Azure DNS DNSSEC signing is generally available, where its state is read
-  (Resource Graph `dnszones/dnssecConfigs`, or `az network dns dnssec-config show`), and that `Reader`
-  covers it; whether an alias record set pointing at Traffic Manager should give `dns-routing`.
+- Milestone 4 (settled): Azure DNS DNSSEC is presented on Learn as a normal feature of public zones,
+  its CLI group marked experimental; its state is read per public zone with
+  `az network dns dnssec-config show` (Resource Graph lists no `dnssecConfigs`), `provisioningState`
+  `Succeeded` (any casing) giving `dnssec` and every other state none; `Reader` covers it
+  (`Microsoft.Network/dnszones/dnssecConfigs/default/read`); an alias or linked record set to Traffic
+  Manager gives no automatic `dns-routing` (no count-only read), the guide naming it to add by hand.
+  Learn URLs: in the Azure row of *How the sources classify* and the `dns-routing` row above.
 - Milestone 5: OVHcloud's name server locations for a zone without Anycast; whether any OVHcloud page
   offers geolocation, weighted or failover answers; that the DNSSEC API covers a standalone zone; that
   a standalone zone is a generally available product (an order tile, not a beta).

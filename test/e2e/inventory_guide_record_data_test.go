@@ -29,7 +29,7 @@ import (
 // the guide collects, the inventory a program writes, or the fixtures that stand
 // for them. The check walks every recorded output of every source the guide
 // covers (the AWS fixtures per region, GCP's and Azure's, and the golden
-// inventories the programs wrote for them), and the AWS and GCP programs'
+// inventories the programs wrote for them), and the AWS, GCP and Azure programs'
 // output run as the guide runs them, so a fixture that recorded one extra field,
 // or a program that read one extra field through, fails here rather than in a
 // reader's report.
@@ -59,6 +59,16 @@ var recordKeys = []string{
 	// names the health check, the geolocation or the weighted answers it routes
 	// by. The guide's record-set call keeps neither (PRD #581, milestone 3).
 	"ttl", "routingPolicy",
+	// The fields Azure DNS writes a zone's contents with: the address, name,
+	// mail and text records of a record set, the alias and Traffic Manager link a
+	// record set answers through, and the name servers Azure serves the zone from.
+	// The guide reads none of them, and keeps of a zone only its zone type and its
+	// DNSSEC configuration's state (PRD #581, milestone 4).
+	"ARecords", "AAAARecords", "CNAMERecord", "MXRecords", "TXTRecords",
+	"targetResource", "trafficManagementProfile", "nameServers",
+	// A DNSSEC signing key's tag and its delegation signer record's digest: the
+	// zone's signing material, which the per-zone read keeps no field of.
+	"keyTag", "digestValue",
 }
 
 // recordValues are record names of the guide's synthetic zones (PRD #581's
@@ -135,6 +145,9 @@ var guideZoneFixtures = []guideZoneFixture{
 	// filter adds to each entry, and the per-zone count of routed record sets.
 	{file: "dns-managed-zones.json", source: "gcp", call: "gcloud dns managed-zones list", milestone: "3"},
 	{file: "dns-routed-record-sets.json", source: "gcp", call: "gcloud dns record-sets list", milestone: "3"},
+	// Azure DNS: one DNSSEC configuration per public zone that has one, as the
+	// per-zone loop writes them one after another, its signed state alone.
+	{file: "dns-dnssec.json", source: "azure", call: "az network dns dnssec-config show", milestone: "4"},
 }
 
 // zoneProgramCase is one source whose program writes zones of its own, the raw
@@ -157,6 +170,9 @@ type zoneProgramCase struct {
 var zoneProgramCases = []zoneProgramCase{
 	{source: "aws", pattern: inventoryGuideDir + "/aws/*/*.json", rawType: "AWS::Route53::HostedZone", milestone: "2"},
 	{source: "gcp", pattern: inventoryGuideDir + "/gcp/*.json", rawType: "dns.googleapis.com/ManagedZone", milestone: "3"},
+	// Azure's zones come from the Resource Graph pages, and their signed state from
+	// the per-zone DNSSEC read; both are inputs of the one program.
+	{source: "azure", pattern: inventoryGuideDir + "/azure/*.json", rawType: "Microsoft.Network/dnsZones", milestone: "4"},
 }
 
 // assertNoRecordDataInProgramOutput pins the other half of the promise for one
@@ -379,6 +395,36 @@ func TestInventoryGuideRecordDataCheckFindsAPlantedRecord(t *testing.T) {
 		{
 			name:     "a Cloud DNS zone's routed record-set count",
 			document: `{"project": "example-project", "id": "1234567890123456789", "routedRecordSets": 3}`,
+			want:     "",
+		},
+		{
+			name:     "an Azure DNS zone's address records",
+			document: `{"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/shop.example.com/A/www", "type": "Microsoft.Network/dnsZones/A", "properties": {"ARecords": [{"ipv4Address": "192.0.2.10"}]}}`,
+			want:     `"ARecords"`,
+		},
+		{
+			name:     "an Azure DNS record set's alias and Traffic Manager link",
+			document: `{"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/shop.example.com/A/www", "type": "Microsoft.Network/dnsZones/A", "properties": {"targetResource": {"id": ".../trafficManagerProfiles/tm-shop"}, "trafficManagementProfile": {"id": ".../trafficManagerProfiles/tm-shop"}}}`,
+			want:     `"targetResource"`,
+		},
+		{
+			name:     "an Azure DNS zone's name servers",
+			document: `{"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/shop.example.com", "name": "shop.example.com", "properties": {"zoneType": "Public", "nameServers": ["ns1-01.azure-dns.com"]}}`,
+			want:     `"nameServers"`,
+		},
+		{
+			name:     "an Azure DNSSEC configuration's signing key",
+			document: `{"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnszones/shop.example.com/dnssecConfigs/default", "type": "Microsoft.Network/dnszones/dnssecConfigs", "provisioningState": "Succeeded", "signingKeys": [{"keyTag": 28873, "delegationSignerInfo": [{"digestValue": "0B9E68..."}]}]}`,
+			want:     `"keyTag"`,
+		},
+		{
+			name:     "an Azure DNS zone's name, zone type and signed state",
+			document: `{"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/shop.example.com", "name": "shop.example.com", "type": "microsoft.network/dnszones", "location": "global", "properties": {"zoneType": "Public"}}`,
+			want:     "",
+		},
+		{
+			name:     "an Azure DNS zone's DNSSEC configuration",
+			document: `{"id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnszones/shop.example.com/dnssecConfigs/default", "type": "Microsoft.Network/dnszones/dnssecConfigs", "provisioningState": "Succeeded"}`,
 			want:     "",
 		},
 	}

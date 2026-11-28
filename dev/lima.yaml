@@ -519,8 +519,8 @@ provision:
       #    (.pi/extensions/deny-env-printing.ts, .pi/deny-env-printing.json, dev/pi-tester.sh) is missing or not
       #    byte for byte the installed one, it is not used for the checks or for --extension: one line on stderr
       #    names the installed and the project paths and make vm-pi-tester, and pi starts with the installed files.
-      #    pi still loads the project's .pi/extensions beside the installed extension (a residual, issue #702). The
-      #    line is expected on a branch that changes one of the three files.
+      #    pi loads no extension and no trusted setting of the project (item 2). The line is expected on a branch
+      #    that changes one of the three files.
       # 1. Fails closed. pi logs an extension that fails to load and runs without it, so the env-printing refusal
       #    (ADR 0044) would fail open on its own. Before pi starts, the two installed files the refusal is made of
       #    are checked:
@@ -537,20 +537,52 @@ provision:
       #    these checks are the ones that do it.
       # 2. Starts pi with an allow-listed environment: `env -i` and only the variables named below, each copied
       #    when the parent has it set, plus the marker SHIFT2EU_PI_TESTER=1, and the arguments
-      #    `--extension <installed extensions/deny-env-printing.ts>` followed by every argument passed through
-      #    unchanged, so pi always loads the installed refusal (it also discovers the project's .pi/extensions,
-      #    which --approve trusts). Everything else - a GitHub token, another agent's key (ANTHROPIC_API_KEY,
-      #    CLAUDE_CODE_OAUTH_TOKEN), the OpenTelemetry headers that carry a backend's API key, any name this list
-      #    does not know - is not in pi's environment, so printing it shows only the DeepSeek key and the pane's
-      #    variables. The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave
-      #    the agents' keys file unsourced, so a `bash -l` from the tester's bash tool does not put them back.
+      #    `--no-approve --no-extensions --extension <installed extensions/deny-env-printing.ts>
+      #    --extension <HOME>/.pi/agent/extensions/dot-agent-deck --skill <working directory>/.claude/skills`
+      #    followed by every other argument passed through unchanged (issue #702, ADR 0044 amendment). pi then
+      #    trusts no project: it applies no trust-gated setting of the project's .pi/settings.json, whose
+      #    shellCommandPrefix, packages and npmCommand could run commands the refusal never sees, and discovers
+      #    no extension of the project or of ~/.pi/agent; it loads exactly the installed refusal and the deck's
+      #    extension, and the skills by --skill. pi still reads the project's .pi/settings.json as data before
+      #    trust (sessionDir, the startup UI, first-time setup): see What this does not do.
+      #    An --approve or -a among the arguments is dropped with one line on stderr each, since the last of
+      #    --approve and --no-approve wins; units cut before the change still pass it. After a -- pi reads it as
+      #    message text, which could not re-trust the project: it is dropped there too only to keep the rule
+      #    simple. A -a given as another option's value (--name -a) is dropped as well; the deck never passes one.
+      #    Before the deck's extension, pi's agent directory ${HOME}/.pi/agent, whose settings, models and system
+      #    prompt pi always trusts, is checked: neither ~/.pi nor ~/.pi/agent may be a symbolic link, it must be a
+      #    directory, and its physical path (cd -P) must lie outside the working directory's physical path (pwd -P),
+      #    so a HOME spelled <parent>/./<unit>/h, <parent>//<unit>/h or with a .. before the unit folder's name,
+      #    or reaching the unit folder through a symbolic link, is refused too.
+      #    The deck's extension must lie under HOME (an absolute path), outside the working directory by its
+      #    spelling and by its physical path, be a directory reached through no symbolic link (neither it nor
+      #    ~/.pi/agent/extensions), and hold an index.ts, index.js or package.json that is a regular file and no
+      #    symbolic link. Otherwise the wrapper exits 1 with one line naming the directory and why, and for the
+      #    deck's extension the step that writes it (dot-agent-deck orchestrator setup). Everything else -
+      #    a GitHub token, another agent's key (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN), the OpenTelemetry
+      #    headers that carry a backend's API key, any name this list does not know - is not in pi's environment,
+      #    so printing it shows only the DeepSeek key and the pane's variables.
+      #    The marker makes the VM's login profile (/etc/profile.d/shift2eu.sh, dev/lima.yaml) leave the agents'
+      #    keys file unsourced, so a `bash -l` from the tester's bash tool does not put them back.
       #
       # What this does not do: the tester still runs as the VM's one user, so the keys file, the agents App's
       # token file and other processes' /proc/<pid>/environ stay readable to it, guarded only by the deny
       # patterns of .pi/deny-env-printing.json, which a program the tester writes and runs can bypass. Keeping
-      # them from it needs a separate uid or the egress stage (ADR 0044, Alternatives). gh and git push keep
-      # working for a command the tester runs: the VM's gh (dev/gh-app-token.sh, ADR 0031) reads the App's token
-      # from its file under HOME, not from the environment.
+      # them from it needs a separate uid or the egress stage (ADR 0044, Alternatives). The skills under
+      # <working directory>/.claude/skills are still the branch's text, which pi reads as instructions (not code).
+      # gh and git push keep working for a command the tester runs: the VM's gh (dev/gh-app-token.sh, ADR 0031)
+      # reads the App's token from its file under HOME, not from the environment.
+      # pi still reads the project's .pi/settings.json as data before trust (sessionDir, the startup UI, first-time
+      # setup), and its migrations rename <working directory>/.pi/commands to .pi/prompts before trust; a branch's
+      # .pi/hooks or .pi/tools makes an interactive pi show a deprecation warning and wait for a key, which stalls
+      # an unattended pane. No code of the project runs. A follow-up can pin --session-dir.
+      # The user-level config under ~/.pi/agent - settings.json (shellCommandPrefix, shellPath, packages,
+      # npmCommand), models.json, SYSTEM.md, APPEND_SYSTEM.md, AGENTS.md - is always trusted and writable by any
+      # process of the same uid, branch code that make check runs included, so a write there runs at the next
+      # tester start, outside the refusal. A refusal of those keys was considered and not taken: it could break a
+      # legitimate deck setup and moves no trust boundary while the tester shares the uid.
+      # The later arguments of the deck's tester command (--extension, --session-dir, --system-prompt and the
+      # like) come from .dot-agent-deck.toml, which TestPiTesterCommandRunsTheLaunchWrapper pins word for word.
       #
       # PATH is checked first, before anything that looks a command up: an empty entry (a leading, middle or
       # trailing `:`) or one that is not absolute (`.`, `bin`) is the working directory or under it, the unit's
@@ -558,7 +590,8 @@ provision:
       # message that names PATH (never its value), and nothing is started. The VM's PATH (dev/lima.yaml's profile)
       # has none, so it passes, and is then copied as it is.
       #
-      # No value is ever printed: the messages name files, never a variable's value.
+      # The refusals print paths built from $0, PWD and HOME; no variable's value on its own and no credential is
+      # ever printed.
       #
       # Usage: /usr/local/lib/shift2eu/pi-tester/pi-tester.sh <pi arguments...>
       #        (by its absolute path, from the directory pi loads the project from)
@@ -599,6 +632,32 @@ provision:
       script=$0
       extension=${installed}/extensions/deny-env-printing.ts
       list=${installed}/deny-env-printing.json
+      skills=${PWD}/.claude/skills
+
+      # --approve and -a are dropped wherever they stand, one line each in their order: pi starts with --no-approve,
+      # and an --approve after it would win. After a -- pi reads one as message text, which could not re-trust the
+      # project; it is dropped there too only to keep the rule simple. A -a given as another option's value
+      # (--name -a) is dropped as well; the deck never passes one. Every other argument is kept, unchanged and in order.
+      for arg; do
+        shift
+        case "${arg}" in
+        --approve | -a)
+          printf "pi-tester: argument %s dropped: the tester's pi never trusts the project, because a trusted .pi/settings.json can run commands the env-printing refusal does not see (shellCommandPrefix, packages, npmCommand) (issue #702)\n" \
+            "${arg}" >&2
+          ;;
+        *) set -- "$@" "${arg}" ;;
+        esac
+      done
+
+      # The deck's pi extension, where the deck writes it: always under HOME, never derived from the working directory.
+      case "${HOME:-}" in
+      /*) ;;
+      *)
+        echo "pi-tester: HOME is not an absolute path, so the deck's pi extension cannot be found: the tester is not started (issue #702)" >&2
+        exit 1
+        ;;
+      esac
+      deck=${HOME}/.pi/agent/extensions/dot-agent-deck
 
       # refuse <file> <why> stops the wrapper before pi starts.
       refuse() {
@@ -754,9 +813,72 @@ provision:
         exit 1
       }
 
+      # The working directory's physical path, every link resolved; empty when it cannot be resolved, which
+      # in_unit then reads as the unit folder (fail closed).
+      pwd_real=$(pwd -P) || pwd_real=""
+
+      # in_unit <directory> succeeds when the directory's physical path is the working directory's or lies below it,
+      # and when either path cannot be resolved (fail closed). A working directory of / holds every path.
+      in_unit() {
+        [ -n "${pwd_real}" ] || return 0
+        dir_real=$(cd -P -- "$1" 2>/dev/null && pwd -P) || return 0
+        [ -n "${dir_real}" ] || return 0
+        case "${dir_real%/}/" in
+        "${pwd_real%/}/"*) return 0 ;;
+        esac
+        return 1
+      }
+
+      # pi's agent directory, where pi keeps the settings, the models and the system prompt it always trusts, whatever
+      # --no-approve and --no-extensions say. The deck's extension lies in it.
+      agent=${HOME}/.pi/agent
+
+      # refuse_agent <why> stops the wrapper when pi's agent directory could be the unit folder's.
+      refuse_agent() {
+        printf "pi-tester: pi's agent directory %s %s: the tester is not started, because pi trusts the settings and extensions it finds there (issue #702)\n" \
+          "${agent}" "$1" >&2
+        exit 1
+      }
+
+      # The agent directory must be a real directory reached through no link, and physically outside the working
+      # directory: a HOME spelled <parent>/./<unit>/h, <parent>//<unit>/h or with a .. before the unit folder's
+      # name, or reaching the unit folder through a symbolic link, passes a string comparison and is still the unit
+      # folder.
+      if [ -L "${HOME}/.pi" ] || [ -L "${agent}" ]; then
+        refuse_agent "is reached through a symbolic link"
+      fi
+      [ -d "${agent}" ] || refuse_agent "is missing or not a directory"
+      ! in_unit "${agent}" || refuse_agent "lies in the working directory, the unit folder"
+
+      # refuse_deck <why> stops the wrapper when the deck's pi extension is not where the deck writes it.
+      refuse_deck() {
+        printf "pi-tester: the deck's pi extension %s %s: the tester is not started, because without it the pane gets no task and its work-done is not delivered; run dot-agent-deck orchestrator setup, then restart the pane (issue #702)\n" \
+          "${deck}" "$1" >&2
+        exit 1
+      }
+
+      # entry_point <file> succeeds for a regular file that is no symbolic link: the deck writes its entry point there.
+      entry_point() {
+        [ -f "$1" ] && [ ! -L "$1" ]
+      }
+
+      # The deck's extension must lie outside the working directory, which a branch writes, by its spelling and by its
+      # physical path, be a real directory reached through no link, and hold an entry point pi can load. Its content
+      # is not read: it is the deck's, written by its setup.
+      unit_prefix=${PWD%/}/
+      case "${deck}" in
+      "${PWD}" | "${unit_prefix}"*) refuse_deck "lies in the working directory, the unit folder" ;;
+      esac
+      [ ! -L "${agent}/extensions" ] || refuse_deck "is reached through a symbolic link, which the deck never writes"
+      [ ! -L "${deck}" ] || refuse_deck "is a symbolic link, which the deck never writes"
+      [ -d "${deck}" ] || refuse_deck "is missing or not a directory"
+      ! in_unit "${deck}" || refuse_deck "lies in the working directory, the unit folder"
+      entry_point "${deck}/index.ts" || entry_point "${deck}/index.js" || entry_point "${deck}/package.json" ||
+        refuse_deck "has no index.ts, index.js or package.json"
+
       # The project's copies: each one missing or not byte for byte the installed file is named in one line, with the
-      # installed file and the update step; the checks and --extension use the installed files, but pi still loads the
-      # project's .pi/extensions. Only paths are printed, never a file's content.
+      # installed file and the update step; the checks and --extension use the installed files, and pi loads no
+      # extension and no trusted setting of the project. Only paths are printed, never a file's content.
       differs=""
       # compare_copy <installed file> <project file> notes the project file when it is not the installed one.
       compare_copy() {
@@ -768,18 +890,19 @@ provision:
       compare_copy "${extension}" "${PWD}/.pi/extensions/deny-env-printing.ts"
       compare_copy "${list}" "${PWD}/.pi/deny-env-printing.json"
       if [ -n "${differs}" ]; then
-        printf 'pi-tester: project copies missing or different from the installed ones: %s (expected on a branch that changes them); the checks and --extension use the installed copies, but pi still loads the .pi/extensions of the project too (ADR 0044, issue #702); to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
+        printf 'pi-tester: project copies missing or different from the installed ones: %s (expected on a branch that changes them); the checks and --extension use the installed copies, and pi loads no extension and no trusted setting of the project (--no-extensions, --no-approve: ADR 0044, issue #702); to install the project copies after review, the maintainer runs make vm-pi-tester (issue #692)\n' \
           "${differs}" >&2
       fi
 
-      allowlisted exec "${pi}" --extension "${extension}" "$@"
+      allowlisted exec "${pi}" --no-approve --no-extensions --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"
       PITESTER
         cat >"${tmp}/deny-env-printing.ts" <<'PIDENYEXT'
       /**
        * Refuses the commands that print the environment (CLAUDE.md rule 3, issue #540, ADR 0044).
        *
-       * The tester runs pi with --approve: pi asks for nothing, and the environment holds the agents' API keys.
-       * This project-local extension, which pi loads because --approve trusts the project, hooks `tool_call`,
+       * The tester's pi asks for nothing, and the environment holds the agents' API keys. This extension, whose
+       * root-owned installed copy the tester's wrapper loads by --extension (pi starts with --no-approve
+       * --no-extensions, so the project's copy is never discovered: dev/pi-tester.sh, issue #702), hooks `tool_call`,
        * the event that sees a tool call before it runs, and blocks:
        *
        * - a bash call whose command is longer than 32 KB, unread (the patterns are quadratic on one long line);

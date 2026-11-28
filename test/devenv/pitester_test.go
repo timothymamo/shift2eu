@@ -120,8 +120,77 @@ process.stdout.write(JSON.stringify({
 `
 
 // piTesterArgs are the arguments .dot-agent-deck.toml's tester command passes the wrapper, which must reach pi
-// unchanged.
-var piTesterArgs = []string{"--provider", "deepseek", "--model", "deepseek-flash", "--thinking", "high", "--approve"}
+// unchanged. The command carries no `--approve` since issue #702: the wrapper starts pi with `--no-approve`, and a
+// command that still passes `--approve` (as a unit cut before that merge does) has it dropped with one line
+// (TestPiTesterDropsTheApproveArguments).
+var piTesterArgs = []string{"--provider", "deepseek", "--model", "deepseek-flash", "--thinking", "high"}
+
+// piTesterExecLine is the wrapper's last line since ADR 0044's amendment "the tester loads no project extension or
+// setting" (issue #702): pi starts with no project trust and no discovered extension, loads the installed refusal
+// and the deck's extension by --extension and the unit folder's skills by --skill, and the wrapper's own flags come
+// before the deck's arguments, so a `--` among those cannot turn them into messages. dev/vm-pi-tester.sh accepts
+// exactly this line.
+const piTesterExecLine = `allowlisted exec "${pi}" --no-approve --no-extensions --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"`
+
+// piTesterOldExecLine is the wrapper's last line before issue #702, which dev/vm-pi-tester.sh now refuses like any
+// other last line: it started pi with project trust, so pi discovered and loaded the unit folder's
+// .pi/extensions and read its .pi/settings.json.
+const piTesterOldExecLine = `allowlisted exec "${pi}" --extension "${extension}" "$@"`
+
+// piTesterDeckDir returns where the deck writes its pi extension, as the wrapper names it: under HOME, never under
+// PI_CODING_AGENT_DIR, which the wrapper's allow list does not hand pi (issue #702). It is spelled as HOME is, since
+// the wrapper and its refusal name the path they built, so a HOME carrying a `.` or a `//` shows through.
+func piTesterDeckDir(home string) string {
+	return home + "/.pi/agent/extensions/dot-agent-deck"
+}
+
+// piTesterAgentDir returns the directory the wrapper refuses when pi's own agent directory could be the unit
+// folder's - ${HOME}/.pi/agent, where pi keeps the settings, the models and the system prompt it always trusts -
+// spelled as HOME is, since the refusal names the path it built (issue #702).
+func piTesterAgentDir(home string) string {
+	return home + "/.pi/agent"
+}
+
+// writePiTesterAgentDir makes ${HOME}/.pi/agent a real directory, the layout the deck writes and the wrapper
+// requires before it checks the deck's extension (issue #702).
+func writePiTesterAgentDir(t *testing.T, home string) {
+	t.Helper()
+
+	if err := os.MkdirAll(piTesterAgentDir(home), 0o700); err != nil {
+		t.Fatalf("create pi's agent directory %s: %v", piTesterAgentDir(home), err)
+	}
+}
+
+// piTesterSkillsDir returns the skills directory the wrapper passes pi: the unit folder's .claude/skills, the
+// directory .pi/settings.json used to load before issue #702.
+func piTesterSkillsDir(project string) string {
+	return filepath.Join(project, ".claude", "skills")
+}
+
+// writePiTesterDeck writes the deck's pi extension where the deck writes it - an index.ts under HOME - and returns
+// its directory, which the wrapper requires before it starts pi (issue #702).
+func writePiTesterDeck(t *testing.T, home string) string {
+	t.Helper()
+
+	dir := piTesterDeckDir(home)
+	writeFileMode(t, filepath.Join(dir, "index.ts"), []byte("// the deck's pi extension, invented for this test (issue #702)\n"), 0o644)
+
+	return dir
+}
+
+// resolvePiTesterDir returns dir with its symbolic links resolved, which is the directory the wrapper's shell
+// reports as PWD and so what its --skill argument holds: t.TempDir() hands back a path under a symlink on macOS
+// (/var is a symlink to /private/var), and the shell's PWD is the resolved one.
+func resolvePiTesterDir(t *testing.T, dir string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve %s, the directory the wrapper runs in, so a case can compare the argv with the path the shell reports (issue #702): %v", dir, err)
+	}
+
+	return resolved
+}
 
 // fakePiScript is the stand-in for pi: it records its argv, the value of the non-secret marker and the names of
 // the variables of its environment - never a value of a credential, which these tests invent anyway (CLAUDE.md
@@ -450,6 +519,7 @@ func TestPiTesterHandsPiAnAllowListedEnvironment(t *testing.T) {
 	}
 
 	writePiTesterBin(t, binDir, record)
+	writePiTesterDeck(t, homeDir)
 
 	installed := writePiTesterInstalled(t, root,
 		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
@@ -466,8 +536,8 @@ func TestPiTesterHandsPiAnAllowListedEnvironment(t *testing.T) {
 
 	got := readPiRecord(t, record)
 
-	if diff := cmp.Diff(piTesterWantArgv(installed, piTesterArgs), got.argv); diff != "" {
-		t.Errorf("the wrapper did not start pi with the installed extension and pass its arguments unchanged, so the tester runs with another provider, model or mode than the deck's command names, or without the refusal (-want +got):\n%s", diff)
+	if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, piTesterArgs), got.argv); diff != "" {
+		t.Errorf("the wrapper did not start pi with the installed refusal and the deck's extension, with no project trust and no discovered extension, or did not pass its arguments unchanged, so the tester runs with another provider, model or mode than the deck's command names, without the refusal, or with the unit folder's extensions (-want +got):\n%s", diff)
 	}
 
 	for _, name := range piTesterKept {
@@ -588,6 +658,7 @@ func TestPiTesterHandsNodeAnAllowListedEnvironment(t *testing.T) {
 	}
 
 	writePiTesterBin(t, binDir, record)
+	writePiTesterDeck(t, homeDir)
 
 	installed := writePiTesterInstalled(t, root,
 		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
@@ -748,6 +819,7 @@ func TestPiTesterPassesAwkwardArgumentsUnchanged(t *testing.T) {
 			}
 
 			writePiTesterBin(t, binDir, record)
+			writePiTesterDeck(t, homeDir)
 
 			installed := writePiTesterInstalled(t, root,
 				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
@@ -764,8 +836,8 @@ func TestPiTesterPassesAwkwardArgumentsUnchanged(t *testing.T) {
 
 			got := readPiRecord(t, record)
 
-			if diff := cmp.Diff(piTesterWantArgv(installed, tc.args), got.argv); diff != "" {
-				t.Errorf("the installed extension and the arguments did not reach pi unchanged, so the tester runs with words the deck's command did not pass, or without the refusal (-want +got):\n%s", diff)
+			if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, tc.args), got.argv); diff != "" {
+				t.Errorf("the installed refusal, the deck's extension and the arguments did not reach pi unchanged, so the tester runs with words the deck's command did not pass, without the refusal, or with the unit folder's extensions (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -825,6 +897,7 @@ func TestPiTesterRefusesToStartPiWithoutTheDenyExtension(t *testing.T) {
 			}
 
 			writePiTesterBin(t, binDir, record)
+			writePiTesterDeck(t, homeDir)
 
 			// The bad files go in the installed layout, the one the wrapper checks; the unit folder keeps the
 			// repository's copies, so the case pins what the installed file decides, not what the project has.
@@ -851,8 +924,8 @@ func TestPiTesterRefusesToStartPiWithoutTheDenyExtension(t *testing.T) {
 
 				got := readPiRecord(t, record)
 
-				if diff := cmp.Diff(piTesterWantArgv(installed, piTesterArgs), got.argv); diff != "" {
-					t.Errorf("the wrapper did not start pi with the installed extension and pass its arguments unchanged (-want +got):\n%s", diff)
+				if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, piTesterArgs), got.argv); diff != "" {
+					t.Errorf("the wrapper did not start pi with the installed refusal, the deck's extension and its arguments unchanged (-want +got):\n%s", diff)
 				}
 
 				return
@@ -953,6 +1026,7 @@ func TestPiTesterChecksTheDenyFilesWithNode(t *testing.T) {
 
 			// Only pi stands in the first directory: the node the wrapper runs has to be the real one.
 			writeFakePi(t, binDir, record)
+			writePiTesterDeck(t, homeDir)
 
 			// The bad file goes in the installed layout, the one the wrapper loads; the unit folder keeps the
 			// repository's copies, so the case pins what the installed file decides (issue #692).
@@ -968,8 +1042,8 @@ func TestPiTesterChecksTheDenyFilesWithNode(t *testing.T) {
 
 				got := readPiRecord(t, record)
 
-				if diff := cmp.Diff(piTesterWantArgv(installed, piTesterArgs), got.argv); diff != "" {
-					t.Errorf("the wrapper did not start pi with the installed extension and pass its arguments unchanged (-want +got):\n%s", diff)
+				if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, piTesterArgs), got.argv); diff != "" {
+					t.Errorf("the wrapper did not start pi with the installed refusal, the deck's extension and its arguments unchanged (-want +got):\n%s", diff)
 				}
 
 				assertNoSecrets(t, "the wrapper's stdout", stdout, piTesterSecrets())
@@ -1264,4 +1338,780 @@ func testerRoleSetting(t *testing.T, line *regexp.Regexp) string {
 	t.Fatalf("%s: no role block is named %q", deckConfigPath, deckTesterRole)
 
 	return ""
+}
+
+// TestPiTesterLaunchWrapperEndsWithItsExecLine pins the wrapper's last line (ADR 0044's amendment "the tester loads
+// no project extension and applies no trusted project setting", issue #702): pi starts with no project trust and no
+// discovered extension, loads the installed refusal and the deck's extension by --extension and the unit folder's
+// skills by --skill, and the wrapper's own flags come before the deck's arguments. dev/vm-pi-tester.sh accepts
+// exactly this line, so the two have to agree.
+func TestPiTesterLaunchWrapperEndsWithItsExecLine(t *testing.T) {
+	t.Parallel()
+
+	lines := strings.Split(strings.TrimSuffix(readRepoFile(t, piTesterScript), "\n"), "\n")
+
+	if got := lines[len(lines)-1]; got != piTesterExecLine {
+		t.Errorf("%s ends with %q, want %q: the tester's pi starts with no project trust and no discovered extension, so no branch can run code or a setting of the unit folder inside pi's process (ADR 0044, issue #702)",
+			piTesterScript, got, piTesterExecLine)
+	}
+}
+
+// TestPiTesterStartsPiWithoutProjectTrustOrADiscoveredExtension pins ADR 0044's amendment (issue #702): pi starts
+// with `--no-approve --no-extensions`, so neither the unit folder's `.pi/extensions` nor its `.pi/settings.json` is
+// code pi runs or a setting pi reads; the installed refusal and the deck's extension come in by `--extension` and
+// the skills by `--skill`, even though the unit folder holds no `.claude/skills` (a path pi cannot find is pi's own
+// diagnostic, not this wrapper's refusal, and the skills are no part of it).
+func TestPiTesterStartsPiWithoutProjectTrustOrADiscoveredExtension(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	binDir := filepath.Join(root, "bin")
+	homeDir := filepath.Join(root, "home")
+	record := filepath.Join(root, "pi-record")
+
+	for _, dir := range []string{binDir, homeDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+
+	writePiTesterBin(t, binDir, record)
+
+	deck := writePiTesterDeck(t, homeDir)
+
+	installed := writePiTesterInstalled(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+	project := writePiTesterProject(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+	// What a branch can leave in the unit folder: an extension pi would discover, and a settings file whose keys run
+	// commands (shellCommandPrefix, packages, npmCommand) once the project is trusted (ADR 0044, issue #702).
+	plantedExtension := filepath.Join(project, ".pi", "extensions", "x.ts")
+	writeFileMode(t, plantedExtension, []byte("// an extension a branch planted, which pi must not load (issue #702)\n"), 0o644)
+	writeFileMode(t, filepath.Join(project, ".pi", "settings.json"),
+		[]byte(`{"extensions": ["extensions/x.ts"], "packages": ["@example/invented"], "shellCommandPrefix": "true"}`), 0o644)
+
+	if _, err := os.Stat(piTesterSkillsDir(project)); err == nil {
+		t.Fatalf("%s exists, so this case cannot pin that the wrapper passes --skill even when the directory is missing (issue #702)", piTesterSkillsDir(project))
+	}
+
+	stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+	if err != nil {
+		t.Fatalf("the wrapper exited non-zero with the installed files and the deck's extension in place: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	got := readPiRecord(t, record)
+
+	if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, piTesterArgs), got.argv); diff != "" {
+		t.Errorf("pi's argv is not the wrapper's no-trust, no-discovery start: it has to be --no-approve --no-extensions, the installed refusal and the deck's extension by --extension, the unit folder's skills by --skill, and then the deck's arguments unchanged (-want +got):\n%s", diff)
+	}
+
+	// The two flags are pinned by their place too: every flag the wrapper adds has to come before the deck's own
+	// arguments, or a `--` among those would turn the rest into messages pi reads.
+	firstPassed := slices.Index(got.argv, piTesterArgs[0])
+
+	for _, flag := range []string{"--no-approve", "--no-extensions"} {
+		at := slices.Index(got.argv, flag)
+
+		switch {
+		case at < 0:
+			t.Errorf("pi's argv holds no %s, so pi trusts the project and discovers the unit folder's extensions (ADR 0044, issue #702): %q", flag, got.argv)
+		case at > firstPassed:
+			t.Errorf("pi's argv holds %s at %d, after the deck's first argument %q at %d: the wrapper's flags come before the deck's arguments, so a `--` among those cannot turn them into messages (issue #702): %q",
+				flag, at, piTesterArgs[0], firstPassed, got.argv)
+		}
+	}
+
+	if !slices.Contains(got.argv, deck) {
+		t.Errorf("pi's argv does not name the deck's extension directory %s, which the deck writes before it starts a pi agent: without it the pane gets no task and its work-done is not delivered (issue #702): %q", deck, got.argv)
+	}
+
+	// This loop cannot fail on the wrapper of before issue #702 either, which never named the project's extensions
+	// path on pi's argv: it is a cheap guard, not the case's evidence. What the case pins is what the exact argv
+	// diff above and the two flags' presence and place do: --no-approve and --no-extensions are there, before the
+	// deck's own arguments, and the argv is the wrapper's whole start, unchanged arguments included.
+	for _, arg := range got.argv {
+		if arg == plantedExtension || strings.Contains(arg, filepath.Join(project, ".pi", "extensions")) {
+			t.Errorf("pi's argv holds %q, which names the unit folder's .pi/extensions: a branch's extension then loads beside the installed refusal, in the same process, and could undo it (ADR 0044, issue #702)", arg)
+		}
+	}
+
+	if got := strings.TrimSpace(stderr); got != "" {
+		t.Errorf("the wrapper printed %q on stderr although the project copies are the installed ones and no argument was dropped (issue #702)", got)
+	}
+}
+
+// piTesterDroppedArgumentNotice is the line the wrapper prints for each `--approve` or `-a` it drops: refusing them
+// would stop a tester of a unit cut before issue #702's merge, whose .dot-agent-deck.toml still passes `--approve`.
+const piTesterDroppedArgumentNotice = "pi-tester: argument %s dropped: the tester's pi never trusts the project, because a trusted .pi/settings.json can run commands the env-printing refusal does not see (shellCommandPrefix, packages, npmCommand) (issue #702)"
+
+// TestPiTesterDropsTheApproveArguments pins what the wrapper does with the argument a unit cut before issue #702
+// still passes: `--approve` and `-a` are dropped, each with one line on stderr, and pi starts without them, since
+// either would undo `--no-approve` (pi keeps the last) and a trusted .pi/settings.json can run commands the
+// env-printing refusal never sees. The argument is dropped wherever it stands, also after a `--`, and every other
+// spelling reaches pi unchanged.
+func TestPiTesterDropsTheApproveArguments(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		args []string
+		// dropped are the arguments the wrapper must drop, in the order it drops them.
+		dropped []string
+		// passed are the arguments that must reach pi, unchanged and in their order.
+		passed []string
+	}{
+		{
+			name:    "the deck's old command, with --approve last",
+			args:    []string{"--provider", "deepseek", "--model", "deepseek-flash", "--thinking", "high", "--approve"},
+			dropped: []string{"--approve"},
+			passed:  []string{"--provider", "deepseek", "--model", "deepseek-flash", "--thinking", "high"},
+		},
+		{name: "the short flag -a", args: []string{"-a"}, dropped: []string{"-a"}},
+		{name: "--approve after a -- separator", args: []string{"--", "--approve"}, dropped: []string{"--approve"}, passed: []string{"--"}},
+		{name: "both spellings, in their order", args: []string{"--provider", "--approve", "--model", "-a"}, dropped: []string{"--approve", "-a"}, passed: []string{"--provider", "--model"}},
+		{name: "--approve with a value is no --approve", args: []string{"--approve=1"}, passed: []string{"--approve=1"}},
+		{name: "-ab is no -a", args: []string{"-ab"}, passed: []string{"-ab"}},
+		{name: "--no-approve is passed on", args: []string{"--no-approve"}, passed: []string{"--no-approve"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+
+			binDir := filepath.Join(root, "bin")
+			homeDir := filepath.Join(root, "home")
+			record := filepath.Join(root, "pi-record")
+
+			for _, dir := range []string{binDir, homeDir} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatalf("create %s: %v", dir, err)
+				}
+			}
+
+			writePiTesterBin(t, binDir, record)
+			writePiTesterDeck(t, homeDir)
+
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			project := writePiTesterProject(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			stdout, stderr, err := runPiTester(t, installed.script, project, tc.args, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+			if err != nil {
+				t.Fatalf("the wrapper exited non-zero with %v: a unit whose command still passes --approve must keep a working tester, so the wrapper drops the argument and starts pi (issue #702): %v\nstdout: %s\nstderr: %s",
+					tc.args, err, stdout, stderr)
+			}
+
+			got := readPiRecord(t, record)
+
+			if diff := cmp.Diff(piTesterWantArgv(t, installed, homeDir, project, tc.passed), got.argv); diff != "" {
+				t.Errorf("pi did not start with exactly the arguments that are not --approve or -a, unchanged and in their order (-want +got):\n%s", diff)
+			}
+
+			lines := piTesterOutputLines(stderr)
+
+			if len(lines) != len(tc.dropped) {
+				t.Fatalf("the wrapper printed %d line(s) on stderr with %v, want one per dropped argument (%d): a unit whose tester command still passes --approve is told once, and a run with nothing to drop prints nothing (issue #702): %q",
+					len(lines), tc.args, len(tc.dropped), lines)
+			}
+
+			for i, arg := range tc.dropped {
+				if want := fmt.Sprintf(piTesterDroppedArgumentNotice, arg); lines[i] != want {
+					t.Errorf("the wrapper's line %d is %q, want %q: the line names the argument it dropped and why, so a maintainer can drop it from .dot-agent-deck.toml's tester command (issue #702)", i+1, lines[i], want)
+				}
+
+				if slices.Contains(got.argv, arg) {
+					t.Errorf("pi's argv holds %q, which the wrapper dropped with a line: an argument that reaches pi undoes --no-approve, since pi keeps the last of the two (issue #702): %q", arg, got.argv)
+				}
+			}
+		})
+	}
+}
+
+// TestPiTesterRefusesANonAbsoluteHome pins the check the deck's extension needs (issue #702): the wrapper names
+// ${HOME}/.pi/agent/extensions/dot-agent-deck, so a HOME that is unset, empty or not absolute builds a path it cannot
+// find. It exits 1 with one line that names HOME and never its value, and nothing runs - not the installed-file
+// checks, which would otherwise report a file the wrapper cannot locate, and not pi.
+func TestPiTesterRefusesANonAbsoluteHome(t *testing.T) {
+	t.Parallel()
+
+	const refusal = "pi-tester: HOME is not an absolute path, so the deck's pi extension cannot be found: the tester is not started (issue #702)"
+
+	cases := []struct {
+		name string
+		// set false leaves HOME out of the wrapper's environment entirely; otherwise home is its value.
+		set  bool
+		home string
+	}{
+		{name: "HOME is unset"},
+		{name: "HOME is empty", set: true},
+		{name: "HOME is a relative path", set: true, home: "home/invented"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+
+			binDir := filepath.Join(root, "bin")
+			homeDir := filepath.Join(root, "home")
+			record := filepath.Join(root, "pi-record")
+
+			for _, dir := range []string{binDir, homeDir} {
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatalf("create %s: %v", dir, err)
+				}
+			}
+
+			writePiTesterBin(t, binDir, record)
+
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			project := writePiTesterProject(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			env := piTesterEnv(binDir, homeDir, piTesterBasePath(t))
+
+			if tc.set {
+				env["HOME"] = tc.home
+			} else {
+				delete(env, "HOME")
+			}
+
+			stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, env)
+
+			if got := exitStatusOf(t, err); got != 1 {
+				t.Errorf("the wrapper exited %d with HOME %s, want 1: a HOME that is no absolute path is a refusal with one line, not a crash and not a start (issue #702)\nstdout: %s\nstderr: %s",
+					got, tc.name, stdout, stderr)
+			}
+
+			if got := strings.TrimSpace(stderr); got != refusal {
+				t.Errorf("the wrapper's stderr is %q, want %q: the one line names the variable it refused, so a maintainer whose pane stopped knows what to fix, and names no value of it (issue #702)", got, refusal)
+			}
+
+			// The value the case handed must never reach the stream, whatever it was: a relative HOME names a folder of
+			// the unit, which is a path a maintainer need not see, and the message is the same for all three cases.
+			if tc.set && tc.home != "" {
+				assertNoSecrets(t, "the wrapper's stderr", stderr, []secret{{kind: "the value of HOME", value: tc.home}})
+			}
+
+			if _, statErr := os.Stat(record); statErr == nil {
+				t.Errorf("the wrapper started pi with HOME %s: the deck's extension cannot be found without an absolute HOME, so pi would start and never receive a task (issue #702)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+
+			if _, statErr := os.Stat(piTesterNodeRecord(record)); statErr == nil {
+				t.Errorf("the wrapper ran node with HOME %s: the HOME check comes before the installed files' checks, which name a file the wrapper cannot locate without an absolute HOME (issue #702)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+		})
+	}
+}
+
+// piTesterDeckRefusal is the one line the wrapper prints when the deck's pi extension is not where the deck writes
+// it (issue #702).
+func piTesterDeckRefusal(deck, why string) string {
+	return fmt.Sprintf("pi-tester: the deck's pi extension %s %s: the tester is not started, because without it the pane gets no task and its work-done is not delivered; run dot-agent-deck orchestrator setup, then restart the pane (issue #702)", deck, why)
+}
+
+// piTesterAgentRefusal is the one line the wrapper prints when pi's agent directory could be the unit folder's
+// (issue #702).
+func piTesterAgentRefusal(agent, why string) string {
+	return fmt.Sprintf("pi-tester: pi's agent directory %s %s: the tester is not started, because pi trusts the settings and extensions it finds there (issue #702)", agent, why)
+}
+
+// TestPiTesterRefusesADeckExtensionItCannotUse pins the check the deck's extension needs (issue #702): without it the
+// pane starts and never receives a task, a silent stall, so the wrapper fails closed and names the directory and
+// `dot-agent-deck orchestrator setup` instead. The directory has to lie under HOME - never in the working directory,
+// which a branch writes -, hold no symbolic link anywhere above it, which the deck never writes, and contain a
+// regular, never a linked, index.ts, index.js or package.json, whichever the deck's release writes.
+//
+// Since round 1 of this issue's review, the wrapper checks pi's agent directory - ${HOME}/.pi/agent, which the deck's
+// extension lies in - before the deck's own path, and a HOME spelled with `/./`, `//` or through a link reaches it
+// as the unit folder's. So the two cases whose HOME is the unit folder or lies below it now stop at that refusal,
+// while every other case here keeps pi's agent directory a real one under a HOME outside the unit folder.
+//
+// One case pins the other half: the deck's own check against the working directory's physical path. pi starts in a
+// link to ${HOME}/.pi/agent/extensions, so the deck's directory lies in the unit folder physically - but the deck's
+// spelling is no prefix of the shell's resolved PWD, whose HOME carries a `.`, and pi's agent directory is that
+// folder's parent, so nothing before the physical check refuses it (issue #702, round 2).
+func TestPiTesterRefusesADeckExtensionItCannotUse(t *testing.T) {
+	t.Parallel()
+
+	const (
+		missing = "is missing or not a directory"
+		// symlinked is the deck's own directory being a link; linkedAbove the extensions directory it lies in, which
+		// the wrapper refuses too: it writes neither (issue #702).
+		symlinked   = "is a symbolic link, which the deck never writes"
+		linkedAbove = "is reached through a symbolic link, which the deck never writes"
+		noIndex     = "has no index.ts, index.js or package.json"
+		inUnit      = "lies in the working directory, the unit folder"
+	)
+
+	// deckFile writes one file of the deck's directory into home.
+	deckFile := func(t *testing.T, home, name string) {
+		t.Helper()
+
+		writeFileMode(t, filepath.Join(piTesterDeckDir(home), name), []byte("// the deck's pi extension, invented for this test (issue #702)\n"), 0o644)
+	}
+
+	cases := []struct {
+		name string
+		// home returns the HOME the wrapper is handed, after laying the deck's path out as the case leaves it.
+		home func(t *testing.T, root, project string) string
+		// dir, when set, returns the directory pi starts in, when that is not the unit folder the test writes: the
+		// deck's checks compare its path with the working directory's, which a case moves or reaches through a link.
+		dir func(t *testing.T, root, home, project string) string
+		// why is the condition the refusal line names; empty means the case starts pi.
+		why string
+		// agent says the refusal is pi's agent directory's, which the wrapper checks before the deck's extension: the
+		// two lie one inside the other, so a HOME in the unit folder is refused there first (issue #702).
+		agent bool
+	}{
+		{
+			name: "the deck's directory is missing",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterAgentDir(t, home)
+
+				return home
+			},
+			why: missing,
+		},
+		{
+			name: "the deck's path is a regular file",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writeFileMode(t, piTesterDeckDir(home), []byte("not a directory\n"), 0o644)
+
+				return home
+			},
+			why: missing,
+		},
+		{
+			name: "the deck's directory is a symbolic link to a whole one",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				target := filepath.Join(root, "written-by-the-deck")
+				deckFile(t, target, "index.ts")
+
+				if err := os.MkdirAll(filepath.Dir(piTesterDeckDir(home)), 0o700); err != nil {
+					t.Fatalf("create %s: %v", filepath.Dir(piTesterDeckDir(home)), err)
+				}
+
+				if err := os.Symlink(target, piTesterDeckDir(home)); err != nil {
+					t.Fatalf("link %s to %s: %v", piTesterDeckDir(home), target, err)
+				}
+
+				return home
+			},
+			why: symlinked,
+		},
+		{
+			name: "the deck's directory is reached through a symbolic link above it",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterAgentDir(t, home)
+
+				written := filepath.Join(root, "written-by-the-deck")
+				writePiTesterDeck(t, written)
+
+				if err := os.Symlink(filepath.Join(written, ".pi", "agent", "extensions"), filepath.Join(piTesterAgentDir(home), "extensions")); err != nil {
+					t.Fatalf("link %s to %s: %v", filepath.Join(piTesterAgentDir(home), "extensions"), filepath.Join(written, ".pi", "agent", "extensions"), err)
+				}
+
+				return home
+			},
+			why: linkedAbove,
+		},
+		{
+			name: "the deck's directory is empty",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+
+				if err := os.MkdirAll(piTesterDeckDir(home), 0o700); err != nil {
+					t.Fatalf("create %s: %v", piTesterDeckDir(home), err)
+				}
+
+				return home
+			},
+			why: noIndex,
+		},
+		{
+			name: "the deck's directory lies in the working directory",
+			home: func(t *testing.T, _, project string) string {
+				t.Helper()
+
+				home := resolvePiTesterDir(t, project)
+				deckFile(t, home, "index.ts")
+
+				return home
+			},
+			why:   inUnit,
+			agent: true,
+		},
+		{
+			name: "the deck's directory lies below the working directory",
+			home: func(t *testing.T, _, project string) string {
+				t.Helper()
+
+				home := filepath.Join(resolvePiTesterDir(t, project), "home")
+				deckFile(t, home, "index.ts")
+
+				return home
+			},
+			why:   inUnit,
+			agent: true,
+		},
+		{
+			name: "pi's working directory is a link to the folder the deck's directory lies in",
+			// Only the physical in-unit check reaches this one: pi starts in a link to the folder the deck's directory
+			// lies in, and HOME's `.` keeps the deck's spelling off the shell's resolved working directory.
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				deckFile(t, home, "index.ts")
+
+				if err := os.Symlink(filepath.Join(piTesterAgentDir(home), "extensions"), filepath.Join(root, "unit-link")); err != nil {
+					t.Fatalf("link %s to %s, the folder the deck's directory lies in: %v", filepath.Join(root, "unit-link"), filepath.Join(piTesterAgentDir(home), "extensions"), err)
+				}
+
+				return filepath.Dir(home) + "/./" + filepath.Base(home)
+			},
+			dir: func(_ *testing.T, root, _, _ string) string {
+				return filepath.Join(root, "unit-link")
+			},
+			why: inUnit,
+		},
+		{
+			name: "the deck holds only index.ts",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				deckFile(t, home, "index.ts")
+
+				return home
+			},
+		},
+		{
+			name: "the deck holds only index.js",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				deckFile(t, home, "index.js")
+
+				return home
+			},
+		},
+		{
+			name: "the deck holds only package.json",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				deckFile(t, home, "package.json")
+
+				return home
+			},
+		},
+		{
+			name: "the deck holds only a symbolic link to an index.ts",
+			home: func(t *testing.T, root, _ string) string {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				target := filepath.Join(root, "an-index.ts")
+				writeFileMode(t, target, []byte("// an extension the deck did not write (issue #702)\n"), 0o644)
+
+				if err := os.MkdirAll(piTesterDeckDir(home), 0o700); err != nil {
+					t.Fatalf("create %s: %v", piTesterDeckDir(home), err)
+				}
+
+				if err := os.Symlink(target, filepath.Join(piTesterDeckDir(home), "index.ts")); err != nil {
+					t.Fatalf("link %s to %s: %v", filepath.Join(piTesterDeckDir(home), "index.ts"), target, err)
+				}
+
+				return home
+			},
+			why: noIndex,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+
+			binDir := filepath.Join(root, "bin")
+			record := filepath.Join(root, "pi-record")
+
+			if err := os.MkdirAll(binDir, 0o700); err != nil {
+				t.Fatalf("create %s: %v", binDir, err)
+			}
+
+			writePiTesterBin(t, binDir, record)
+
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			project := writePiTesterProject(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			home := tc.home(t, root, project)
+
+			dir := project
+			if tc.dir != nil {
+				dir = tc.dir(t, root, home, project)
+			}
+
+			stdout, stderr, err := runPiTester(t, installed.script, dir, piTesterArgs, piTesterEnv(binDir, home, piTesterBasePath(t)))
+
+			if tc.why == "" {
+				if err != nil {
+					t.Fatalf("the wrapper exited non-zero although the deck's directory is whole: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+				}
+
+				got := readPiRecord(t, record)
+
+				if diff := cmp.Diff(piTesterWantArgv(t, installed, home, project, piTesterArgs), got.argv); diff != "" {
+					t.Errorf("pi did not start with the deck's extension by --extension and the rest of the wrapper's flags (-want +got):\n%s", diff)
+				}
+
+				return
+			}
+
+			if got := exitStatusOf(t, err); got != 1 {
+				t.Errorf("the wrapper exited %d with %s, want 1: a deck extension it cannot use is a refusal with one line, not a crash and not a start (issue #702)\nstdout: %s\nstderr: %s",
+					got, tc.name, stdout, stderr)
+			}
+
+			want := piTesterDeckRefusal(piTesterDeckDir(home), tc.why)
+			if tc.agent {
+				want = piTesterAgentRefusal(piTesterAgentDir(home), tc.why)
+			}
+
+			if got := strings.TrimSpace(stderr); got != want {
+				t.Errorf("the wrapper's stderr is %q, want %q: the line names the directory it refused, why, and the step that writes it, so a maintainer whose pane exited can fix it (issue #702)", got, want)
+			}
+
+			if _, statErr := os.Stat(record); statErr == nil {
+				t.Errorf("the wrapper started pi with %s: without the deck's extension the pane gets no task and its work-done is not delivered, a silent stall the refusal exists to replace (issue #702)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+		})
+	}
+}
+
+// TestPiTesterRefusesAnAgentDirectoryThatCouldBeTheUnitFolder pins pi's agent directory check (issue #702):
+// ${HOME}/.pi/agent holds the settings, the models and the system prompt pi trusts whatever --no-approve and
+// --no-extensions say, so a symlinked ~/.pi or ~/.pi/agent, a missing agent directory, or one that is the unit folder
+// a branch writes must stop the tester. A string comparison against PWD alone misses the last one: a HOME spelled
+// `<parent>/./<unit>/h`, `<parent>//<unit>/h` or `<parent>/beside/../<unit>/h` - the dots in or beside the unit
+// folder's own path, which a string prefix of it passes - or a unit folder reached through a link, is physically the
+// unit folder and textually not. The wrapper fails closed with one line and pi never starts.
+func TestPiTesterRefusesAnAgentDirectoryThatCouldBeTheUnitFolder(t *testing.T) {
+	t.Parallel()
+
+	const (
+		symlinked = "is reached through a symbolic link"
+		missing   = "is missing or not a directory"
+		inUnit    = "lies in the working directory, the unit folder"
+	)
+
+	cases := []struct {
+		name string
+		// layout lays pi's agent directory out as the case leaves it, and returns the directory pi starts in - the
+		// unit folder, or a link to it - and the HOME the wrapper is handed, spelled as the case needs it.
+		layout func(t *testing.T, root, project string) (dir, home string)
+		// why is the condition the refusal line names.
+		why string
+	}{
+		{
+			name: "HOME's .pi is a symbolic link",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				written := filepath.Join(root, "written-by-pi")
+				writePiTesterDeck(t, written)
+
+				if err := os.MkdirAll(home, 0o700); err != nil {
+					t.Fatalf("create %s: %v", home, err)
+				}
+
+				if err := os.Symlink(filepath.Join(written, ".pi"), filepath.Join(home, ".pi")); err != nil {
+					t.Fatalf("link %s to %s: %v", filepath.Join(home, ".pi"), filepath.Join(written, ".pi"), err)
+				}
+
+				return project, home
+			},
+			why: symlinked,
+		},
+		{
+			name: "HOME's .pi/agent is a symbolic link",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				written := filepath.Join(root, "written-by-pi")
+				writePiTesterDeck(t, written)
+
+				if err := os.MkdirAll(filepath.Join(home, ".pi"), 0o700); err != nil {
+					t.Fatalf("create %s: %v", filepath.Join(home, ".pi"), err)
+				}
+
+				if err := os.Symlink(filepath.Join(written, ".pi", "agent"), piTesterAgentDir(home)); err != nil {
+					t.Fatalf("link %s to %s: %v", piTesterAgentDir(home), filepath.Join(written, ".pi", "agent"), err)
+				}
+
+				return project, home
+			},
+			why: symlinked,
+		},
+		{
+			name: "HOME's .pi/agent is missing",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				if err := os.MkdirAll(home, 0o700); err != nil {
+					t.Fatalf("create %s: %v", home, err)
+				}
+
+				return project, home
+			},
+			why: missing,
+		},
+		{
+			name: "HOME is spelled with a . in the unit folder's own path",
+			layout: func(t *testing.T, _, project string) (string, string) {
+				t.Helper()
+
+				writePiTesterDeck(t, filepath.Join(project, "h"))
+
+				return project, filepath.Dir(project) + "/./" + filepath.Base(project) + "/h"
+			},
+			why: inUnit,
+		},
+		{
+			name: "HOME is spelled with a // in the unit folder's own path",
+			layout: func(t *testing.T, _, project string) (string, string) {
+				t.Helper()
+
+				writePiTesterDeck(t, filepath.Join(project, "h"))
+
+				return project, filepath.Dir(project) + "//" + filepath.Base(project) + "/h"
+			},
+			why: inUnit,
+		},
+		{
+			name: "HOME is spelled with a .. beside the unit folder",
+			layout: func(t *testing.T, _, project string) (string, string) {
+				t.Helper()
+
+				writePiTesterDeck(t, filepath.Join(project, "h"))
+
+				// The step out has to leave from a real directory beside the unit folder, or `cd -P` would fail on the
+				// way and the wrapper would refuse for that reason instead of the physical one. Stepping out and back in
+				// is what a string prefix of the unit folder passes: `<unit>/../<unit>/h` starts with `<unit>/`.
+				beside := filepath.Join(filepath.Dir(project), "beside")
+				if err := os.MkdirAll(beside, 0o700); err != nil {
+					t.Fatalf("create %s, the directory the .. spelling steps out of: %v", beside, err)
+				}
+
+				return project, beside + "/../" + filepath.Base(project) + "/h"
+			},
+			why: inUnit,
+		},
+		{
+			name: "the unit folder is reached through a symbolic link",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				link := filepath.Join(root, "unit-link")
+				if err := os.Symlink(project, link); err != nil {
+					t.Fatalf("link %s to %s, the unit folder the shell started in resolves to: %v", link, project, err)
+				}
+
+				home := filepath.Join(link, "h")
+				writePiTesterDeck(t, home)
+
+				return link, home
+			},
+			why: inUnit,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+
+			binDir := filepath.Join(root, "bin")
+			record := filepath.Join(root, "pi-record")
+
+			if err := os.MkdirAll(binDir, 0o700); err != nil {
+				t.Fatalf("create %s: %v", binDir, err)
+			}
+
+			writePiTesterBin(t, binDir, record)
+
+			installed := writePiTesterInstalled(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			project := writePiTesterProject(t, root,
+				piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+				piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+			dir, home := tc.layout(t, root, project)
+
+			stdout, stderr, err := runPiTester(t, installed.script, dir, piTesterArgs, piTesterEnv(binDir, home, piTesterBasePath(t)))
+
+			if got := exitStatusOf(t, err); got != 1 {
+				t.Errorf("the wrapper exited %d with %s, want 1: an agent directory pi always trusts is a refusal with one line, not a crash and not a start (issue #702)\nstdout: %s\nstderr: %s",
+					got, tc.name, stdout, stderr)
+			}
+
+			if got, want := strings.TrimSpace(stderr), piTesterAgentRefusal(piTesterAgentDir(home), tc.why); got != want {
+				t.Errorf("the wrapper's stderr is %q, want %q: the line names the agent directory it refused and why, so a maintainer whose pane exited knows what to fix, and it has to win over the deck extension's own checks, which come after it (issue #702)", got, want)
+			}
+
+			if _, statErr := os.Stat(record); statErr == nil {
+				t.Errorf("the wrapper started pi with %s: pi trusts the settings and extensions of the agent directory it finds there, and a branch could write one inside the unit folder (issue #702)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+		})
+	}
 }

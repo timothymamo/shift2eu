@@ -83,7 +83,7 @@ SHIFT2EU_PITESTER_LIST
     echo "vm-pi-tester: the tester's wrapper does not parse; nothing installed" >&2
     return 1
   fi
-  if [ "$(tail -n 1 "${tmp}/pi-tester.sh")" != 'allowlisted exec "${pi}" --extension "${extension}" "$@"' ]; then
+  if [ "$(tail -n 1 "${tmp}/pi-tester.sh")" != 'allowlisted exec "${pi}" --no-approve --no-extensions --extension "${extension}" --extension "${deck}" --skill "${skills}" "$@"' ]; then
     echo "vm-pi-tester: the tester's wrapper does not end with its exec line, so it arrived cut short; nothing installed" >&2
     return 1
   fi

@@ -1,5 +1,5 @@
 {
-  "count": 65,
+  "count": 71,
   "data": [
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
@@ -140,6 +140,66 @@
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/shop.example.com",
       "name": "shop.example.com",
       "type": "microsoft.network/dnszones",
+      "kind": "",
+      "location": "global",
+      "zones": null,
+      "properties": {
+        "zoneType": "Public"
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/blog.example.com",
+      "name": "blog.example.com",
+      "type": "microsoft.network/dnszones",
+      "kind": "",
+      "location": "global",
+      "zones": null,
+      "properties": {
+        "zoneType": "Public"
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/legacy.example.com",
+      "name": "legacy.example.com",
+      "type": "microsoft.network/dnszones",
+      "kind": "",
+      "location": "global",
+      "zones": null,
+      "properties": {}
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsZones/old-internal.example.com",
+      "name": "old-internal.example.com",
+      "type": "microsoft.network/dnszones",
+      "kind": "",
+      "location": "global",
+      "zones": null,
+      "properties": {
+        "zoneType": "Private"
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/privateDnsZones/internal.example.com",
+      "name": "internal.example.com",
+      "type": "microsoft.network/privatednszones",
+      "kind": "",
+      "location": "global",
+      "zones": null,
+      "properties": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/dnsResolvers/dnsr-shop",
+      "name": "dnsr-shop",
+      "type": "microsoft.network/dnsresolvers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": null
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/trafficManagerProfiles/tm-shop",
+      "name": "tm-shop",
+      "type": "microsoft.network/trafficmanagerprofiles",
       "kind": "",
       "location": "global",
       "zones": null,
