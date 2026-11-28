@@ -64,9 +64,8 @@ const (
 // Every event value reaches the shell through a step's env: alone, so no ${{ }}
 // may stand anywhere in the job's whole block outside a step's env: block: not in
 // a run: or a with:, nor in a job-level key such as if:, runs-on: or a job-level
-// env: (issue #723). The two action
-// pins are ci.yml's, so one Renovate update keeps both workflows on the same
-// actions.
+// env: (issue #723). The two action pins are ci.yml's, so one Renovate update
+// keeps both workflows on the same actions.
 func TestCICoAuthorTrailersRunsFromTheBaseBranch(t *testing.T) {
 	t.Parallel()
 
@@ -199,7 +198,7 @@ const (
 	// its job's id, on every workflow but coauthor-trailers.yml: ci.yml's legacy
 	// job is gone with the rollout (issue #723), and a job of either reports a
 	// co-author check beside the required one.
-	ruleLegacyName  = "is the retired legacy check's name"
+	ruleLegacyName  = "is the retired legacy check's name outside " + coAuthorWorkflowPath
 	ruleLegacyJobID = "is the retired legacy job's id outside " + coAuthorWorkflowPath
 )
 
@@ -411,12 +410,7 @@ func coAuthorNameScalar(num int, id, raw string) (string, error) {
 	}
 
 	if raw[0] == '"' || raw[0] == '\'' {
-		if len(raw) < 2 || raw[len(raw)-1] != raw[0] {
-			return "", fmt.Errorf("line %d: the job %s holds the quoted name value %q, want one quoted scalar on the key's line: a quote that runs on reports a name this reader never compares",
-				num, id, raw)
-		}
-
-		return raw[1 : len(raw)-1], nil
+		return coAuthorQuotedNameScalar(num, id, raw)
 	}
 
 	// A plain scalar ends where a comment starts, so the comment is no part of the
@@ -433,6 +427,62 @@ func coAuthorNameScalar(num int, id, raw string) (string, error) {
 	}
 
 	return raw, nil
+}
+
+// coAuthorQuotedNameScalar returns the name the quoted name: value raw reports,
+// read up to its real closing quote: in a single-quoted scalar ” is an escaped
+// quote, in a double-quoted one a backslash escapes the next character (the
+// caller refuses every backslash first). Nothing but white space may follow the
+// closing quote: `name: 'Co-author trailers' # 'x'` reports Co-author trailers,
+// while a reader that strips the first and last quote compares a name holding
+// the comment, which no rule refuses (issue #723, the auditor's finding L1).
+func coAuthorQuotedNameScalar(num int, id, raw string) (string, error) {
+	quote := raw[0]
+
+	var value strings.Builder
+
+	end := -1
+
+	for i := 1; i < len(raw); i++ {
+		c := raw[i]
+
+		switch {
+		case quote == '\'' && c == '\'' && i+1 < len(raw) && raw[i+1] == '\'':
+			value.WriteByte('\'')
+			i++
+		case quote == '"' && c == '\\' && i+1 < len(raw):
+			value.WriteByte(raw[i+1])
+			i++
+		case c == quote:
+			end = i
+		default:
+			value.WriteByte(c)
+		}
+
+		if end >= 0 {
+			break
+		}
+	}
+
+	if end < 0 {
+		return "", fmt.Errorf("line %d: the job %s holds the quoted name value %q, want one quoted scalar on the key's line: a quote that runs on reports a name this reader never compares",
+			num, id, raw)
+	}
+
+	rest := raw[end+1:]
+	if strings.TrimLeft(rest, " \t") == "" {
+		return value.String(), nil
+	}
+
+	// YAML starts a comment at a # after white space, a space or a tab: the
+	// comment is no part of the name GitHub reports.
+	if trimmed := strings.TrimLeft(rest, " \t"); trimmed != rest && strings.HasPrefix(trimmed, "#") {
+		return "", fmt.Errorf("line %d: the job %s holds the quoted name value %q with a trailing comment, %q, want a single-line plain or quoted scalar with none: GitHub reports %q, a name this reader compares only with the comment kept",
+			num, id, raw, trimmed, value.String())
+	}
+
+	return "", fmt.Errorf("line %d: the job %s holds the quoted name value %q with %q after its closing quote, want one quoted scalar on the key's line and nothing after it: a quote that runs on reports a name this reader never compares",
+		num, id, raw, rest)
 }
 
 // coAuthorNameProblem is one job of a workflow that may report a status check

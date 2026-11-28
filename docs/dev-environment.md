@@ -2181,7 +2181,9 @@ co-author check is `.github/workflows/coauthor-trailers.yml`'s alone: it runs un
 base branch, never from the pull request, and it reports its own required check, **Co-author trailers
 (base)**. `ci.yml` holds no co-author job, and `Lint` does not report one. The one-time rollout is done:
 the maintainer required the check on 2026-11-28, after the probe (PR #722, closed unmerged), and issue
-#723's pull request removed `ci.yml`'s old job; ADR 0050's Maintainer steps keep the record. A pull
+#723's pull request removed `ci.yml`'s old job; ADR 0050's Maintainer steps keep the record. To confirm
+the ruleset still requires `Co-author trailers (base)` from GitHub Actions (`integration_id` 15368), run
+the `gh api` command of step 3 there. A pull
 request with no run of the check waits on it until a new event starts one: a push, **Update branch**, a
 title edit, or a close and reopen; re-running an old run replays its old event.
 

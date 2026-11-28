@@ -806,6 +806,10 @@ func workflowJobs(doc string) (map[string][]ciLine, error) {
 				return nil, fmt.Errorf("line %d: %q is not a job id ending in a colon", l.num, l.text)
 			}
 
+			// GitHub reads a quoted key as the id it holds: `"coauthor-trailers":`
+			// is the job coauthor-trailers, so every caller compares that id
+			// (issue #723).
+			id = unquoteYAMLScalar(id)
 			current = id
 			jobs[id] = nil
 		default:

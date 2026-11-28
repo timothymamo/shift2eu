@@ -43,9 +43,10 @@
 // plain, or the job's id when it holds no name:): it refuses a name holding
 // (base), a ${{ }} name no allow-list entry pins (today only the lint matrix
 // entry's), and the retired legacy name Co-author trailers or job id
-// coauthor-trailers on any job, ci.yml's included (issue #723). The guard reads both .yml and .yaml
-// workflows and refuses a coauthor-trailers.yaml beside the .yml
-// (TestCICoAuthorTrailersReadsBothWorkflowSpellings). It fails closed, with an
+// coauthor-trailers on any job, ci.yml's included (issue #723). The guard
+// reads both .yml and .yaml workflows and refuses a coauthor-trailers.yaml
+// beside the .yml (TestCICoAuthorTrailersReadsBothWorkflowSpellings). It fails
+// closed, with an
 // error, on any job name it cannot read as one plain or quoted line: a block
 // scalar, a value below the key or continued onto the lines below, a backslash
 // escape, a quoted key, a flow-collection job, leading spaces or a trailing

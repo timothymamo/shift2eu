@@ -1,9 +1,11 @@
 # 0050. Run the co-author check from the base branch's workflow under pull_request_target
 
-- Status: Accepted. Amended 2026-11-28 (issue #723): the two-step rollout is done. The maintainer
-  required `Co-author trailers (base)` on 2026-11-28, after the probe (PR #722, closed unmerged), and
-  issue #723's pull request removes `ci.yml`'s legacy `coauthor-trailers` job and `Lint`'s need of it
-  (Decision, What the pin asserts, Consequences). The `${{` rule covers the job's whole block.
+- Status: Accepted. Amended 2026-11-28 (issue #723): the two-step rollout is done. Issue #706's pull
+  request (PR #711) added the workflow, the maintainer required `Co-author trailers (base)` on
+  2026-11-28, after the probe (PR #722, closed unmerged), and issue #723's pull request removed
+  `ci.yml`'s legacy `coauthor-trailers` job and `Lint`'s need of it (Decision, What the pin asserts,
+  Consequences). `ci.yml` holds no co-author job, `Co-author trailers (base)` is the only co-author
+  check, and the `${{` rule covers the job's whole block.
 - Date: 2026-11-27
 
 ## Context
@@ -120,7 +122,7 @@ does every workflow's.
   `persist-credentials: false`, the base copy of `test/lint`, the isolated git configuration. In the job,
   `${{ }}` appears only in `env:`. setup-go reads a plain `go.mod`, so the new workflow needs no
   exception for its `go-version-file`; PR #703's exception stays for the old job until the follow-up
-  removes both.
+  removes both (both removed by issue #723).
 - **Token and secrets.** Workflow-level `permissions: contents: read`, no job-level `permissions:`, no
   `secrets.` anywhere in the file, no `environment:`. The repository is public, so the fetch needs no
   credential.
@@ -140,10 +142,7 @@ does every workflow's.
      maintainer requires `Co-author trailers (base)`, and it is the first pull request checked by
      `main`'s definition alone.
 
-  Amended 2026-11-28: both steps are done. Issue #706's pull request (PR #711) added the workflow; the
-  maintainer required `Co-author trailers (base)` on 2026-11-28, after the probe (PR #722, closed
-  unmerged); issue #723's pull request removed the old job and `Lint`'s need of it. `ci.yml` holds no
-  co-author job, and `Co-author trailers (base)` is the only co-author check.
+  Both steps are done (Status).
 
 ### What the pin asserts
 
