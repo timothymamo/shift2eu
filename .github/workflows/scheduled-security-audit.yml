@@ -187,10 +187,10 @@ jobs:
           fi
           tar -C "${bin}" -xzf "${dl}/trivy.tar.gz" trivy
           # go.mod's go line, read here in the checkout at run time (issue #687): go.mod holds the one version.
-          # It is read once per job (issue #713), with GOWORK=off so no go.work answers for another module, and a read that
-          # fails, gives anything but one line or is not a Go version (1.<n> or 1.<n>.<p>) fails the run
-          # with its own message (issue #710): read inside the install's $(...), a failed go list gave
-          # GOTOOLCHAIN=go and the install failed with a confusing go error, not a message of its own.
+          # It is read once per job (issue #713), with GOWORK=off so no go.work answers for another module,
+          # and a read that fails, gives anything but one line or is not a Go version (1.<n> or 1.<n>.<p>)
+          # fails the run with its own message (issue #710): read inside the install's $(...), a failed go
+          # list gave GOTOOLCHAIN=go and the install failed with a confusing go error, not a message of its own.
           gomod_go="$(GOWORK=off go list -m -f '{{.GoVersion}}')" || gomod_go=""
           if [ -z "${gomod_go}" ]; then
             echo "::error title=Audit checks::go.mod's go line could not be read: see runbook step 11"
