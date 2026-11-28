@@ -207,7 +207,7 @@ jobs:
             exit 1
           fi
           # The checked value is handed to the job's later steps, which read go.mod no second time.
-          echo "gomod_go=${gomod_go}" >> "$GITHUB_ENV"
+          echo "gomod_go=${gomod_go}" >> "${GITHUB_ENV}"
           GOTOOLCHAIN="go${gomod_go}" GOBIN="${bin}" go install "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
           # trivy's vulnerability database, downloaded now (row 2), so that row 10 scans offline from it.
           # It moves every few hours and has no pin: trivy checks the OCI manifest's digest as it pulls it.
@@ -222,15 +222,15 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
-          go mod download
-          go -C tools mod download
           # govulncheck reports standard-library vulnerabilities for the Go it runs with: go.mod's,
-          # as the install step read and checked it (issue #713).
+          # as the install step read and checked it (issue #713). A missing value fails before any download.
           if [ -z "${gomod_go:-}" ]; then
             echo "::error title=Audit checks::go.mod's Go read by the install step did not reach this step: see runbook step 11"
             exit 1
           fi
           want="go${gomod_go}"
+          go mod download
+          go -C tools mod download
           if [ "$(go env GOVERSION)" != "${want}" ]; then
             echo "::error title=Audit checks::the go command is not go.mod's ${want}: see runbook step 11"
             exit 1
