@@ -13,7 +13,7 @@ internal/
     inventory/                  what runs in the source today
     catalog/                    what a target offers
     mapping/                    matching resources to offerings
-    assessment/                 verdicts, blockers, readiness
+    assessment/                 verdicts, blockers
   app/analysis/               The analyse use case and the ports it needs
   adapter/
     internal/jsondoc            the strict JSON decoder adapters share

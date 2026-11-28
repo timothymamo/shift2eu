@@ -832,7 +832,7 @@ forbidigo matches a selector against its static type, so these get through:
 | `inventory` | Resources discovered in a source: category, region, size, capabilities used, dependencies, and the raw provider type for traceability |
 | `catalog` | Offerings of a target: categories, capabilities, plans and sizes, EU regions, or global (no region the user chooses, ADR 0048) |
 | `mapping` | Rules that match a resource to candidate offerings and assign a fit (direct, partial, none) with reasons |
-| `assessment` | Per-resource and per-workload verdicts, blockers, required changes, readiness score |
+| `assessment` | Per-resource and per-workload verdicts, blockers, required changes |
 | `text` | Validation and bounded quoting of untrusted free text (IDs, raw types, regions, names); no output-format escaping |
 
 Why a taxonomy: with S sources and T targets, direct service-to-service tables need S×T mappings that
