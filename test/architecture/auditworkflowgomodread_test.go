@@ -125,7 +125,7 @@ func auditGoModReadFragmentOf(script []string) ([]string, string) {
 				`the whole fragment - the read, the checks and their echoes, and the write of the checked value to $GITHUB_ENV`)
 		}
 
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if auditIsComment(trimmed) {
 			continue
 		}
 
@@ -199,6 +199,15 @@ func auditLineShapeOf(shapes []auditFragmentLineShape, trimmed string) (auditFra
 	}
 
 	return auditFragmentLineShape{}, false
+}
+
+// auditIsComment reports whether a line, already trimmed as auditStepLineOf
+// trims it, is no line of a step's script: empty, or a comment. The allow lists
+// and the static pins read a step's lines through this one rule, so a line is a
+// comment only where bash reads one - after its ASCII spaces and tabs, with no
+// Unicode space or control byte leading it (issue #713).
+func auditIsComment(trimmed string) bool {
+	return trimmed == "" || strings.HasPrefix(trimmed, "#")
 }
 
 // auditPrintableASCIIProblemOf returns the reason this file refuses a line that
@@ -309,7 +318,7 @@ func auditModulesStepScriptOf(script []string) ([]string, string) {
 				`the whole step - the guard, the value it takes and the checks that hold every Go command to it`)
 		}
 
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if auditIsComment(trimmed) {
 			continue
 		}
 
@@ -344,10 +353,6 @@ func auditModulesStepScript(t *testing.T, step auditJobStep) []string {
 // #713).
 var auditGoModGoEnvWrite = regexp.MustCompile(`^echo "([A-Za-z_][A-Za-z0-9_]*)=\$\{([A-Za-z_][A-Za-z0-9_]*)\}" >> "(\$GITHUB_ENV|\$\{GITHUB_ENV\})"$`)
 
-// auditGoModGoDefault matches the line a step gives gomod_go its empty default on,
-// above the guard that reports a value the step never received (issue #713).
-var auditGoModGoDefault = regexp.MustCompile(`^gomod_go="\$\{gomod_go:?-\}"$`)
-
 // auditGoModGoVersionShape is the one shape go.mod's go line may take, as the
 // install step's own check names it: a release, 1.<n> or 1.<n>.<p>, and no
 // prerelease (issue #713).
@@ -381,7 +386,7 @@ func auditGoModGoShapeCheck(lines []string, readAt, usedAt int, name string) (au
 			continue
 		}
 
-		if strings.TrimSpace(lines[block.open]) != want {
+		if trimmed, _ := auditStepLineOf(lines[block.open]); trimmed != want {
 			continue
 		}
 
@@ -411,7 +416,9 @@ func auditInstallGoModGoShapeCheck(lines []string, readAt, usedAt int, name, whe
 	}
 
 	if !auditBlockExitsOne(block.body) {
-		problems = append(problems, fmt.Sprintf("%s's Go-version check holds no exit 1 of its own (the block opens on %q): the exit belongs inside the same if block as its ::error, or the step goes on and builds govulncheck with a value that is no Go version (issue #713)", where, strings.TrimSpace(lines[block.open])))
+		opened, _ := auditStepLineOf(lines[block.open])
+
+		problems = append(problems, fmt.Sprintf("%s's Go-version check holds no exit 1 of its own (the block opens on %q): the exit belongs inside the same if block as its ::error, or the step goes on and builds govulncheck with a value that is no Go version (issue #713)", where, opened))
 	}
 
 	return problems
@@ -440,8 +447,8 @@ func auditInstallGoModGoEnvWrite(lines []string, readAt, installAt int, name, wh
 	)
 
 	for i := readAt + 1; i < installAt; i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if strings.HasPrefix(trimmed, "#") {
+		trimmed, _ := auditStepLineOf(lines[i])
+		if auditIsComment(trimmed) {
 			continue
 		}
 
@@ -495,7 +502,10 @@ func auditGoModulesStep(steps []auditJobStep) (auditJobStep, bool) {
 // go list of its own - which the install step alone runs, with GOWORK=off and the
 // checks that fail the run on what it read - and a guard above the first use fails
 // the run with its own ::error and exit 1 when the value is unset or empty, in the
-// ${gomod_go:-} form that set -u cannot end the step on first.
+// ${gomod_go:-} form that set -u cannot end the step on first. No line above that
+// guard reads the value, whichever form the read takes: a default of its own above
+// the guard is a read the guard has not checked yet, so the step holds no shape
+// for one.
 func auditGoModulesStepFromEnv(t *testing.T, step auditJobStep) []string {
 	t.Helper()
 
@@ -505,8 +515,8 @@ func auditGoModulesStepFromEnv(t *testing.T, step auditJobStep) []string {
 	var problems []string
 
 	for _, line := range script {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") {
+		trimmed, _ := auditStepLineOf(line)
+		if auditIsComment(trimmed) {
 			continue
 		}
 
@@ -518,8 +528,8 @@ func auditGoModulesStepFromEnv(t *testing.T, step auditJobStep) []string {
 	valueAt := -1
 
 	for i, line := range script {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "#") || valueAt >= 0 {
+		trimmed, _ := auditStepLineOf(line)
+		if auditIsComment(trimmed) || valueAt >= 0 {
 			continue
 		}
 
@@ -547,9 +557,10 @@ func auditGoModulesStepFromEnv(t *testing.T, step auditJobStep) []string {
 	}
 
 	condition := auditIfBlockCondition(guardBody)
+	guardLine, _ := auditStepLineOf(script[guardAt])
 
 	if !strings.Contains(condition, "${gomod_go:-}") && !strings.Contains(condition, "${gomod_go-}") {
-		problems = append(problems, fmt.Sprintf(`%s checks the value as %q, which set -u ends the step on before its ::error when the variable is unset: write the empty-or-unset form ${gomod_go:-}, so a step that never received the value fails with the message and not with "unbound variable" (issue #713)`, where, strings.TrimSpace(script[guardAt])))
+		problems = append(problems, fmt.Sprintf(`%s checks the value as %q, which set -u ends the step on before its ::error when the variable is unset: write the empty-or-unset form ${gomod_go:-}, so a step that never received the value fails with the message and not with "unbound variable" (issue #713)`, where, guardLine))
 	}
 
 	if !strings.Contains(strings.Join(guardBody, "\n"), "::error") {
@@ -557,19 +568,12 @@ func auditGoModulesStepFromEnv(t *testing.T, step auditJobStep) []string {
 	}
 
 	if !auditBlockExitsOne(guardBody) {
-		problems = append(problems, fmt.Sprintf("%s's empty-value guard holds no exit 1 of its own (the block opens on %q): the exit belongs inside the same if block as its ::error, or the step goes on and compares go.mod's Go with nothing (issue #713)", where, strings.TrimSpace(script[guardAt])))
+		problems = append(problems, fmt.Sprintf("%s's empty-value guard holds no exit 1 of its own (the block opens on %q): the exit belongs inside the same if block as its ::error, or the step goes on and compares go.mod's Go with nothing (issue #713)", where, guardLine))
 	}
 
 	for i := 0; i < guardAt; i++ {
-		trimmed := strings.TrimSpace(script[i])
-		if strings.HasPrefix(trimmed, "#") || !auditNamesVariable(trimmed, "gomod_go") {
-			continue
-		}
-
-		// A line that only gives the value its empty default uses no
-		// version: it is what keeps set -u from ending the step on an
-		// unset variable, and it belongs above the guard.
-		if auditGoModGoDefault.MatchString(trimmed) {
+		trimmed, _ := auditStepLineOf(script[i])
+		if auditIsComment(trimmed) || !auditNamesVariable(trimmed, "gomod_go") {
 			continue
 		}
 
@@ -858,8 +862,10 @@ func TestAuditFragmentLineShapesHoldTheFragmentToTheStepsOwnLines(t *testing.T) 
 	}
 
 	for _, line := range auditGoModReadStep {
-		if _, ok := auditLineShapeOf(auditFragmentLineShapes, strings.TrimSpace(line)); !ok {
-			t.Errorf("auditLineShapeOf(auditFragmentLineShapes, %q) = no shape, want one: every line of the read and the checks is a shape the fragment this file runs holds (issue #713)", strings.TrimSpace(line))
+		trimmed, _ := auditStepLineOf(line)
+
+		if _, ok := auditLineShapeOf(auditFragmentLineShapes, trimmed); !ok {
+			t.Errorf("auditLineShapeOf(auditFragmentLineShapes, %q) = no shape, want one: every line of the read and the checks is a shape the fragment this file runs holds (issue #713)", trimmed)
 		}
 	}
 
@@ -1452,13 +1458,17 @@ func auditGoModGoSteps(install, modules []string) []auditJobStep {
 // keeps the shape somewhere in its line lets every value through with an
 // alternation beside it, as ^1\.[0-9]+(\.[0-9]+)?$|^.*$ does, and a write whose
 // braces do not match is a path of another name that hands the job nothing: each
-// is a case here.
+// is a case here. The modules step is held to one rule too: every line above its
+// guard that reads gomod_go is refused, whichever form the read takes, and a line
+// is a comment only where bash reads one, so a line led by a byte that is no blank
+// to bash reads the value the guard has not checked yet.
 func TestAuditGoModGoOncePerJobRejectsALoosenedShapeOrWrite(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name    string
 		install []string // the install step's lines from the shape check on
+		modules []string // the modules step's lines, auditGoModulesStepLines when nil
 		want    int
 	}{
 		{
@@ -1497,16 +1507,41 @@ func TestAuditGoModGoOncePerJobRejectsALoosenedShapeOrWrite(t *testing.T) {
 			),
 			want: 2,
 		},
+		{
+			name:    "a default line that only restates the value above the guard",
+			install: auditGoModGoShapeCheckLines,
+			modules: slices.Concat(
+				auditGoModulesStepLines[:1],
+				[]string{`gomod_go="${gomod_go:-}"`},
+				auditGoModulesStepLines[1:],
+			),
+			want: 1,
+		},
+		{
+			name:    "a line that only looks like a comment above the guard, led by a no-break space",
+			install: auditGoModGoShapeCheckLines,
+			modules: slices.Concat(
+				auditGoModulesStepLines[:1],
+				[]string{"\u00a0# ${gomod_go}"},
+				auditGoModulesStepLines[1:],
+			),
+			want: 1,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			steps := auditGoModGoSteps(tc.install, auditGoModulesStepLines)
+			modules := tc.modules
+			if modules == nil {
+				modules = auditGoModulesStepLines
+			}
+
+			steps := auditGoModGoSteps(tc.install, modules)
 
 			problems := auditGoModGoOncePerJob(t, steps)
 			if len(problems) != tc.want {
-				t.Errorf("auditGoModGoOncePerJob(a step whose install step holds %q from the shape check on) reported %d problem(s), want %d:\n%s",
-					tc.install, len(problems), tc.want, strings.Join(problems, "\n"))
+				t.Errorf("auditGoModGoOncePerJob(the steps this case builds - the install step from %q on, the modules step %q) reported %d problem(s), want %d:\n%s",
+					tc.install, modules, len(problems), tc.want, strings.Join(problems, "\n"))
 			}
 		})
 	}
