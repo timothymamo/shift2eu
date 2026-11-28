@@ -11,6 +11,7 @@ package pdfreport_test
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -1427,11 +1428,14 @@ func blockerLine(tb testing.TB, lines []pdfLine, from, to int, resourceID string
 	return pdfLine{}, false
 }
 
-// lineIsInsideAFill reports whether the line starts inside a fill of the colour
-// given: a box that spans pages is drawn again on each page, so the fill of the
-// box holds the line on the page it is drawn on. The blockers box is filled in
-// --warn-bg, which shares its value with --partial-bg, so the fill is matched by
-// colour, as the PRD's palette gives it.
+// lineIsInsideAFill reports whether the whole line lies inside a fill of the
+// colour given: a box that spans pages is drawn again on each page, so the fill
+// of the box holds the line on the page it is drawn on, from the line's first
+// character to its last. The fill has to be the box's own — the text width wide,
+// which no fit badge reaches — and to hold every run of the line, not only the
+// point the leftmost one starts at: --warn-bg shares its value with --partial-bg,
+// so a Partial badge's fill carries the same colour, and it would satisfy a check
+// that asked for one point inside a fill of that colour.
 func lineIsInsideAFill(file *testPDF, line pdfLine, colour pdfRGB) bool {
 	if line.Page < 0 || line.Page >= len(file.pages) {
 		return false
@@ -1439,24 +1443,36 @@ func lineIsInsideAFill(file *testPDF, line pdfLine, colour pdfRGB) bool {
 
 	page := file.pages[line.Page]
 
-	left := pdfPoint{X: -1}
+	left, right := math.MaxInt, math.MinInt
 
 	for _, run := range page.runs {
 		if run.Y != line.Y || strings.TrimSpace(run.Text) == "" {
 			continue
 		}
 
-		if left.X < 0 || run.X*milli < left.X {
-			left = pdfPoint{X: run.X * milli, Y: run.Y * milli}
-		}
+		start := run.X * milli
+		end := start + pdfreport.TextWidth(run.Font, run.Size, run.Text)
+
+		left, right = min(left, start), max(right, end)
 	}
 
-	if left.X < 0 {
+	if left > right {
 		return false
 	}
 
 	for _, shape := range page.shapes {
-		if shape.Op == "f" && shape.Fill == colour && len(shape.Rects) == 1 && shape.Box.contains(left, boxSlack) {
+		if shape.Op != "f" || shape.Fill != colour || len(shape.Rects) != 1 {
+			continue
+		}
+
+		rect := shape.Rects[0]
+		if rect.W != boxBodyWidth {
+			// A badge's fill, a box's left rule or a top rule: narrower than the
+			// box.
+			continue
+		}
+
+		if left >= rect.X*milli && right <= (rect.X+rect.W)*milli {
 			return true
 		}
 	}

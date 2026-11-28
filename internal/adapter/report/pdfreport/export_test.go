@@ -11,6 +11,26 @@ import "fmt"
 // describes it.
 var EscapeValue = escapeValue
 
+// Decimal is decimal, for the tests: the writer's form of a coordinate in
+// thousandths of a point, three decimal places and never a sign.
+var Decimal = decimal
+
+// TextWidth is textWidth, for the tests: the width of text in the font resource
+// fontName (F1, F2 or F3) at size points, in thousandths of a point, so a test
+// can tell where a run the writer draws ends.
+func TextWidth(fontName string, size int, text string) int {
+	switch fontName {
+	case helvetica.resourceName():
+		return textWidth(helvetica, size, text)
+	case helveticaBold.resourceName():
+		return textWidth(helveticaBold, size, text)
+	case courier.resourceName():
+		return textWidth(courier, size, text)
+	default:
+		panic("pdfreport: TextWidth of the unknown font resource " + fontName)
+	}
+}
+
 // PDFString is pdfString, for the tests: the value's PDF literal string form,
 // including the outer parentheses.
 var PDFString = pdfString
@@ -89,6 +109,36 @@ func (d *TestDocument) Box(heading string, lines int) {
 // report's Summary draws it. A layout test can put the row near a page's end.
 func (d *TestDocument) Tiles() {
 	d.doc.tileRow(fitTiles(1, 2, 3, 6))
+}
+
+// TilesWithEstimate draws the summary's tile row of an assessment with
+// estimates: one tile per fit, the total, then the estimate's tile holding
+// figure, as report.writeSummary draws it. A layout test can then give the row a
+// figure longer than any real one, which no other hook reaches: the report takes
+// it from the assessment's monthly total.
+func (d *TestDocument) TilesWithEstimate(figure string) {
+	d.doc.tileRow(append(fitTiles(1, 2, 3, 6), tile{
+		label: tileLabel("Estimate"), figure: figure, ink: accentColour, caption: "per month, estimated",
+	}))
+}
+
+// BoxAfterHeading draws a section heading, a box straight after it, the box's
+// own heading inside the box, and lines item lines, with no measure of the
+// heading, the box and its first item first, as no report of today does:
+// report.noticeBox measures its heading and the box's first item together, and
+// draw.go's drawBox leaves the measuring to its caller. A layout test can then
+// put a box's opening right under a heading at the foot of a page, which is
+// where the layout's own page break has to keep both.
+func (d *TestDocument) BoxAfterHeading(section, heading string, lines int) {
+	d.doc.section(2, words(helveticaBold, headingSize(2), section))
+	d.doc.openBox(infoBox)
+	d.doc.section(3, words(helveticaBold, headingSize(3), heading))
+
+	for i := range lines {
+		d.doc.item(0, words(helvetica, bodySize, fmt.Sprintf("Box line %d.", i+1)))
+	}
+
+	d.doc.closeBox()
 }
 
 // Card draws one workload card the way report.writeWorkloads draws it: its

@@ -14,10 +14,14 @@ package pdfreport_test
 
 import (
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/timothymamo/shift2eu/internal/adapter/report/pdfreport"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 )
 
 // The sweep of TestLayoutKeepsAHeadingOffTheFootOfAPage: a chain of kept
@@ -582,4 +586,289 @@ func blockPage(t *testing.T, filler int, name string, pages [][]pdfreport.TestRu
 	}
 
 	return found
+}
+
+// The sweep of TestLayoutOpensABoxRightAfterAHeading: a heading, then a box
+// opened straight after it with no measure of the two first, drawn after a
+// number of body lines that walks the heading down the page.
+const (
+	// boxAfterHeadingFillerLines is how many body lines the sweep draws before
+	// the heading: one more moves the heading down by one body line (12 pt),
+	// from the top of the page to its foot, past the point where the box's first
+	// item no longer fits under the heading.
+	boxAfterHeadingFillerLines = 56
+	// boxAfterHeadingLines is how many item lines the box holds: more than the
+	// room a heading near the foot of a page leaves, so the box continues on the
+	// next page.
+	boxAfterHeadingLines = 12
+)
+
+// boxAfterHeadingSectionText heads the section of the sweep: the heading the box
+// is opened under.
+const boxAfterHeadingSectionText = "A section near the foot of a page"
+
+// boxAfterHeadingText heads the box of the sweep, drawn inside it.
+const boxAfterHeadingText = "A box opened right after the section heading"
+
+// boxAfterHeadingItemText returns the text of the box's item at index, counted
+// from 0.
+func boxAfterHeadingItemText(index int) string {
+	return fmt.Sprintf("Box line %d.", index+1)
+}
+
+// TestLayoutOpensABoxRightAfterAHeading pins the layout at the one place a box's
+// opening meets a kept heading chain: a section heading, then a box opened
+// straight after it, its own heading drawn inside the box and its items after
+// that, with no measure of the heading, the box and its first item first. No
+// report of today does (report.noticeBox measures its heading and the box's first
+// item together, and draw.go's drawBox leaves the measuring to its caller), but
+// the page break that the box's own heading makes then reaches document.ensure
+// with a box open and a chain pending, where cutting the old page back to the
+// chain's shape index leaves the box's fill placeholder behind and draw.go's
+// closePart indexes a shape its page no longer holds. The section heading's own
+// keepWithHeading only covers a box opening shorter than keepWithHeading points,
+// which is why the sweep draws a heading inside the box: a box with no block of
+// its own under the section heading keeps room for its first line and never
+// reaches the cut.
+//
+// Criterion (PRD #584 milestone 1b, Unit): boxes across pages — a box opened
+// under a heading never panics the layout, never leaves a heading alone at the
+// foot of a page, and has its frame drawn on every page the box reaches; a page
+// break inside it neither loses nor repeats a line.
+func TestLayoutOpensABoxRightAfterAHeading(t *testing.T) {
+	t.Parallel()
+
+	breaks, spanning := 0, 0
+
+	for filler := 0; filler <= boxAfterHeadingFillerLines; filler++ {
+		pages, shapes, panicked := drawBoxAfterHeading(filler)
+
+		if panicked != nil {
+			t.Errorf("layout: %d filler line(s) draw a section heading, open a box straight after it and draw the box's own heading in it, and the layout panics: %v: a box opened under a heading must not panic the layout, whatever the page break under it does (PRD, Look, Boxes across pages)",
+				filler, panicked)
+
+			continue
+		}
+
+		if len(pages) > 1 {
+			breaks++
+		}
+
+		checkBoxAfterHeadingLinesAreDrawnOnce(t, filler, pages)
+
+		reached := 0
+
+		for index, page := range pages {
+			if last := lowestLine(page); len(last) > 0 &&
+				(last[0].Text == boxAfterHeadingSectionText || last[0].Text == boxAfterHeadingText) {
+				t.Errorf("layout: %d filler line(s) draw %d page(s), and page %d ends its text with the heading %s, so the heading alone sits at the foot of the page: a heading never ends a page (PRD, Tables and page breaks)",
+					filler, len(pages), index+1, shortened(last[0].Text))
+			}
+
+			drawn := 0
+
+			for _, run := range page {
+				if !isBoxAfterHeadingRun(run) {
+					continue
+				}
+
+				drawn++
+
+				if !insideTheBoxFrame(shapes[index], run) {
+					t.Errorf("layout: %d filler line(s) draw the box's line %s on page %d outside the box's own fill, so the box is not drawn again on that page (PRD, Look, Boxes across pages)",
+						filler, shortened(run.Text), index+1)
+				}
+			}
+
+			if drawn > 0 {
+				reached++
+			}
+		}
+
+		if reached > 1 {
+			spanning++
+		}
+	}
+
+	if breaks == 0 {
+		t.Fatalf("no case of the sweep of %d filler line counts drew a second page, so the sweep never reached the page break this test is about",
+			boxAfterHeadingFillerLines)
+	}
+
+	if spanning == 0 {
+		t.Fatalf("no case of the sweep of %d filler line counts drew the box on more than one page, so no box of the sweep continued on a new page",
+			boxAfterHeadingFillerLines)
+	}
+
+	t.Logf("%d cases of the sweep drew a second page; %d drew the box on more than one page", breaks, spanning)
+}
+
+// drawBoxAfterHeading draws the test's document — filler body lines, the
+// heading, then the box — and recovers a panic of the layout, which it returns:
+// a panic in one case of the sweep must not hide the others.
+func drawBoxAfterHeading(filler int) (pages [][]pdfreport.TestRun, shapes [][]pdfreport.TestShape, panicked any) {
+	d := pdfreport.NewTestDocument()
+
+	for range filler {
+		d.Body(fillerText)
+	}
+
+	defer func() { panicked = recover() }()
+
+	d.BoxAfterHeading(boxAfterHeadingSectionText, boxAfterHeadingText, boxAfterHeadingLines)
+
+	return d.Pages(), d.Shapes(), nil
+}
+
+// isBoxAfterHeadingRun reports whether the run belongs to the box of the sweep:
+// its heading, one of its item lines or an item's bullet.
+func isBoxAfterHeadingRun(run pdfreport.TestRun) bool {
+	return run.Text == boxAfterHeadingText || strings.HasPrefix(run.Text, "Box line ") || run.Text == "•"
+}
+
+// checkBoxAfterHeadingLinesAreDrawnOnce fails the test when a page break under
+// the heading lost or repeated one of the box's lines or the heading itself.
+func checkBoxAfterHeadingLinesAreDrawnOnce(t *testing.T, filler int, pages [][]pdfreport.TestRun) {
+	t.Helper()
+
+	counts := make(map[string]int)
+
+	for _, page := range pages {
+		for _, run := range page {
+			counts[run.Text]++
+		}
+	}
+
+	if got := counts[boxAfterHeadingSectionText]; got != 1 {
+		t.Errorf("layout: %d filler line(s) draw the heading the box is opened under %d time(s), want once", filler, got)
+	}
+
+	if got := counts[boxAfterHeadingText]; got != 1 {
+		t.Errorf("layout: %d filler line(s) draw the box's own heading %d time(s), want once", filler, got)
+	}
+
+	for index := range boxAfterHeadingLines {
+		if got := counts[boxAfterHeadingItemText(index)]; got != 1 {
+			t.Errorf("layout: %d filler line(s) draw the box's item %s %d time(s), want once: a page break under a heading must neither lose nor repeat a line",
+				filler, boxAfterHeadingItemText(index), got)
+
+			break
+		}
+	}
+}
+
+// tileRects returns the outlines of the tiles of a page's tile row, in x order:
+// the row's rectangles are the only stroked paths its page draws.
+func tileRects(shapes []pdfreport.TestShape) []pdfreport.TestRect {
+	rects := make([]pdfreport.TestRect, 0, len(shapes))
+
+	for _, shape := range shapes {
+		if shape.Op != "S" || len(shape.Rects) != 1 {
+			continue
+		}
+
+		rects = append(rects, shape.Rects[0])
+	}
+
+	slices.SortFunc(rects, func(a, b pdfreport.TestRect) int { return a.X - b.X })
+
+	return rects
+}
+
+// tileOf returns the tile whose outline holds the run's start, and whether there
+// is one.
+func tileOf(tiles []pdfreport.TestRect, run pdfreport.TestRun) (pdfreport.TestRect, bool) {
+	for _, tile := range tiles {
+		if run.X >= tile.X && run.X < tile.X+tile.W {
+			return tile, true
+		}
+	}
+
+	return pdfreport.TestRect{}, false
+}
+
+// isFigureRun reports whether the run's text holds only what a figure holds: the
+// euro sign, digits, the thousands' commas and the decimal point. A tile's label
+// and its caption hold letters.
+func isFigureRun(run pdfreport.TestRun) bool {
+	if run.Text == "" {
+		return false
+	}
+
+	for _, r := range run.Text {
+		if !strings.ContainsRune("0123456789,.\u20ac", r) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// TestLayoutKeepsATilesFigureInsideItsTile pins the summary's tile row against
+// the figure no tile of today's reports holds: a monthly total longer than the
+// tile's inner width at the smallest size draw.go's tileRow shrinks a figure to,
+// which runs past its tile's outline into the tile beside it (draw.go, tileRow:
+// the figure is one line, and it shrinks no further than tileFigureMin).
+//
+// Criterion (PRD #584 milestone 1b, Unit): boxes across pages — the summary's
+// tiles: no run of a tile reaches outside that tile's outline, and the whole
+// figure is still drawn, however many lines it takes.
+func TestLayoutKeepsATilesFigureInsideItsTile(t *testing.T) {
+	t.Parallel()
+
+	// The largest amount the domain's Money allows, 9223372036854775807/1 EUR,
+	// written with the thousands' commas euros gives it: 28 characters, wider
+	// than a tile of a five-tile row at tileFigureMin.
+	figure := euros(estimate.Ratio(math.MaxInt64, 1))
+
+	if got := utf8.RuneCountInString(figure); got < 25 {
+		t.Fatalf("the sweep's figure %q holds %d characters, want 25 or more: a shorter figure fits a tile at the smallest size, so the sweep would never reach the overflow",
+			figure, got)
+	}
+
+	d := pdfreport.NewTestDocument()
+	d.TilesWithEstimate(figure)
+
+	pages, shapes := d.Pages(), d.Shapes()
+
+	if len(pages) != 1 {
+		t.Fatalf("the tile row of a five-tile summary draws %d page(s), want one: the sweep draws the row alone", len(pages))
+	}
+
+	tiles := tileRects(shapes[0])
+	if len(tiles) != 5 {
+		t.Fatalf("the tile row draws %d tile outlines, want the summary's five (three fits, the total and the estimate)", len(tiles))
+	}
+
+	for _, run := range pages[0] {
+		tile, ok := tileOf(tiles, run)
+		if !ok {
+			t.Fatalf("the tile row draws the run %s at x %d pt, outside every tile's outline", shortened(run.Text), run.X)
+		}
+
+		left := run.X * milli
+		right := left + pdfreport.TextWidth(run.Font, run.Size, run.Text)
+
+		if left < tile.X*milli || right > (tile.X+tile.W)*milli {
+			t.Errorf("the tile whose outline runs from x %d pt to x %d pt draws the run %s from x %s pt to x %s pt in the %d pt size, so the run reaches past its tile (PRD, Look: a tile's figure stays inside its tile)",
+				tile.X, tile.X+tile.W, shortened(run.Text), points(left), points(right), run.Size)
+		}
+	}
+
+	var drawn strings.Builder
+
+	estimate := tiles[len(tiles)-1]
+
+	for _, run := range pages[0] {
+		if run.X < estimate.X || run.X >= estimate.X+estimate.W || !isFigureRun(run) {
+			continue
+		}
+
+		drawn.WriteString(run.Text)
+	}
+
+	if got := drawn.String(); got != figure {
+		t.Errorf("the estimate's tile draws the figure %q over its runs, want %q: a figure too wide for its tile must be wrapped onto more lines inside it, never cut short or run past it",
+			got, figure)
+	}
 }
