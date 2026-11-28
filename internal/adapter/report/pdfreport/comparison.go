@@ -9,7 +9,6 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
-	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 )
 
 // ReportComparison writes the PDF comparison report of c and meta to w, laid
@@ -110,20 +109,16 @@ func writeComparisonSummary(d *document, assessments []assessment.Assessment) {
 		t.header = append(t.header, cell{{value(tableSize, a.Target)}})
 	}
 
-	counts := make([][][2]string, len(assessments))
+	counts := make([][]fitCount, len(assessments))
 	for i, a := range assessments {
 		counts[i] = fitCounts(a.Summary)
 	}
 
-	labels := []seg{
-		badge(mapping.Direct, ""), badge(mapping.Partial, ""), badge(mapping.None, ""), words(helvetica, tableSize, "total"),
-	}
-
-	for row := range counts[0] {
-		cells := []cell{{{labels[row]}}}
+	for row, first := range counts[0] {
+		cells := []cell{{{first.label()}}}
 
 		for _, c := range counts {
-			cells = append(cells, cell{{words(helvetica, tableSize, c[row][1])}})
+			cells = append(cells, cell{{words(helvetica, tableSize, c[row].count)}})
 		}
 
 		t.rows = append(t.rows, cells)

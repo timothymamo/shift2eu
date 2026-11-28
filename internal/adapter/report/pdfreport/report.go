@@ -187,13 +187,30 @@ func writeBody(d *document, a assessment.Assessment, level int, noted *bool) {
 	}
 }
 
+// fitCount is one row of a summary: a fit and its count, or, with total set,
+// the number of resources in total and no fit.
+type fitCount struct {
+	fit   mapping.Fit
+	total bool
+	count string
+}
+
+// label returns the row's label: the fit's badge, or the plain word "total".
+func (c fitCount) label() seg {
+	if c.total {
+		return words(helvetica, tableSize, "total")
+	}
+
+	return badge(c.fit, "")
+}
+
 // fitCounts are a summary's rows: each fit with its count, then the total.
-func fitCounts(s assessment.Summary) [][2]string {
-	return [][2]string{
-		{string(mapping.Direct), strconv.Itoa(s.Direct)},
-		{string(mapping.Partial), strconv.Itoa(s.Partial)},
-		{string(mapping.None), strconv.Itoa(s.None)},
-		{"total", strconv.Itoa(s.Total)},
+func fitCounts(s assessment.Summary) []fitCount {
+	return []fitCount{
+		{fit: mapping.Direct, count: strconv.Itoa(s.Direct)},
+		{fit: mapping.Partial, count: strconv.Itoa(s.Partial)},
+		{fit: mapping.None, count: strconv.Itoa(s.None)},
+		{total: true, count: strconv.Itoa(s.Total)},
 	}
 }
 
