@@ -42,7 +42,7 @@ Use these words, in code and prose, with exactly these meanings.
 | **Taxonomy category** | Provider-neutral service type (`compute.vm`, `storage.object`, `database.postgresql`, ...). The only bridge between sources and targets. |
 | **Capability** | A feature a resource depends on or an offering provides (e.g. point-in-time restore, IPv6). |
 | **Mapping** | Matching an inventory resource to candidate catalog offerings, with a **fit**: direct, partial, none. |
-| **Assessment** | The verdict per resource and workload: portability, blockers, required changes, readiness score. |
+| **Assessment** | The verdict per resource and workload: portability, blockers, required changes. |
 
 ## Architecture
 
