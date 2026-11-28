@@ -4213,7 +4213,9 @@ scan raised test values on every run.
   go list -m -f '{{.GoVersion}}'`, into a variable, fails the run with an `::error` when the read gives
   nothing, more than one line or no Go version (`1.<n>` or `1.<n>.<p>`; a prerelease such as `1.28rc1` is
   refused on purpose, as the module pins only releases), and installs with `GOTOOLCHAIN="go${gomod_go}"`,
-  so the workflow names no Go version of its own: no second copy, no `# renovate:` comment and no
+  and, since issue #713, writes the checked value to `$GITHUB_ENV` as `gomod_go`, so go.mod's Go is read
+  once per job and later steps take that value, never a `go list` of their own; the workflow names no Go
+  version of its own: no second copy, no `# renovate:` comment and no
   Renovate matchString keep one in step (`test/architecture` refuses a literal `go1.<n>` anywhere in the
   workflow, `test/lint` any customManager that matches a `GOTOOLCHAIN=` line). It stays in row 2's step
   because after the module download every Go command runs with `GOPROXY=off`, and `go install
