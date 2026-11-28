@@ -384,19 +384,23 @@ const (
 // tileRow draws the summary's tiles side by side across the text width, moved
 // whole to the next page when they do not fit. A figure shrinks to fit its
 // tile, down to tileFigureMin; one too wide even then is wrapped onto more
-// lines inside its tile, never cut, and every tile of the row grows by the
-// extra lines of the tallest figure, so the row keeps one height.
+// lines inside its tile, never cut. A caption too wide for its tile is
+// wrapped onto more lines too. Every tile of the row grows by the extra lines,
+// figure and caption together, of the row's tallest tile, so the row keeps
+// one height.
 func (d *document) tileRow(tiles []tile) {
 	width := (d.width - tileGap*(len(tiles)-1)) / len(tiles)
 	inside := (width - 2*tilePad) * milli
 
 	sizes := make([]int, len(tiles))
 	figures := make([][]string, len(tiles))
+	captions := make([][]textLine, len(tiles))
 	extra := 0
 
 	for i, t := range tiles {
 		sizes[i], figures[i] = tileFigure(t.figure, inside)
-		extra = max(extra, (len(figures[i])-1)*tileFigureLead)
+		captions[i] = layoutSegs(width-2*tilePad, words(helvetica, furnitureSize, t.caption))
+		extra = max(extra, (len(figures[i])-1)*tileFigureLead+(max(len(captions[i]), 1)-1)*furnitureLeading)
 	}
 
 	height := tileHeight + extra
@@ -429,7 +433,7 @@ func (d *document) tileRow(tiles []tile) {
 		}
 
 		caption := figure - furnitureLeading - 2
-		for _, line := range layoutSegs(width-2*tilePad, words(helvetica, furnitureSize, t.caption)) {
+		for _, line := range captions[i] {
 			d.drawLineAt(colourLine(line, mutedColour), inner, caption)
 			caption -= furnitureLeading
 		}
