@@ -2174,6 +2174,120 @@ old `paths:` filter never started one) and wait on the required check until they
 amended by issue #452): a pull request runs its own copy of the workflow, so it could edit the workflow
 to skip the check; that edit changes a pin path and shows in its diff and its reviews.
 
+**The co-author trailers check** (issue #706,
+[ADR 0050](adr/0050-run-the-co-author-check-from-the-base-branch-under-pull-request-target.md)). The
+co-author check runs from `.github/workflows/coauthor-trailers.yml` under `pull_request_target`, so GitHub
+reads the workflow, the `test/lint` that runs and the allow list from the base branch, never from the
+pull request; it reports its own check, **Co-author trailers (base)**. The move is a two-step rollout:
+issue #706's pull request adds the workflow and keeps `ci.yml`'s old `coauthor-trailers` job (**Co-author
+trailers**, inside `Lint`), which checks that pull request, since the new workflow first runs on pull
+requests opened or updated after the merge. A follow-up pull request removes the old job once the new
+check is required. **Maintainer steps, once, for issue #706's pull request and its follow-up:**
+
+1. Before merging issue #706's pull request, check its trailers with `main`'s check, since its only
+   co-author check is the old job its own `ci.yml` defines. In a clean clone, with `<n>` the pull
+   request's number. Fetching does not move the working tree, so `git switch --detach origin/main` makes
+   the `test/lint` that runs `origin/main`'s, never a stale local `main`'s (with local changes, run the
+   same lines in `git worktree add --detach <tmp> origin/main` instead). `git rev-parse` must print the
+   same SHA twice (FAIL: two SHAs; stop). Then the test (PASS: `ok`, and the log line
+   `read <k> commits of origin/main..FETCH_HEAD` names the pull request's commit count,
+   `gh pr view <n> --json commits --jq '.commits | length'`; FAIL: `FAIL`, or another count):
+
+   ```bash
+   git fetch origin main
+   git fetch origin "pull/<n>/head"
+   git switch --detach origin/main
+   git rev-parse HEAD origin/main
+   SHIFT2EU_COAUTHOR_RANGE=origin/main..FETCH_HEAD SHIFT2EU_COAUTHOR_CHECK=require \
+     go test -count=1 -v -run '^TestBranchCoAuthorTrailers$' ./test/lint/
+   ```
+
+   Then merge it. Before the merge `main` has no `coauthor-trailers.yml`, so no pull request can report
+   the check, and requiring it would block every pull request.
+2. Right after the merge, probe, then close unmerged: a pull request into `main` with one commit that
+   turns the check step of `coauthor-trailers.yml` into `exit 0` (and loosens the pin to match) and one
+   commit carrying a `Co-Authored-By:` trailer with an `example.com` address. The probe comes before the
+   requirement: the check reports whether or not it is required, and its first run makes GitHub offer the
+   name in the ruleset's check list, so step 3 never requires a name that has not reported (a typo there
+   would block every pull request). With `<probe head sha>` the probe's head commit, run the first
+   command (`filter=all` lists every run of the name, not only the latest; `--paginate` every page),
+   then the second for each row's run, `<run id>` the number after `/runs/` in its `details_url` (PASS:
+   at least one row `15368  completed  failure` whose log names the `example.com` trailer, no `success`
+   row, every row's app `15368`, and every run prints
+   `["pull_request_target",".github/workflows/coauthor-trailers.yml","<probe head sha>",["main"]]`;
+   FAIL: the check passes, no row, another app id, or another event, path, head SHA or base). Run these
+   before closing the probe: a run's `pull_requests` lists only the pull requests open with that head
+   when it is read, so once the probe is closed the last list is `[]`:
+
+   ```bash
+   gh api --paginate 'repos/timothymamo/shift2eu/commits/<probe head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
+     --jq '.check_runs[] | [.id,.app.id,.status,.conclusion,.details_url] | @tsv'
+   gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
+     --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
+   ```
+
+3. Settings → Rules → Rulesets → Protect main → Require status checks to pass → add **Co-author trailers
+   (base)** (the job's name), choose **GitHub Actions** as its expected source, and save. `Lint` stays
+   required. Check it (PASS: `{"context":"Co-author trailers (base)","integration_id":15368}`; FAIL: no
+   row, no `integration_id`, or another one):
+
+   ```bash
+   id=$(gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | select(.name=="Protect main") | .id')
+   gh api "repos/timothymamo/shift2eu/rulesets/$id" \
+     --jq '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]
+           | select(.context == "Co-author trailers (base)") | tojson'
+   ```
+
+4. Pull requests open at the merge have no run of the new workflow and wait on the required check until
+   a new event starts one: a push, **Update branch**, a title edit, or a close and reopen. Re-running
+   their old jobs cannot help.
+5. Merge the follow-up pull request, which removes the old job and `Lint`'s need of it, only after step
+   3: it is the first pull request checked by `main`'s definition alone.
+
+**Before every merge from step 3 on,** check that the passing **Co-author trailers (base)** came from
+`main`'s workflow: the required check matches only the check run's name and the GitHub Actions app,
+never the workflow file or the base branch (ADR 0050, residual risks). With `<head sha>` the pull
+request's head commit and `<n>` its number:
+
+1. The check runs. `filter=all` lists every run of the name (the default, `latest`, hides earlier
+   ones), `--paginate` every page (a page holds 30). `cancelled` rows are legitimate:
+   `cancel-in-progress` cancels a run when a push or a title edit (`edited`) starts the next one.
+   PASS: at least one row is `success`, every row is `success` or `cancelled`, and every row's app is
+   `15368`. FAIL: no `success` row, any other conclusion, a row not yet `completed`, or another app id.
+2. For every row, cancelled ones included, its run, `<run id>` the number after `/runs/` in its
+   `details_url`. PASS:
+   `["pull_request_target",".github/workflows/coauthor-trailers.yml","<head sha>",["main"]]`. The last
+   list is the pull requests open with that head now, never the base the run had: it is `[]` for a
+   fork's pull request, or one that is closed or merged, or whose head branch is gone, and the lists of
+   items 3 and 4 then decide. FAIL: another event, path or head SHA, or any base other than `main`.
+3. The pull requests with that head, once through search and once through the commit's pulls endpoint.
+   Only search (`--state all`) catches a closed, unmerged side pull request into another branch: the
+   pulls endpoint finds open and merged ones only. The pulls endpoint is not search, which is eventually
+   consistent and can miss a new pull request. PASS: every pull request in both lists has base `main`.
+   FAIL: any other base in either list, such as a second pull request with that head into another
+   branch.
+4. The pull request's own retargets, from its timeline (GitHub's record). PASS: no output. FAIL: any
+   row: then treat every check run on the head as suspect, push a new head commit and rerun items 1 to 4
+   on it. This catches what items 1 to 3 cannot: retargeted to a branch `x` whose
+   `coauthor-trailers.yml` runs `exit 0` (a success row), back to `main`, and `x`'s run re-run so that
+   `cancel-in-progress` cancels `main`'s, leaving success and cancelled rows and `main` as the only base
+   anywhere.
+
+```bash
+gh api --paginate 'repos/timothymamo/shift2eu/commits/<head sha>/check-runs?check_name=Co-author%20trailers%20(base)&filter=all' \
+  --jq '.check_runs[] | [.id,.app.id,.status,.conclusion,.completed_at,.details_url] | @tsv'
+gh api repos/timothymamo/shift2eu/actions/runs/<run id> \
+  --jq '[.event,.path,.head_sha,[.pull_requests[].base.ref]]'
+gh pr list --search <head sha> --state all --json number,baseRefName
+gh api --paginate repos/timothymamo/shift2eu/commits/<head sha>/pulls --jq '.[]|[.number,.base.ref]|@tsv'
+gh api --paginate repos/timothymamo/shift2eu/issues/<n>/timeline --jq '.[]|select(.event=="base_ref_changed")'
+```
+
+The known limits (ADR 0050): a pull request could add a job of the same name to its own `ci.yml`, an
+edit that shows in its diff and its reviews; and someone with push rights could report a passing run of
+the name from another branch's copy of the workflow, through a second pull request with the same head
+into that branch or a retarget of this one, which the pre-merge check above catches.
+
 **1. Create the reviewer App.** On GitHub, Settings → Developer settings → GitHub Apps → New GitHub App:
 
 - Name: anything, for example `shift2eu-reviewer`; its slug makes the reviewer's login
