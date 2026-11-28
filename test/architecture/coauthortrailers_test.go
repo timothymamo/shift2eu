@@ -896,6 +896,13 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 // because the real file holds none of the refused spellings: a step's env: is
 // the one place an expression is read, and every other line with one is refused
 // with its line number.
+//
+// The exemption is pinned fail-closed too (issue #723, the reviewer's S1): a
+// step's env: is read only at the step's own indentation, so an env: nested under
+// a with: exempts nothing, and an env: that holds its value on its own line (a
+// flow mapping, a whole expression) is no block and exempts nothing either. A
+// steps list the reader cannot split exempts nothing at all: every expression of
+// the job, a step env: value included, is then refused.
 func TestCICoAuthorTrailersJobRefusesAnExpressionOutsideAStepEnv(t *testing.T) {
 	t.Parallel()
 
@@ -948,6 +955,44 @@ func TestCICoAuthorTrailersJobRefusesAnExpressionOutsideAStepEnv(t *testing.T) {
 			doc: "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n    env:\n      RANGE: ${{ github.sha }}\n    steps:\n" +
 				"      - name: the check\n        run: go test ./test/lint/\n",
 			want: []string{`5: RANGE: ${{ github.sha }}`},
+		},
+		{
+			name: "an expression in an env: nested under a step's with:",
+			doc: "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n    steps:\n" +
+				"      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1\n        with:\n          env:\n            X: ${{ github.sha }}\n",
+			want: []string{`8: X: ${{ github.sha }}`},
+		},
+		{
+			name: "an expression in a flow-style step env:",
+			doc: "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n    steps:\n" +
+				"      - name: the check\n        env: { X: ${{ github.sha }} }\n        run: go test ./test/lint/\n",
+			want: []string{`6: env: { X: ${{ github.sha }} }`},
+		},
+		{
+			name: "a step env: that is one whole expression",
+			doc: "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n    steps:\n" +
+				"      - name: the check\n        env: ${{ fromJSON(vars.E) }}\n        run: go test ./test/lint/\n",
+			want: []string{`6: env: ${{ fromJSON(vars.E) }}`},
+		},
+		{
+			name: "an expression in a steps list the reader cannot split",
+			doc: "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n    steps:\n" +
+				"      - name: the check\n        env:\n          RANGE: ${{ github.sha }}\n        run: go test ./test/lint/\n" +
+				"        - name: another\n          env:\n            RANGE: ${{ github.sha }}\n",
+			want: []string{
+				`7: RANGE: ${{ github.sha }}`,
+				`11: RANGE: ${{ github.sha }}`,
+			},
+		},
+		{
+			name: "a step whose item starts with its env:",
+			doc: "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n    steps:\n" +
+				"      - env:\n          X: ${{ github.sha }}\n        name: the check\n        run: go test ./test/lint/\n",
+		},
+		{
+			name: "an expression in a step env: block scalar",
+			doc: "jobs:\n  coauthor-trailers:\n    runs-on: ubuntu-latest\n    steps:\n" +
+				"      - name: the check\n        env:\n          X: |\n            ${{ github.sha }}\n        run: go test ./test/lint/\n",
 		},
 	}
 

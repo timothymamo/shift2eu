@@ -573,9 +573,9 @@ func TestCIRunScriptAcceptsOnlyALiteralBlockScalar(t *testing.T) {
 		},
 		{
 			name: "a literal block scalar of several lines",
-			doc:  "run: |\n  cd \"$RUNNER_TEMP/coauthor-base\"\n  go test ./test/lint/\n",
+			doc:  "run: |\n  cd \"$RUNNER_TEMP/work\"\n  go test ./test/lint/\n",
 			want: []string{
-				`cd "$RUNNER_TEMP/coauthor-base"`,
+				`cd "$RUNNER_TEMP/work"`,
 				"go test ./test/lint/",
 			},
 			wantRun: true,
