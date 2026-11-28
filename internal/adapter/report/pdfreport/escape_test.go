@@ -254,7 +254,7 @@ func TestPDFStringRoundTrips(t *testing.T) {
 		escaped := pdfreport.EscapeValue(value)
 		literal := pdfreport.PDFString(escaped)
 
-		lexer := &pdfLexer{tb: t, data: []byte(literal)}
+		lexer := &pdfLexer{data: []byte(literal)}
 		read := lexer.parseLiteralString()
 
 		if lexer.pos != len(literal) {

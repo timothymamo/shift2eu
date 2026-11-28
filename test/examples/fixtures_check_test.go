@@ -178,6 +178,29 @@ var realDataAllowList = []allowListEntry{
 		value: "github.com/example",
 		why:   "the run URL of the audit fixtures' documented dummy repository, example/shift2eu, in the report the publish core renders; no account is named example, so it names no one's repository",
 	},
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/comparison-hostile.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/comparison-three.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/comparison-two.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/report-empty.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/report-estimates.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/report-hostile.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/report-long.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/report-no-estimates.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/report-region.golden.pdf"),
+	pdfBannerAddress("internal/adapter/report/pdfreport/testdata/report-workloads.golden.pdf"),
+	pdfBannerAddress("test/e2e/testdata/assess-all.pdf.golden"),
+	pdfBannerAddress("test/e2e/testdata/assess-ovhcloud.pdf.golden"),
+}
+
+// pdfBannerAddress is the allow-list entry of one PDF golden for the project's
+// own contact address, info@shift2eu.com, which every PDF's contact banner
+// shows (PRD #584 milestone 1b, The contact banner).
+func pdfBannerAddress(file string) allowListEntry {
+	return allowListEntry{
+		file:  file,
+		value: "shift2eu.com",
+		why:   "the project's own contact address in the PDF's contact banner (PRD #584 milestone 1b), the site's own words; no inventory value",
+	}
 }
 
 // checkedFiles returns every file the real-data check reads, sorted by path:

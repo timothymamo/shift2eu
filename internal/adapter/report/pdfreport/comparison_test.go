@@ -8,6 +8,8 @@ package pdfreport_test
 import (
 	"bytes"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
+	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/testutil"
 )
 
@@ -248,4 +251,169 @@ func TestReportComparisonErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestComparisonSummaryPairsEachRowWithItsFit pins the comparison's summary
+// table row by row: each fit's row carries that fit's badge word and, in every
+// target's column, the number of that target's resources whose fit it is, and the
+// total row carries the plain word "total" with every resource counted.
+//
+// Each row takes its label from its own fit (report.go, fitCount and its label
+// method), so a row given another fit's count, an added row, or a reordering of
+// the rows must not leave a row labelled with a word its cells do not count.
+func TestComparisonSummaryPairsEachRowWithItsFit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		inventory inventory.Inventory
+		keys      []string
+	}{
+		{
+			name:      "two targets",
+			inventory: newInventory(t, sourceName, twoTargetResources()),
+			keys:      []string{ovhcloudKey, scalewayKey},
+		},
+		{
+			name:      "three targets",
+			inventory: newInventory(t, sourceName, comparisonResources()),
+			keys:      threeTargetKeys(),
+		},
+	}
+
+	meta := analysis.ReportMeta{InventoryName: inventoryFileName}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			c := assessment.Compare(assessTargets(t, test.inventory, test.keys))
+			file := checkPDFStructure(t, renderComparison(t, c, meta))
+
+			assertComparisonSummary(t, file, c)
+		})
+	}
+}
+
+// assertComparisonSummary checks every row of the comparison's summary table
+// against the targets' own assessments: the header names the fit column and every
+// target in the comparison's order, then one row per fit, then the total.
+func assertComparisonSummary(tb testing.TB, file *testPDF, c assessment.Comparison) {
+	tb.Helper()
+
+	rows := summaryRows(tb, file)
+
+	targets := make([]string, 0, len(c.Targets))
+	for _, target := range c.Targets {
+		targets = append(targets, pdfreport.EscapeValue(target.Assessment.Target))
+	}
+
+	wantHeader := append([]string{"Fit"}, targets...)
+	if len(rows) == 0 {
+		tb.Fatalf("the comparison's summary draws no row, want the header %q", wantHeader)
+	}
+
+	if got := rowText(rows[0]); !slices.Equal(got, wantHeader) {
+		tb.Fatalf("the summary's header row reads %q, want %q", got, wantHeader)
+	}
+
+	want := []struct {
+		word    string
+		counted func(assessment.Verdict) bool
+	}{
+		{word: "Direct", counted: func(v assessment.Verdict) bool { return v.Fit == mapping.Direct }},
+		{word: "Partial", counted: func(v assessment.Verdict) bool { return v.Fit == mapping.Partial }},
+		{word: "None", counted: func(v assessment.Verdict) bool { return v.Fit == mapping.None }},
+		{word: "total", counted: func(assessment.Verdict) bool { return true }},
+	}
+
+	if got := len(rows) - 1; got != len(want) {
+		tb.Fatalf("the summary draws %d row(s) under its header, want %d: one per fit with its badge word, then the total row",
+			got, len(want))
+	}
+
+	for i, row := range want {
+		assertSummaryRow(tb, rows[i+1], row.word, assessmentCounts(c, row.counted))
+	}
+}
+
+// assertSummaryRow checks one summary row: its label, then one count per target,
+// in the header's column order.
+func assertSummaryRow(tb testing.TB, row []pdfTextRun, label string, counts []string) {
+	tb.Helper()
+
+	want := append([]string{label}, counts...)
+	if got := rowText(row); !slices.Equal(got, want) {
+		tb.Errorf("the summary row labelled %q reads %q, want %q: each row's label must name the fit whose counts its cells hold, one cell per target",
+			label, got, want)
+	}
+}
+
+// assessmentCounts returns, per target in the comparison's order, how many of
+// that target's verdicts counted passes, as the report writes a count.
+func assessmentCounts(c assessment.Comparison, counted func(assessment.Verdict) bool) []string {
+	counts := make([]string, 0, len(c.Targets))
+
+	for _, target := range c.Targets {
+		n := 0
+
+		for _, verdict := range target.Assessment.Verdicts {
+			if counted(verdict) {
+				n++
+			}
+		}
+
+		counts = append(counts, strconv.Itoa(n))
+	}
+
+	return counts
+}
+
+// summaryRows returns the rows of the comparison's summary table in the order the
+// report draws them, each row's runs in x order: the lines between the Summary
+// heading and the Resources heading.
+func summaryRows(tb testing.TB, file *testPDF) [][]pdfTextRun {
+	tb.Helper()
+
+	lines := file.lines()
+	start := assertLine(tb, lines, "Summary")
+	stop := assertLine(tb, lines, "Resources")
+
+	if stop <= start {
+		tb.Fatalf("the Resources heading is not after the Summary heading")
+	}
+
+	rows := make([][]pdfTextRun, 0, stop-start-1)
+	for _, line := range lines[start+1 : stop] {
+		rows = append(rows, runsOn(file, line.Page, line.Y))
+	}
+
+	return rows
+}
+
+// runsOn returns the runs one page draws on the baseline y, in x order: one table
+// row's cells.
+func runsOn(file *testPDF, page, y int) []pdfTextRun {
+	var runs []pdfTextRun
+
+	for _, run := range file.pages[page].runs {
+		if run.Y == y {
+			runs = append(runs, run)
+		}
+	}
+
+	slices.SortStableFunc(runs, func(a, b pdfTextRun) int { return a.X - b.X })
+
+	return runs
+}
+
+// rowText returns one row's cells' text, in x order.
+func rowText(row []pdfTextRun) []string {
+	texts := make([]string, 0, len(row))
+
+	for _, run := range row {
+		texts = append(texts, squash(run.Text))
+	}
+
+	return texts
 }

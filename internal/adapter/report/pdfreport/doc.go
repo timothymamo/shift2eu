@@ -16,17 +16,24 @@
 // and every name in it is a constant of the writer with no '#'.
 //
 // Text uses three of the PDF's standard core fonts with /WinAnsiEncoding:
-// Helvetica for the report's own words, Helvetica-Bold for headings and table
-// header cells, and Courier for every value from the inventory, a catalog, the
+// Helvetica for the report's own words, Helvetica-Bold for headings, table
+// header cells, badge words, tile figures and the banner's eyebrow, heading
+// and address, and Courier for every value from the inventory, a catalog, the
 // report metadata or the version line. Lines are wrapped with the fonts'
 // standard character widths; all layout arithmetic is integer, in thousandths
 // of a point, so the bytes are the same on every release target.
 //
-// A content stream holds only the hairlines under the page header, above the
-// footer and under table header rows (re and S at line width 0, inside q and
-// Q), and one text object of runs, each placed with Tm and drawn with Tj, the
-// font selected with Tf. Every operand is an integer, a literal string or a
-// font resource name /F1, /F2 or /F3.
+// A content stream holds its shapes inside q and Q, then one text object of
+// runs, and uses exactly ADR 0049's sixteen operators: q Q h f S BT ET, w, rg
+// RG, re, m l, Tf, Tm and Tj. A shape is pathed with re (four integers, whole
+// points) or m and l (decimals) and closed with h, then filled with f or
+// stroked with S; a run is placed with Tm (six integers) and drawn with Tj, its
+// font selected with Tf (/F1, /F2 or /F3 and an integer size). A colour (rg,
+// RG) or a line width (w) is written only when it changes, as a decimal: ASCII
+// digits, a dot and exactly three digits, never a sign or an exponent. Every
+// colour is one of the site's light-theme tokens in site/style.css (colour.go),
+// each component written as (byte × 1000 + 127) / 255 thousandths. Each page's
+// /Resources holds only /Font.
 //
 // # Values
 //
@@ -60,6 +67,56 @@
 // under it and the headings kept above it, which only a very long value makes
 // it, is drawn at the body size as a paragraph.
 //
+// # Look
+//
+// The report has the site's look (PRD #584 milestone 1b, The PDF, Look), drawn
+// with rectangles and straight-line paths only. The title sits on a --mast band
+// with a --gold rule at its left; the header facts, the page header and the
+// footer are --muted, the furniture set off by --ring rules. A section heading
+// is --accent under a --ring rule; a comparison's per-target heading is --ink
+// with a --gold rule at its left; a Resource details block's ID lies on a
+// --surface-2 band. A table's header row lies on --surface-2, every even row on
+// --bg, and a --ring rule runs under every row.
+//
+// Every fit shown in a table cell, a stacked comparison cell, a summary tile
+// or a workload card is a badge: a fill in the fit's -bg colour holding its
+// icon and its word, "Direct", "Partial" or "None" (after a count on a
+// workload card), both in the fit's -ink colour. The icons are vector paths:
+// a check mark (a stroked polyline of three points), a half-filled disc (a
+// stroked 16-sided polygon, its vertices a constant integer table, with its
+// left half filled) and a cross (two stroked lines). The word always stands
+// beside colour and icon, so a fit reads the same in greyscale.
+//
+// The single-target summary is a row of tiles, one per fit, the total and,
+// with estimates on, the monthly estimate, each with a 0.5 pt --ring outline,
+// a 3 pt rule along its top and a big Helvetica-Bold figure in its colour. A
+// figure shrinks to fit its tile, down to 8 pt; one too wide even then wraps
+// onto more lines inside the tile, never cut, and the whole row grows with it.
+// Required changes stand in an --info-bg box with an --info-rule left rule;
+// blockers, and a comparison's blockers on every target, in a --warn-bg box
+// with a --warn-rule left rule and a filled warning triangle, holding a white
+// exclamation mark, before its --warn-ink heading. Each workload is a --bg card
+// with a --ring outline.
+//
+// The contact banner, the site's "Planning a migration?" band, stands once per
+// document: in a single-target report after the last of its sections from
+// Summary to Cost estimate and before Resource details, in a comparison after
+// the Comparison section and before the first per-target section. It is a
+// --mast fill across the text width with a 3 pt --gold rule along its top,
+// holding the eyebrow, the heading and the text in the site's words and the
+// address info@shift2eu.com in a --gold box: plain text on filled boxes, with
+// no link, annotation or action.
+//
+// A box (the required-changes and blockers boxes, a workload card, the title
+// band) whose heading and first line do not both fit in the space left starts
+// on the next page. A box that continues on a new page is drawn again there,
+// its fill, left rule and outline covering its part on each page, and no part
+// is shorter than 26 pt, so no box is ever as short as a badge. The banner,
+// the tile row and a workload card move whole to the next page when they do
+// not fit; a card taller than a page continues as a box does. A table's header
+// row and its first row (its first line, when the row is taller than a page)
+// move to the next page together.
+//
 // A single-target report is: the title "Migration assessment: " and the
 // target, the header facts (inventory file, left out when the metadata names
 // none; source; catalog snapshot URL and UTC retrieval date; region, "chosen
@@ -67,25 +124,26 @@
 // Resources (ID, category, fit, best offering with its tie note and, with
 // estimates on, plan and monthly estimate), Required changes, Blockers,
 // Workloads (only when the assessment shows workloads), Cost estimate (only
-// with estimates on), Resource details (per resource: raw type, category,
-// region, workload, fit, best offering, relations and "affected by a blocker
-// on" notes, every candidate offering with its fit and missing capabilities,
-// the reasons, the required changes, the blockers and, with estimates on, the
-// estimate's breakdown), How this report is worked out, and About this report
-// (the version line, every catalog snapshot with its source URL, retrieval
-// date and default region for estimates, the regions, "Estimates: on" or
-// "Estimates: off", the inventory file and the source). The words follow the
-// Markdown report's, amounts included ("€2,500.00").
+// with estimates on), the contact banner, Resource details (per resource: raw
+// type, category, region, workload, fit, best offering, relations and
+// "affected by a blocker on" notes, every candidate offering with its fit and
+// missing capabilities, the reasons, the required changes, the blockers and,
+// with estimates on, the estimate's breakdown), How this report is worked
+// out, and About this report (the version line, every catalog snapshot with
+// its source URL, retrieval date and default region for estimates, the
+// regions, "Estimates: on" or "Estimates: off", the inventory file and the
+// source). The words follow the Markdown report's, amounts included
+// ("€2,500.00").
 //
 // A comparison report is: the title naming every target, the header facts with
 // one catalog and one region line per target, then Comparison (a Summary table
 // with one column per target, a Resources table whose cell per target stacks
-// its fit, best offering and estimate, and Blockers on every target), one
-// section per target headed by its display name holding its sections from
-// Summary to Resource details one heading level lower, and How this report is
-// worked out and About this report once. It ranks no target. A comparison with
-// no target, or whose targets assess different resources, is an error, and
-// nothing is written.
+// its fit, best offering and estimate, and Blockers on every target), the
+// contact banner, one section per target headed by its display name holding
+// its sections from Summary to Resource details one heading level lower, and
+// How this report is worked out and About this report once. It ranks no
+// target. A comparison with no target, or whose targets assess different
+// resources, is an error, and nothing is written.
 //
 // The bytes depend only on the assessment, the report metadata and the version
 // line: never on the clock, the environment or map iteration. A report is

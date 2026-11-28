@@ -2,6 +2,8 @@
 
 - Status: Accepted. Records PRD #584 milestone 1. The answers to compression and tagged PDF (below) are
   interim, for milestones 1 and 2; milestone 3 amends this ADR with the final decisions.
+  *Amended 2026-11-28 (PRD #584 milestone 1b):* the content streams gain colour and path operators for
+  the PDF's styling and the contact banner (*Drawing: the operator set*, below).
 - Date: 2026-11-26
 
 ## Context
@@ -79,6 +81,64 @@ The file it writes:
 The exact operator set and the layout's margins and spacing are the writer's; its tests pin the operator
 table it uses, and no graphics state dictionary, XObject or inline image is in it.
 
+### Drawing: the operator set
+
+*Amended 2026-11-28 (PRD #584 milestone 1b).* Milestone 1 drew black text and black hairline rules
+with `q Q G w re S BT ET Tf Tm Tj`. The maintainer found the PDF very plain and asked for the site's
+look (PRD #584, *Decided by the maintainer (2026-11-28)*, and *The PDF*, *Look*): its colours, fit
+badges with icons, summary tiles, boxes, workload cards and the contact banner. The content streams
+now use exactly these sixteen operators, and no other; the writer and the test-only reader's operator
+table are this set, operand shape for operand shape:
+
+| Operator | What it does | Operands |
+|---|---|---|
+| `q`, `Q` | Save and restore the graphics state, around the page's drawing | none |
+| `w` | Line width | one decimal |
+| `RG` | Stroking colour, RGB (DeviceRGB) | three decimals, 0 to 1 |
+| `rg` | Non-stroking (fill and text) colour, RGB (DeviceRGB) | three decimals, 0 to 1 |
+| `re` | Rectangle path: fills, rules (zero height, stroked), outlines | four integers (whole points) |
+| `m`, `l` | Move to, line to: the icons' paths | two decimals each |
+| `h` | Close the current subpath: the half-disc's polygon and the triangle | none |
+| `f` | Fill the path (non-zero winding) | none |
+| `S` | Stroke the path | none |
+| `BT`, `ET` | Begin and end the text object | none |
+| `Tf` | Select a font | a constant font resource name (`/F1` to `/F3`), an integer size |
+| `Tm` | Set the text matrix (`1 0 0 1 x y`) | six integers |
+| `Tj` | Show a literal string | a literal string |
+
+`G`, milestone 1's grey stroking operator, is gone: `RG` replaces it. Not used, and not in the table:
+`B` and `b` (a rectangle is filled and its rule drawn as separate paths), curves (`c`, `v`, `y`: the
+half-disc is a polygon), clipping (`W`, `n`), line cap, join and dash (`J`, `j`, `d`), other colour
+spaces and operators (`g`, `k`, `K`, `cs`, `CS`, `sc`, `scn`), shading (`sh`), `gs`, `Do`, inline images
+(`BI`, `ID`, `EI`) and the other text operators (`TJ`, `'`, `"`, `Td`, `TL`, `T*`).
+
+**Numbers.** An integer is ASCII digits only. A decimal is ASCII digits, a `.` and exactly three
+digits, written from an integer count of thousandths (`n / 1000`, `.`, `n % 1000` with three digits).
+Neither has a sign or an exponent; every coordinate lies on the page. Layout arithmetic stays integer,
+in thousandths of a point, as before; `re`, `Tm` and `Tf` keep whole points, and the icons' paths and
+line widths use the decimal form so that an icon a few points tall keeps its shape.
+
+**Colours.** Every colour is one of the site's light-theme tokens in `site/style.css`, as the PRD's
+palette lists them. Each component is computed at write time from the token's 0 to 255 byte by integer
+division, `(byte × 1000 + 127) / 255`, the nearest thousandth, and written as a decimal (`#0b2a66` is
+`0.043 0.165 0.400`). No floating-point value is computed, so the bytes stay the same on every release
+target, and the no-floating-point test is unchanged.
+
+**Icons are vector paths of these operators:** a check mark (stroked polyline) for direct, a
+half-filled 16-sided disc for partial, a cross (two stroked lines) for none, as the site's `✓`, `◐` and
+`✕`, and a filled warning triangle for the blockers box. The polygon's vertices are a constant integer
+table. No icon is a font glyph or an image. Every fit badge keeps its word beside its colour and icon,
+so colour is never the only signal and the PDF reads the same in greyscale.
+
+**Still forbidden.** No image XObject, no `/XObject` resource, no `Do`, no shading or pattern, no
+`/ExtGState`, no colour space resource: each page's `/Resources` holds only `/Font`. No font beyond the
+three core fonts, and no embedded font. The banner is plain text on a filled box, with no link: none of
+`/Annots`, `/Link`, `/URI`, `/Launch`, `/JavaScript`, `/JS`, `/OpenAction`, `/AA`, `/AcroForm`,
+`/EmbeddedFile`, `/RichMedia` or `/XFA`, and every other name forbidden below stays forbidden; the tests'
+banned names gain `/Link`, `/XObject`, `/ExtGState`, `/Pattern`, `/Shading` and `/ColorSpace`. Determinism and
+integer layout arithmetic, the escaper, WinAnsiEncoding, the string escaping and the printable-ASCII
+file are unchanged, and every value stays in Courier.
+
 ### Fonts and characters: core fonts, WinAnsiEncoding, visible escapes
 
 Text uses three of the 14 standard (core) fonts, which every PDF reader has, so the file embeds none:
@@ -125,7 +185,8 @@ file, rich media or XFA: none of `/Annots`, `/URI`, `/Launch`, `/JavaScript`, `/
 `/AA`, `/AcroForm`, `/EmbeddedFile`, `/RichMedia` or `/XFA` appears, and no reference to an outside
 resource. Object types are limited to catalog, pages, page, font, content stream and info. The catalog
 snapshots' source URLs are shown as text. Some viewers make URL-shaped text clickable on their own; only
-a click follows it.
+a click follows it. *Amended 2026-11-28 (PRD #584 milestone 1b):* the same holds for the contact
+banner's address, `info@shift2eu.com`, which is plain text on a gold box, never a link.
 
 ### Reproducible: no timestamp, no varying metadata, integer arithmetic
 
@@ -213,6 +274,11 @@ The composition roots, `cmd/shift2eu` now and `cmd/shift2eu-web/internal/wire` i
 - The PDF names the inventory's file name, which a user who passes the PDF on may want to rename first.
 - The PDF is not accessible to screen readers until milestone 3 decides on tagging; the page's HTML
   report is the accessible view meanwhile.
+- *Amended 2026-11-28 (PRD #584 milestone 1b):* the operator table the tests pin grows from eleven
+  operators to the sixteen above, each a fixed operand shape; every new one draws paths or sets a
+  DeviceRGB colour, and none reaches a resource, so the trust argument is unchanged. The goldens grow by
+  the drawing, and the PR states their sizes before and after. The WebAssembly module does not link
+  `pdfreport` before milestone 2, so its size does not change in 1b.
 - Milestone 1 updates CLAUDE.md, `docs/architecture.md`, the CLI guide, depguard and its pin, and
   `test/architecture`. Milestone 2 amends ADRs 0018, 0035, 0036, 0040 and 0043, and ADR 0015 for the
   commit stamp. Milestone 3 amends this ADR's interim answers.

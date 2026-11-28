@@ -19,6 +19,7 @@ package pdfreport_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -38,7 +39,14 @@ const (
 type pdfValueKind int
 
 const (
-	pdfValueNumber pdfValueKind = iota
+	// pdfValueInteger and pdfValueDecimal are the two number kinds ADR 0049's
+	// amended operator set writes: an integer is ASCII digits only, a decimal is
+	// ASCII digits, a dot and exactly three digits, and neither has a sign or an
+	// exponent. A content stream operator's operand shape tells the two apart
+	// (re, Tf and Tm take integers; w, rg, RG, m and l take decimals), so the
+	// reader keeps them apart too.
+	pdfValueInteger pdfValueKind = iota
+	pdfValueDecimal
 	pdfValueName
 	pdfValueString
 	pdfValueRef
@@ -49,8 +57,10 @@ const (
 // kindName is the kind as an error message names it.
 func kindName(kind pdfValueKind) string {
 	switch kind {
-	case pdfValueNumber:
+	case pdfValueInteger:
 		return "an integer"
+	case pdfValueDecimal:
+		return "a decimal of three places"
 	case pdfValueName:
 		return "a name"
 	case pdfValueString:
@@ -70,7 +80,8 @@ func kindName(kind pdfValueKind) string {
 // reference, an array or a dictionary.
 type pdfValue struct {
 	kind  pdfValueKind
-	num   int
+	num   int // an integer, or the object number of an indirect reference
+	dec   int // a decimal, in thousandths of a point
 	name  string
 	str   string
 	ref   int
@@ -121,7 +132,7 @@ func (d pdfDict) mustNumber(tb testing.TB, owner, name string) int {
 		tb.Fatalf("pdf: %s has no /%s", owner, name)
 	}
 
-	if value.kind != pdfValueNumber {
+	if value.kind != pdfValueInteger {
 		tb.Fatalf("pdf: %s's /%s is %s, want an integer", owner, name, kindName(value.kind))
 	}
 
@@ -200,7 +211,8 @@ type pdfXrefEntry struct {
 	offset int
 }
 
-// pdfTextRun is one Tj: the text it shows, at the x and y the text matrix had.
+// pdfTextRun is one Tj: the text it shows, at the x and y the text matrix had,
+// in the colour the stream's non-stroking colour held then.
 type pdfTextRun struct {
 	// Page is the run's page, counted from 0 in the page tree's order.
 	Page int
@@ -213,20 +225,132 @@ type pdfTextRun struct {
 	Size int
 	// Text is the run's text, decoded from WinAnsiEncoding.
 	Text string
+	// Colour is the non-stroking colour the run was drawn in.
+	Colour pdfRGB
 }
 
-// pdfRule is one rectangle the content stream fills or strokes: a horizontal
-// hairline, from x, y, w points long and h points high.
+// pdfRule is one rectangle the content stream paths: the writer's rules (zero
+// height, stroked), its badges, boxes and table row fills. Its coordinates are
+// whole points, the form re's four integers take (ADR 0049).
 type pdfRule struct {
 	X, Y, W, H int
 }
 
-// pdfPage is one page of the page tree, the text it draws and its rules.
+// pdfRGB is a colour: three components in thousandths, from 0 to 1000, as rg and
+// RG write them (ADR 0049).
+type pdfRGB struct{ R, G, B int }
+
+// pdfPoint is one point of a path, in thousandths of a point, as m and l write
+// it.
+type pdfPoint struct{ X, Y int }
+
+// pdfSubpath is one subpath: its points and whether h closed it.
+type pdfSubpath struct {
+	Points []pdfPoint
+	Closed bool
+}
+
+// pdfBox is a rectangle in thousandths of a point: its left x and bottom y and
+// its width and height.
+type pdfBox struct{ X, Y, W, H int }
+
+// contains reports whether the point lies inside the box or on its edge, within
+// a slack of tolerance thousandths.
+func (b pdfBox) contains(point pdfPoint, tolerance int) bool {
+	return point.X >= b.X-tolerance && point.X <= b.X+b.W+tolerance &&
+		point.Y >= b.Y-tolerance && point.Y <= b.Y+b.H+tolerance
+}
+
+// containsBox reports whether every corner of inner lies inside the box or on
+// its edge, within a slack of tolerance thousandths.
+func (b pdfBox) containsBox(inner pdfBox, tolerance int) bool {
+	return inner.X >= b.X-tolerance && inner.X+inner.W <= b.X+b.W+tolerance &&
+		inner.Y >= b.Y-tolerance && inner.Y+inner.H <= b.Y+b.H+tolerance
+}
+
+// pdfShape is one path the stream completes: filled with f, or stroked with S.
+// It holds the colour it was drawn in, the line width of a stroke, the
+// rectangles it paths and its subpaths, and its bounding box.
+type pdfShape struct {
+	// Op is the operator that completed the path: "f" or "S".
+	Op string
+	// Fill is the non-stroking colour the stream held: the fill of an f and the
+	// colour of the text drawn after it.
+	Fill pdfRGB
+	// Stroke is the stroking colour and Width the line width, in thousandths of
+	// a point, the stream held.
+	Stroke pdfRGB
+	Width  int
+	// Rects are the rectangles re pathed, in whole points.
+	Rects []pdfRule
+	// Subpaths are the subpaths m, l and h built.
+	Subpaths []pdfSubpath
+	// Box is the path's bounding box, in thousandths of a point.
+	Box pdfBox
+}
+
+// newShape returns the shape of a completed path.
+func newShape(op string, fill, stroke pdfRGB, width int, rects []pdfRule, subpaths []pdfSubpath) pdfShape {
+	shape := pdfShape{Op: op, Fill: fill, Stroke: stroke, Width: width, Rects: rects, Subpaths: subpaths}
+
+	empty := true
+
+	grow := func(x, y int) {
+		if empty {
+			shape.Box = pdfBox{X: x, Y: y, W: 0, H: 0}
+			empty = false
+
+			return
+		}
+
+		minX, maxX := min(shape.Box.X, x), max(shape.Box.X+shape.Box.W, x)
+		minY, maxY := min(shape.Box.Y, y), max(shape.Box.Y+shape.Box.H, y)
+		shape.Box = pdfBox{X: minX, Y: minY, W: maxX - minX, H: maxY - minY}
+	}
+
+	for _, rect := range rects {
+		grow(rect.X*milli, rect.Y*milli)
+		grow((rect.X+rect.W)*milli, (rect.Y+rect.H)*milli)
+	}
+
+	for _, subpath := range subpaths {
+		for _, point := range subpath.Points {
+			grow(point.X, point.Y)
+		}
+	}
+
+	return shape
+}
+
+// subpathsOf returns the shape's subpaths, however many paths the writer drew
+// them as: a cross of two lines may be one path of two subpaths or two paths.
+func subpathsOf(shapes []pdfShape) []pdfSubpath {
+	var subpaths []pdfSubpath
+
+	for _, shape := range shapes {
+		subpaths = append(subpaths, shape.Subpaths...)
+	}
+
+	return subpaths
+}
+
+// pdfContent is what one content stream draws: its text runs, the rectangles its
+// paths hold, the shapes it fills and strokes, and every colour it sets.
+type pdfContent struct {
+	Runs   []pdfTextRun
+	Rules  []pdfRule
+	Shapes []pdfShape
+	Colors []pdfRGB
+}
+
+// pdfPage is one page of the page tree: what its content stream draws.
 type pdfPage struct {
 	num     int
 	content int
 	runs    []pdfTextRun
 	rules   []pdfRule
+	shapes  []pdfShape
+	colors  []pdfRGB
 }
 
 // testPDF is the parsed file.
@@ -254,15 +378,20 @@ func (f *testPDF) object(tb testing.TB, num int) *pdfObject {
 
 // pdfLexer reads the writer's subset out of bytes.
 type pdfLexer struct {
-	tb   testing.TB
 	data []byte
 	pos  int
 }
 
-// fail fails the test, naming the byte the lexer stopped at.
+// pdfParseError is what the reader stops with when it meets a departure from the
+// writer's subset. openTestPDF turns it into a test failure, and checkContentStream
+// into an error, so a negative test can require one without failing the test it
+// runs in: testing.TB cannot be faked, since its interface has a method of its
+// own package.
+type pdfParseError struct{ message string }
+
+// fail stops the reader, naming the byte it stopped at.
 func (l *pdfLexer) fail(format string, args ...any) {
-	l.tb.Helper()
-	l.tb.Fatalf("pdf: at byte %d: %s", l.pos, fmt.Sprintf(format, args...))
+	panic(pdfParseError{message: fmt.Sprintf("pdf: at byte %d: %s", l.pos, fmt.Sprintf(format, args...))})
 }
 
 // eof reports whether the lexer has read every byte.
@@ -327,13 +456,17 @@ func preview(data []byte) string {
 	return string(data)
 }
 
-// parseNumber reads an integer. The writer's layout arithmetic is integer only
-// (ADR 0049), so a number with a fraction is a failure, not a value.
-func (l *pdfLexer) parseNumber() int {
+// parseNumber reads the writer's next number and returns it as an integer or a
+// decimal value. ADR 0049 fixes both written forms: an integer is ASCII digits
+// only, a decimal is ASCII digits, a dot and exactly three digits, and neither
+// has a sign or an exponent. A number that departs from its form is a failure,
+// never a value, whichever operator takes it.
+func (l *pdfLexer) parseNumber() pdfValue {
 	start := l.pos
 
 	if l.peek() == '-' || l.peek() == '+' {
-		l.pos++
+		l.fail("the number %q starts with a sign, but neither an integer nor a decimal of the writer has one",
+			preview(l.data[start:]))
 	}
 
 	digits := l.pos
@@ -342,20 +475,59 @@ func (l *pdfLexer) parseNumber() int {
 	}
 
 	if l.pos == digits {
-		l.fail("want an integer, found %q", preview(l.data[start:]))
+		l.fail("want an integer or a decimal, found %q", preview(l.data[start:]))
 	}
 
-	if !l.eof() && (l.data[l.pos] == '.' || l.data[l.pos] == 'e' || l.data[l.pos] == 'E') {
-		l.fail("want an integer, but the number %q holds a fraction or an exponent; the writer's layout arithmetic is integer only",
-			preview(l.data[start:]))
+	if l.eof() || l.data[l.pos] != '.' {
+		if !l.eof() && (l.data[l.pos] == 'e' || l.data[l.pos] == 'E') {
+			l.fail("the number %q has an exponent, which the writer never writes", preview(l.data[start:]))
+		}
+
+		return pdfValue{kind: pdfValueInteger, num: l.parseIntegerDigits(start, l.pos)}
 	}
 
-	number, err := strconv.Atoi(string(l.data[start:l.pos]))
+	whole := l.parseIntegerDigits(start, l.pos)
+
+	l.pos++
+
+	fraction := l.pos
+	for !l.eof() && l.data[l.pos] >= '0' && l.data[l.pos] <= '9' {
+		l.pos++
+	}
+
+	if places := l.pos - fraction; places != 3 {
+		l.fail("the decimal %q has %d digit(s) after the dot, but a decimal of the writer is ASCII digits, a dot and exactly three digits",
+			preview(l.data[start:l.pos]), places)
+	}
+
+	thousandths, err := strconv.Atoi(string(l.data[fraction:l.pos]))
 	if err != nil {
-		l.fail("want an integer, found %q: %v", string(l.data[start:l.pos]), err)
+		l.fail("want a decimal, found %q: %v", preview(l.data[start:l.pos]), err)
 	}
 
-	return number
+	return pdfValue{kind: pdfValueDecimal, dec: whole*1000 + thousandths}
+}
+
+// parseInteger reads an integer, the form a dictionary entry, a cross-reference
+// offset and an operator taking whole points (re, Tf, Tm) need.
+func (l *pdfLexer) parseInteger() int {
+	value := l.parseNumber()
+	if value.kind != pdfValueInteger {
+		l.fail("want an integer, found a decimal")
+	}
+
+	return value.num
+}
+
+// parseIntegerDigits returns the integer written in data[start:end], the digits
+// of a number whose integral part the caller has read.
+func (l *pdfLexer) parseIntegerDigits(start, end int) int {
+	whole, err := strconv.Atoi(string(l.data[start:end]))
+	if err != nil {
+		l.fail("want an integer, found %q: %v", preview(l.data[start:end]), err)
+	}
+
+	return whole
 }
 
 // parseName reads a name and fails the test on a '#', which the writer never
@@ -489,24 +661,28 @@ func (l *pdfLexer) parseValue() pdfValue {
 		return pdfValue{kind: pdfValueDict, dict: l.parseDict()}
 	case c == '-' || c == '+' || (c >= '0' && c <= '9'):
 		number := l.parseNumber()
+		if number.kind != pdfValueInteger {
+			return number
+		}
 
 		save := l.pos
 		l.skipSpace()
 
 		if !l.eof() && l.data[l.pos] >= '0' && l.data[l.pos] <= '9' {
-			l.parseNumber()
-			l.skipSpace()
+			if generation := l.parseNumber(); generation.kind == pdfValueInteger {
+				l.skipSpace()
 
-			if !l.eof() && l.data[l.pos] == 'R' {
-				l.pos++
+				if !l.eof() && l.data[l.pos] == 'R' {
+					l.pos++
 
-				return pdfValue{kind: pdfValueRef, ref: number}
+					return pdfValue{kind: pdfValueRef, ref: number.num}
+				}
 			}
 		}
 
 		l.pos = save
 
-		return pdfValue{kind: pdfValueNumber, num: number}
+		return number
 	default:
 		l.fail("want a value the writer emits, found %q; it writes no keyword, boolean, null or hex string", preview(l.data[l.pos:]))
 	}
@@ -555,8 +731,19 @@ func (l *pdfLexer) parseDict() pdfDict {
 
 // openTestPDF parses the whole file and returns it. It fails the test on any
 // departure from the writer's subset or from the structural rules of the PRD.
-func openTestPDF(tb testing.TB, data []byte) *testPDF {
+func openTestPDF(tb testing.TB, data []byte) (file *testPDF) {
 	tb.Helper()
+
+	defer func() {
+		if r := recover(); r != nil {
+			parseError, ok := r.(pdfParseError)
+			if !ok {
+				panic(r)
+			}
+
+			tb.Fatalf("%s", parseError.message)
+		}
+	}()
 
 	if !bytes.HasPrefix(data, []byte(pdfMagic)) {
 		tb.Fatalf("pdf: the file starts with %q, want the header %q", preview(data), pdfMagic)
@@ -571,15 +758,15 @@ func openTestPDF(tb testing.TB, data []byte) *testPDF {
 		tb.Fatalf("pdf: the file ends with %q, want %q", last, pdfEOFMarker)
 	}
 
-	file := &testPDF{version: "1.7", objects: make(map[int]*pdfObject)}
+	file = &testPDF{version: "1.7", objects: make(map[int]*pdfObject)}
 
 	at := bytes.LastIndex(data, []byte("startxref\n"))
 	if at < 0 {
 		tb.Fatalf("pdf: the file has no startxref")
 	}
 
-	lexer := &pdfLexer{tb: tb, data: data, pos: at + len("startxref\n")}
-	file.xrefOffset = lexer.parseNumber()
+	lexer := &pdfLexer{data: data, pos: at + len("startxref\n")}
+	file.xrefOffset = lexer.parseInteger()
 	lexer.expect("the start of the end of the file", "\n%%EOF\n")
 
 	if lexer.pos != len(data) {
@@ -602,16 +789,16 @@ func parseXref(tb testing.TB, file *testPDF, data []byte) {
 		tb.Fatalf("pdf: startxref names byte %d, which is outside the file", file.xrefOffset)
 	}
 
-	lexer := &pdfLexer{tb: tb, data: data, pos: file.xrefOffset}
+	lexer := &pdfLexer{data: data, pos: file.xrefOffset}
 	lexer.expect("the cross-reference table", "xref\n")
 
-	if first := lexer.parseNumber(); first != 0 {
+	if first := lexer.parseInteger(); first != 0 {
 		lexer.fail("the cross-reference table starts at object %d, want 0", first)
 	}
 
 	lexer.skipSpace()
 
-	count := lexer.parseNumber()
+	count := lexer.parseInteger()
 	lexer.expect("the cross-reference table's object count", "\n")
 
 	for i := range count {
@@ -635,7 +822,7 @@ func parseXref(tb testing.TB, file *testPDF, data []byte) {
 
 	lexer.expect("the final cross-reference offset", "\nstartxref\n")
 
-	if got := lexer.parseNumber(); got != file.xrefOffset {
+	if got := lexer.parseInteger(); got != file.xrefOffset {
 		lexer.fail("startxref names byte %d, want the cross-reference table's offset %d", got, file.xrefOffset)
 	}
 
@@ -722,7 +909,7 @@ func parseObject(tb testing.TB, data []byte, num, offset int) *pdfObject {
 			num, offset, header, previewAt(data, offset))
 	}
 
-	lexer := &pdfLexer{tb: tb, data: data, pos: offset + len(header)}
+	lexer := &pdfLexer{data: data, pos: offset + len(header)}
 
 	value := lexer.parseValue()
 	if value.kind != pdfValueDict {
@@ -798,35 +985,41 @@ func parsePageTree(tb testing.TB, file *testPDF) {
 			tb.Fatalf("pdf: page %d's /Contents (object %d) is not a stream", index+1, contents)
 		}
 
-		runs, rules := parseContentStream(tb, index, content.stream)
+		drawn := parseContentStream(index, content.stream)
 
 		file.pages = append(file.pages, &pdfPage{
 			num:     kid.ref,
 			content: contents,
-			runs:    runs,
-			rules:   rules,
+			runs:    drawn.Runs,
+			rules:   drawn.Rules,
+			shapes:  drawn.Shapes,
+			colors:  drawn.Colors,
 		})
 	}
 }
 
-// parseContentStream parses one content stream into its rules and its text
-// runs. It checks every token against the writer's fixed operator table:
-// operands are integers, literal strings and the font resource names F1 to F3,
-// and there is no graphics state dictionary, XObject, inline image, array,
-// dictionary or comment.
-func parseContentStream(tb testing.TB, page int, stream []byte) ([]pdfTextRun, []pdfRule) {
-	tb.Helper()
-
-	lexer := &pdfLexer{tb: tb, data: stream}
+// parseContentStream parses one content stream into what it draws: its text
+// runs in the colour each was drawn in, the rectangles it paths, the shapes it
+// fills and strokes, and every colour it sets. It checks every token against the
+// writer's fixed operator table (ADR 0049's sixteen operators), every number
+// against its written form, every colour component against 0.000 to 1.000 and
+// every path coordinate against the page. There is no graphics state dictionary,
+// XObject, inline image, array, dictionary or comment.
+func parseContentStream(page int, stream []byte) pdfContent {
+	lexer := &pdfLexer{data: stream}
 
 	var (
-		operands []pdfValue
-		runs     []pdfTextRun
-		rules    []pdfRule
-		inText   bool
-		x, y     int
-		font     string
-		size     int
+		content   pdfContent
+		operands  []pdfValue
+		inText    bool
+		x, y      int
+		font      string
+		size      int
+		fill      pdfRGB
+		stroke    pdfRGB
+		lineWidth int
+		rects     []pdfRule
+		subpaths  []pdfSubpath
 	)
 
 	for {
@@ -843,20 +1036,23 @@ func parseContentStream(tb testing.TB, page int, stream []byte) ([]pdfTextRun, [
 			operands = append(operands, pdfValue{kind: pdfValueString, str: lexer.parseLiteralString()})
 		case c == '/':
 			operands = append(operands, pdfValue{kind: pdfValueName, name: lexer.parseName()})
-		case c == '-' || c == '+' || (c >= '0' && c <= '9'):
-			operands = append(operands, pdfValue{kind: pdfValueNumber, num: lexer.parseNumber()})
+		case c == '-' || c == '+':
+			lexer.fail("the content stream holds the sign %q, but neither an integer nor a decimal of the writer has one", c)
+		case c >= '0' && c <= '9':
+			operands = append(operands, lexer.parseNumber())
 		case c == '[' || c == '<' || c == '%':
-			lexer.fail("the content stream holds %q, but the writer's content streams hold only literal strings, integers, font resource names and its fixed operators",
+			lexer.fail("the content stream holds %q, but the writer's content streams hold only literal strings, numbers, font resource names and its fixed operators",
 				preview(stream[lexer.pos:]))
 		default:
 			operator := lexer.parseOperator()
 
 			shape, ok := pdfContentOperators[operator]
 			if !ok {
-				lexer.fail("the content stream uses the operator %q, which is not in the writer's fixed operator table", operator)
+				lexer.fail("the content stream uses the operator %q, which is not in the writer's fixed operator table (%s)",
+					operator, operatorTableList())
 			}
 
-			checkOperands(tb, lexer, operator, shape, operands)
+			checkOperands(lexer, operator, shape, operands)
 
 			switch operator {
 			case "BT":
@@ -893,9 +1089,42 @@ func parseContentStream(tb testing.TB, page int, stream []byte) ([]pdfTextRun, [
 					lexer.fail("%v", err)
 				}
 
-				runs = append(runs, pdfTextRun{Page: page, X: x, Y: y, Font: font, Size: size, Text: text})
+				content.Runs = append(content.Runs, pdfTextRun{
+					Page: page, X: x, Y: y, Font: font, Size: size, Text: text, Colour: fill,
+				})
+			case "rg", "RG":
+				colour := pdfRGB{R: operands[0].dec, G: operands[1].dec, B: operands[2].dec}
+				content.Colors = append(content.Colors, colour)
+
+				if operator == "rg" {
+					fill = colour
+				} else {
+					stroke = colour
+				}
+			case "w":
+				lineWidth = operands[0].dec
 			case "re":
-				rules = append(rules, pdfRule{X: operands[0].num, Y: operands[1].num, W: operands[2].num, H: operands[3].num})
+				rule := pdfRule{X: operands[0].num, Y: operands[1].num, W: operands[2].num, H: operands[3].num}
+				content.Rules = append(content.Rules, rule)
+				rects = append(rects, rule)
+			case "m":
+				subpaths = append(subpaths, pdfSubpath{Points: []pdfPoint{{X: operands[0].dec, Y: operands[1].dec}}})
+			case "l":
+				if len(subpaths) == 0 {
+					lexer.fail("the content stream draws a line with no subpath to add it to")
+				}
+
+				last := &subpaths[len(subpaths)-1]
+				last.Points = append(last.Points, pdfPoint{X: operands[0].dec, Y: operands[1].dec})
+			case "h":
+				if len(subpaths) == 0 {
+					lexer.fail("the content stream closes a subpath that does not exist")
+				}
+
+				subpaths[len(subpaths)-1].Closed = true
+			case "f", "S":
+				content.Shapes = append(content.Shapes, newShape(operator, fill, stroke, lineWidth, rects, subpaths))
+				rects, subpaths = nil, nil
 			}
 
 			operands = nil
@@ -910,7 +1139,44 @@ func parseContentStream(tb testing.TB, page int, stream []byte) ([]pdfTextRun, [
 		lexer.fail("the content stream has a BT with no ET")
 	}
 
-	return runs, rules
+	if len(rects) > 0 || len(subpaths) > 0 {
+		lexer.fail("the content stream paths a shape it never fills or strokes")
+	}
+
+	return content
+}
+
+// operatorTableList returns the writer's operator table's keys, sorted, for a
+// failure message.
+func operatorTableList() string {
+	operators := make([]string, 0, len(pdfContentOperators))
+	for operator := range pdfContentOperators {
+		operators = append(operators, operator)
+	}
+
+	slices.Sort(operators)
+
+	return strings.Join(operators, " ")
+}
+
+// checkContentStream parses a content stream the way the reader does and returns
+// the first departure from the writer's operator table as an error, so a test can
+// require one without failing the test it runs in.
+func checkContentStream(stream string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			parseError, ok := r.(pdfParseError)
+			if !ok {
+				panic(r)
+			}
+
+			err = errors.New(parseError.message)
+		}
+	}()
+
+	parseContentStream(0, []byte(stream))
+
+	return nil
 }
 
 // parseOperator reads one content stream operator.
@@ -935,10 +1201,10 @@ func (l *pdfLexer) parseOperator() string {
 	return string(l.data[start:l.pos])
 }
 
-// checkOperands checks one operator's operands against the writer's fixed table.
-func checkOperands(tb testing.TB, lexer *pdfLexer, operator string, shape []pdfValueKind, operands []pdfValue) {
-	tb.Helper()
-
+// checkOperands checks one operator's operands against the writer's fixed table,
+// the written form of its numbers, the range of its colour components and the
+// page its path coordinates lie on.
+func checkOperands(lexer *pdfLexer, operator string, shape []pdfValueKind, operands []pdfValue) {
 	if len(operands) != len(shape) {
 		lexer.fail("the operator %s takes %d operands, found %d", operator, len(shape), len(operands))
 	}
@@ -949,15 +1215,28 @@ func checkOperands(tb testing.TB, lexer *pdfLexer, operator string, shape []pdfV
 		}
 	}
 
-	if operator != "Tf" {
-		return
-	}
+	switch operator {
+	case "Tf":
+		switch operands[0].name {
+		case "F1", "F2", "F3":
+		default:
+			lexer.fail("the content stream selects the font /%s, want one of the writer's constant font resources /F1, /F2, /F3",
+				operands[0].name)
+		}
+	case "rg", "RG":
+		for i, operand := range operands {
+			if operand.dec < 0 || operand.dec > milli {
+				lexer.fail("component %d of the operator %s is %s, outside 0.000 to 1.000", i+1, operator, points(operand.dec))
+			}
+		}
+	case "m", "l":
+		if x := operands[0].dec; x < 0 || x > pageWidth*milli {
+			lexer.fail("the operator %s draws at x %s pt, outside the page's 0 to %d pt", operator, points(x), pageWidth)
+		}
 
-	switch operands[0].name {
-	case "F1", "F2", "F3":
-	default:
-		lexer.fail("the content stream selects the font /%s, want one of the writer's constant font resources /F1, /F2, /F3",
-			operands[0].name)
+		if y := operands[1].dec; y < 0 || y > pageHeight*milli {
+			lexer.fail("the operator %s draws at y %s pt, outside the page's 0 to %d pt", operator, points(y), pageHeight)
+		}
 	}
 }
 
@@ -999,10 +1278,16 @@ func TestReaderParsesAMinimalPDF(t *testing.T) {
 func buildMinimalPDF(tb testing.TB) []byte {
 	tb.Helper()
 
-	content := "BT /F1 10 Tf 1 0 0 1 50 700 Tm (Hello \\(x\\) \\351) Tj ET\n"
+	return buildPagePDF(tb, "BT /F1 10 Tf 1 0 0 1 50 700 Tm (Hello \\(x\\) \\351) Tj ET\n")
+}
 
-	// Object 6 is the info dictionary; the trailer names it too, so the file
-	// covers every object type of the writer's set.
+// buildPagePDF builds a one-page file of the writer's subset whose content stream
+// is the one given, with its cross-reference offsets computed as it is assembled.
+// Object 6 is the info dictionary; the trailer names it too, so the file covers
+// every object type of the writer's set.
+func buildPagePDF(tb testing.TB, content string) []byte {
+	tb.Helper()
+
 	objects := []string{
 		"<< /Type /Catalog /Pages 2 0 R >>",
 		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",

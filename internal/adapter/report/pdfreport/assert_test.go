@@ -19,6 +19,9 @@ import (
 type pdfLine struct {
 	// Page is the page, counted from 0 in the page tree's order.
 	Page int
+	// Y is the line's baseline, in points, so a check can find the line's own
+	// runs on the page.
+	Y int
 	// Text is the joined text of the runs.
 	Text string
 }
@@ -43,7 +46,7 @@ func (f *testPDF) lines() []pdfLine {
 				parts = append(parts, run.Text)
 			}
 
-			lines = append(lines, pdfLine{Page: pageIndex, Text: strings.Join(parts, "")})
+			lines = append(lines, pdfLine{Page: pageIndex, Y: current[0].Y, Text: strings.Join(parts, "")})
 			current = nil
 		}
 

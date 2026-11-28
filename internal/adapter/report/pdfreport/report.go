@@ -39,12 +39,12 @@ func (r *Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessm
 	subject := []seg{value(furnitureSize, a.Target)}
 
 	file := r.render(subject, func(d *document) {
-		d.paragraph(0, titleSize, titleLeading, words(helveticaBold, titleSize, "Migration assessment: "),
-			value(titleSize, a.Target))
+		writeTitle(d, words(helveticaBold, titleSize, "Migration assessment: "), value(titleSize, a.Target))
 		writeFacts(d, meta, a.Source, []assessment.Assessment{a}, false)
 
 		noted := new(bool)
 		writeBody(d, a, 1, noted)
+		d.banner()
 		writeDetails(d, a, 1)
 		writeHow(d, hasEstimates(a))
 		writeAbout(d, r.versionLine, meta, a.Source, []assessment.Assessment{a})
@@ -72,14 +72,14 @@ func (r *Reporter) render(subject []seg, draw func(d *document)) string {
 	draw(d)
 
 	for i, p := range d.pages {
-		furniture := &document{pages: []*page{p}, y: headerTop}
+		furniture := &document{pages: []*page{p}, y: headerTop, left: marginLeft, width: contentWidth, ink: mutedColour}
 
 		for _, line := range header {
 			furniture.drawLine(line, marginLeft, furnitureSize, furnitureLeading)
 		}
 
-		p.rules = append(p.rules, rule{x: marginLeft, y: headerBottom - ruleGap/2, w: contentWidth},
-			rule{x: marginLeft, y: footerTop + ruleGap/2, w: contentWidth})
+		p.shapes = append(p.shapes, ruleLine(marginLeft, headerBottom-ruleGap/2, contentWidth),
+			ruleLine(marginLeft, footerTop+ruleGap/2, contentWidth))
 
 		furniture.y = footerTop
 
@@ -95,12 +95,30 @@ func (r *Reporter) render(subject []seg, draw func(d *document)) string {
 	return writeFile(d.pages)
 }
 
-// writeFacts writes the header facts under the title: the inventory file (left
-// out when it has no name), the source, one catalog line per assessment and
-// one region line per assessment that has a region. named says whether a
-// region line names its target, as a comparison's does.
+// writeTitle writes the title block's band: the title in Helvetica-Bold,
+// --mast-ink on a --mast band across the text width with a --gold rule at its
+// left edge.
+func writeTitle(d *document, title ...seg) {
+	ink := d.ink
+
+	d.openBox(titleBox)
+	d.ink = mastInkColour
+	d.paragraph(0, titleSize, titleLeading, title...)
+	d.ink = ink
+	d.closeBox()
+}
+
+// writeFacts writes the header facts under the title, in --muted: the
+// inventory file (left out when it has no name), the source, one catalog line
+// per assessment and one region line per assessment that has a region. named
+// says whether a region line names its target, as a comparison's does.
 func writeFacts(d *document, meta analysis.ReportMeta, source string, targets []assessment.Assessment, named bool) {
-	d.space(4)
+	ink := d.ink
+	d.ink = mutedColour
+
+	defer func() { d.ink = ink }()
+
+	d.space(6)
 
 	if meta.InventoryName != "" {
 		d.body(words(helvetica, bodySize, "Inventory file: "), value(bodySize, meta.InventoryName))
@@ -169,29 +187,53 @@ func writeBody(d *document, a assessment.Assessment, level int, noted *bool) {
 	}
 }
 
+// fitCount is one row of a summary: a fit and its count, or, with total set,
+// the number of resources in total and no fit.
+type fitCount struct {
+	fit   mapping.Fit
+	total bool
+	count string
+}
+
+// label returns the row's label: the fit's badge, or the plain word "total".
+func (c fitCount) label() seg {
+	if c.total {
+		return words(helvetica, tableSize, "total")
+	}
+
+	return badge(c.fit, "")
+}
+
 // fitCounts are a summary's rows: each fit with its count, then the total.
-func fitCounts(s assessment.Summary) [][2]string {
-	return [][2]string{
-		{string(mapping.Direct), strconv.Itoa(s.Direct)},
-		{string(mapping.Partial), strconv.Itoa(s.Partial)},
-		{string(mapping.None), strconv.Itoa(s.None)},
-		{"total", strconv.Itoa(s.Total)},
+func fitCounts(s assessment.Summary) []fitCount {
+	return []fitCount{
+		{fit: mapping.Direct, count: strconv.Itoa(s.Direct)},
+		{fit: mapping.Partial, count: strconv.Itoa(s.Partial)},
+		{fit: mapping.None, count: strconv.Itoa(s.None)},
+		{total: true, count: strconv.Itoa(s.Total)},
 	}
 }
 
-// writeSummary writes the number of resources per fit and in total, and with
-// estimates on the monthly total.
+// writeSummary writes the number of resources per fit and in total as a row of
+// tiles, with estimates on a tile of the monthly total, and then the monthly
+// total in words.
 func writeSummary(d *document, a assessment.Assessment, level int) {
 	d.title(level, "Summary")
 
-	t := table{widths: []int{120, 80}, header: headerRow("Fit", "Resources")}
-	for _, row := range fitCounts(a.Summary) {
-		t.rows = append(t.rows, []cell{{{words(helvetica, tableSize, row[0])}}, {{words(helvetica, tableSize, row[1])}}})
-	}
-
-	d.drawTable(t)
+	s := a.Summary
+	tiles := fitTiles(s.Direct, s.Partial, s.None, s.Total)
 
 	if hasEstimates(a) {
+		tiles = append(tiles, tile{
+			label: tileLabel("Estimate"), figure: euros(a.Total.Monthly), ink: accentColour,
+			caption: "per month, estimated",
+		})
+	}
+
+	d.tileRow(tiles)
+
+	if hasEstimates(a) {
+		d.space(4)
 		d.body(append([]seg{words(helvetica, bodySize, "Monthly estimate: ")},
 			totalSegs(bodySize, *a.Total, estimatesOf(a.Verdicts))...)...)
 	}
@@ -213,7 +255,7 @@ func writeResources(d *document, a assessment.Assessment, level int, noted *bool
 
 	t := table{widths: []int{140, 120, 50, 185}, header: headerRow("ID", "Category", "Fit", "Best offering")}
 	if estimates {
-		t.widths = []int{85, 85, 35, 110, 80, 100}
+		t.widths = []int{82, 83, 40, 110, 80, 100}
 		t.header = headerRow("ID", "Category", "Fit", "Best offering", "Plan", "Monthly estimate")
 	}
 
@@ -221,7 +263,7 @@ func writeResources(d *document, a assessment.Assessment, level int, noted *bool
 		row := []cell{
 			{{value(tableSize, v.Resource.ID)}},
 			{{value(tableSize, string(v.Resource.Category))}},
-			{{words(helvetica, tableSize, string(v.Fit))}},
+			{{badge(v.Fit, "")}},
 			{bestOfferingSegs(tableSize, v)},
 		}
 
@@ -251,12 +293,11 @@ func writeGlobalNote(d *document, verdicts []assessment.Verdict, noted *bool) {
 // none writes "None." for an empty list.
 func none(d *document) { d.body(words(helvetica, bodySize, "None.")) }
 
-// writeRequiredChanges writes one item per partial verdict with required
-// changes: the capabilities its best offering lacks, and that offering.
+// writeRequiredChanges writes, in the required-changes box, one item per
+// partial verdict with required changes: the capabilities its best offering
+// lacks, and that offering.
 func writeRequiredChanges(d *document, verdicts []assessment.Verdict, level int) {
-	d.title(level, "Required changes")
-
-	items := 0
+	var items []func(*document)
 
 	for _, v := range verdicts {
 		listed := v.ChangesToList()
@@ -269,14 +310,28 @@ func writeRequiredChanges(d *document, verdicts []assessment.Verdict, level int)
 		segs = append(segs, words(helvetica, bodySize, " (not offered by "), value(bodySize, v.BestOffering))
 		segs = append(segs, globalMark(bodySize, v.BestOfferingGlobal())...)
 		segs = append(segs, words(helvetica, bodySize, ")"))
-		d.item(0, segs...)
-
-		items++
+		items = append(items, func(d *document) { d.item(0, segs...) })
 	}
 
-	if items == 0 {
-		none(d)
+	d.noticeBox(infoBox, level, accentColour, false, "Required changes", items)
+}
+
+// noticeBox draws a section as a box: the required-changes box or the blockers
+// box, its heading inside it (after the warning triangle when warn is set),
+// then its items, or "None." when it has none.
+func (d *document) noticeBox(style boxStyle, level int, ink colour, warn bool, text string, items []func(*document)) {
+	if len(items) == 0 {
+		items = []func(*document){none}
 	}
+
+	d.space(10)
+
+	// The heading and the first item move to the next page together when they
+	// do not both fit, so the heading never ends a page; the rest continues
+	// on as many pages as it takes.
+	heading := []seg{words(helveticaBold, headingSize(level), text)}
+	d.ensure(d.measure(func(m *document) { m.drawBox(style, heading, level, ink, warn, items[:1]) }))
+	d.drawBox(style, heading, level, ink, warn, items)
 }
 
 // capabilityNames returns capabilities as strings.
@@ -292,30 +347,36 @@ func capabilityNames[C ~string](capabilities []C) []string {
 // writeBlockers writes one item per blocker, then one per "affected by a
 // blocker on" note, or "None.".
 func writeBlockers(d *document, blockers []assessment.Blocker, verdicts []assessment.Verdict, level int) {
-	d.title(level, "Blockers")
+	var items []func(*document)
 
-	if len(blockers) == 0 {
-		none(d)
+	if len(blockers) > 0 {
+		items = blockerItems(blockers, 0)
 
-		return
-	}
-
-	writeBlockerItems(d, blockers, 0)
-
-	for _, v := range verdicts {
-		for _, id := range v.AffectedBy {
-			d.item(0, value(bodySize, v.Resource.ID), words(helvetica, bodySize, ": affected by a blocker on "),
-				value(bodySize, id))
+		for _, v := range verdicts {
+			for _, id := range v.AffectedBy {
+				items = append(items, func(d *document) {
+					d.item(0, value(bodySize, v.Resource.ID), words(helvetica, bodySize, ": affected by a blocker on "),
+						value(bodySize, id))
+				})
+			}
 		}
 	}
+
+	d.noticeBox(warnBox, level, warnInkColour, true, "Blockers", items)
 }
 
-// writeBlockerItems writes one item per blocker, "ID: reason".
-func writeBlockerItems(d *document, blockers []assessment.Blocker, indent int) {
+// blockerItems returns one item per blocker, "ID: reason".
+func blockerItems(blockers []assessment.Blocker, indent int) []func(*document) {
+	items := make([]func(*document), 0, len(blockers))
+
 	for _, b := range blockers {
-		d.item(indent, append([]seg{value(bodySize, b.ResourceID), words(helvetica, bodySize, ": ")},
-			reasonSegs(bodySize, b.Reason)...)...)
+		items = append(items, func(d *document) {
+			d.item(indent, append([]seg{value(bodySize, b.ResourceID), words(helvetica, bodySize, ": ")},
+				reasonSegs(bodySize, b.Reason)...)...)
+		})
 	}
+
+	return items
 }
 
 // writeWorkloads writes one subsection per workload group, "No workload" last:
@@ -327,33 +388,39 @@ func writeWorkloads(d *document, a assessment.Assessment, level int) {
 	size := headingSize(level + 1)
 
 	for i, w := range a.Workloads {
-		if w.NoWorkload {
-			d.title(level+1, "No workload")
-		} else {
-			d.section(level+1, value(size, w.Name))
+		name := []seg{words(helveticaBold, size, "No workload")}
+		if !w.NoWorkload {
+			name = []seg{value(size, w.Name)}
 		}
 
-		d.body(words(helvetica, bodySize, "Fit: "+strconv.Itoa(w.Summary.Direct)+" direct, "+
-			strconv.Itoa(w.Summary.Partial)+" partial, "+strconv.Itoa(w.Summary.None)+" none"))
+		items := []func(*document){func(d *document) {
+			d.body(words(helvetica, bodySize, "Fit: "), badge(mapping.Direct, strconv.Itoa(w.Summary.Direct)),
+				badge(mapping.Partial, strconv.Itoa(w.Summary.Partial)), badge(mapping.None, strconv.Itoa(w.Summary.None)))
+		}}
 
 		if w.Total != nil {
-			segs := append([]seg{words(helvetica, bodySize, "Monthly estimate: ")},
-				totalSegs(bodySize, *w.Total, estimates[i])...)
-			d.body(append(segs, words(helvetica, bodySize, ", "+basisNote(a)))...)
+			items = append(items, func(d *document) {
+				segs := append([]seg{words(helvetica, bodySize, "Monthly estimate: ")},
+					totalSegs(bodySize, *w.Total, estimates[i])...)
+				d.body(append(segs, words(helvetica, bodySize, ", "+basisNote(a)))...)
 
-			for _, line := range sourceCostLines(bodySize, w.SourceCost) {
-				d.body(line...)
-			}
+				for _, line := range sourceCostLines(bodySize, w.SourceCost) {
+					d.body(line...)
+				}
+			})
 		}
 
 		if len(w.Blockers) == 0 {
-			d.body(words(helvetica, bodySize, "Blockers: none"))
-
-			continue
+			items = append(items, func(d *document) { d.body(words(helvetica, bodySize, "Blockers: none")) })
+		} else {
+			items = append(items, func(d *document) { d.body(words(helvetica, bodySize, "Blockers:")) })
+			items = append(items, blockerItems(w.Blockers, bulletIndent)...)
 		}
 
-		d.body(words(helvetica, bodySize, "Blockers:"))
-		writeBlockerItems(d, w.Blockers, bulletIndent)
+		// A workload card moves whole to the next page when it does not fit in
+		// the space left.
+		d.space(8)
+		d.keepWhole(func(m *document) { m.drawBox(workloadBox, name, level+1, inkColour, false, items) })
 	}
 }
 
