@@ -3381,10 +3381,11 @@ boundary against the VM user, who has sudo. The script:
   `~/.pi/agent/extensions`), is no directory or holds no `index.ts`, `index.js` or `package.json` that is a
   regular file and no symbolic link; the message names the step that writes it,
   `dot-agent-deck orchestrator setup`, after which the pane is restarted;
-- refuses to start, exiting 1 with `pi-tester: pi's session directory <path> ...`, when the working
-  directory's physical path cannot be resolved, or when `~/.pi/agent/sessions` or the unit's directory in it
-  is a symbolic link, is no directory, or lies physically in the working directory; a missing one is fine,
-  pi creates it;
+- refuses to start, exiting 1 with `pi-tester: pi's session directory <path> ...`, when
+  `~/.pi/agent/sessions` or the unit's directory in it is a symbolic link, is no directory, or lies
+  physically in the working directory; a missing one is fine, pi creates it. A working directory whose
+  physical path (`pwd -P`) cannot be resolved is refused before that, by the agent directory's check
+  (`pi-tester: pi's agent directory ... lies in the working directory, the unit folder`);
 - starts pi as `pi --no-approve --no-extensions --session-dir ~/.pi/agent/sessions/--<P>-- --extension
   <installed refusal> --extension <deck extension> --skill <unit folder>/.claude/skills <the remaining
   arguments>`, where `<P>` is the unit folder's physical path (`pwd -P`) without its leading `/` and with
@@ -3436,7 +3437,10 @@ run without skills: run `make vm-pi-tester` right after the merge.
 After merging issue #717's change, which changes the wrapper only (the tester command stays the same), the
 maintainer runs `make vm-pi-tester` from the host clone, so the installed wrapper pins `--session-dir`, and
 checks that a tester pane starts and a `pi --continue` in it resumes. Until then the installed wrapper leaves
-the session directory to pi, which a unit folder's `.pi/settings.json` can still choose.
+the session directory to pi, which a unit folder's `.pi/settings.json` can still choose. The tests pin the
+wrapper's encoding of pi 1.6.1's default session directory, not pi's own function: every pi bump rechecks
+`getDefaultSessionDirPath` in pi's `dist/core/session-manager.js` against the wrapper (ADR 0044, amendment
+for issue #717).
 
 ## Containers and image verification
 

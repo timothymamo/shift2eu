@@ -549,16 +549,22 @@ provision:
       #    where pi writes its sessions: --session-dir wins over it (issue #717). <P> is the working directory's
       #    physical path (pwd -P) without its leading slash and with every slash, backslash and colon a dash,
       #    which is pi 1.6.1's own default for that directory (getDefaultSessionDirPath), so pi finds, resumes and
-      #    continues the unit's sessions as it did with no --session-dir. When pwd -P cannot be resolved, or the
-      #    sessions root ${HOME}/.pi/agent/sessions or the unit's directory in it is a symbolic link, not a
-      #    directory, or has its physical path in the working directory, the wrapper exits 1 with one line naming
-      #    the path. A missing one is fine: pi creates it.
+      #    continues the unit's sessions as it did with no --session-dir. When the sessions root
+      #    ${HOME}/.pi/agent/sessions or the unit's directory in it is a symbolic link, not a directory, or has its
+      #    physical path in the working directory, the wrapper exits 1 with one line naming the path. A missing one
+      #    is fine: pi creates it. A working directory whose pwd -P cannot be resolved is refused before that, by the
+      #    agent directory's check below (in_unit fails closed); the session directory's own refusal of it is
+      #    defence in depth and never runs.
       #    An --approve or -a among the arguments is dropped with one line on stderr each, since the last of
       #    --approve and --no-approve wins; units cut before the change still pass it. After a -- pi reads it as
       #    message text, which could not re-trust the project: it is dropped there too only to keep the rule
       #    simple. A -a given as another option's value (--name -a) is dropped as well; the deck never passes one.
       #    A --session-dir <value> (both words) or --session-dir=<value> is dropped the same way, one line each,
       #    since pi keeps the last --session-dir; a bare --session-dir as the last argument is dropped alone.
+      #    As for -a, a --session-dir after -- or given as another option's value is dropped too, and takes the
+      #    next word with it: the wrapper drops more than pi would read as a session directory, never less, so this
+      #    is safe. A --session-dir --approve drops --approve as its value, without the --approve line; it is still
+      #    dropped, which is what matters.
       #    Before the deck's extension, pi's agent directory ${HOME}/.pi/agent, whose settings, models and system
       #    prompt pi always trusts, is checked: neither ~/.pi nor ~/.pi/agent may be a symbolic link, it must be a
       #    directory, and its physical path (cd -P) must lie outside the working directory's physical path (pwd -P),
@@ -893,6 +899,9 @@ provision:
         exit 1
       }
 
+      # Defence in depth: neither refusal below runs in practice. An empty pwd_real makes in_unit succeed, so the
+      # agent directory's check above has already refused it, and the tr pipeline's status is tr's, which does not
+      # fail on any input.
       [ -n "${pwd_real}" ] ||
         refuse_sessions "${sessions_root}/--<working directory>--" "cannot be named: the working directory's physical path (pwd -P) cannot be resolved"
       sessions_name=$(printf '%s' "${pwd_real#/}" | tr '/\\:' '---') ||
@@ -900,7 +909,9 @@ provision:
       sessions=${sessions_root}/--${sessions_name}--
 
       # Both the sessions root and the unit's directory in it must be reached through no link and, when they exist, lie
-      # physically outside the working directory. A missing one is fine: pi creates it.
+      # physically outside the working directory. A missing one is fine: pi creates it. The in_unit check is defence in
+      # depth: a path under the agent directory, which is already checked to lie outside the unit folder and to be
+      # reached through no link, that is itself no link cannot lie in the unit folder short of a bind mount.
       for session_path in "${sessions_root}" "${sessions}"; do
         if [ -L "${session_path}" ]; then
           refuse_sessions "${session_path}" "is a symbolic link, which pi never creates"

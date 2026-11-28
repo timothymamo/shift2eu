@@ -665,7 +665,16 @@ Consequences of this amendment:
   the tester runs could replace the directory with a link before the next start, which the refusal then
   catches, or write session files), the same-uid limit stated above; pi still reads the project's other
   startup settings (the startup UI, first-time setup) as data before trust, and runs its migrations there.
+  The checks are made once, at start: a process of the same uid could swap the unit's directory for a link
+  after the check, or plant a symbolically linked `*.jsonl` in it that pi then appends to on a manual
+  `--continue` or `/resume`. That is inside the same-uid limit already stated; no trust boundary moves.
+- A working directory whose physical path ends in a newline (the shell's command substitution strips it)
+  or holds bytes that are not valid UTF-8 (which node decodes differently) gets a session name, and an
+  in-unit prefix, that differ from pi's. The deck names the unit folders, not a branch, so this is left as
+  a residual; no code handles it.
 - A pi upgrade that changes `getDefaultSessionDirPath` would leave the pinned directory a custom one: pi
   would still use it, filtering by working directory, and a lookup by hand would find the unit's sessions
-  there. The tests pin the encoding; the release that changes it updates the wrapper.
+  there. The tests pin the wrapper's encoding of pi 1.6.1's rule (`\` and `:` included), not pi's function
+  itself, so every pi bump rechecks `getDefaultSessionDirPath` in `dist/core/session-manager.js` against the
+  wrapper, and the release that changes it updates the wrapper.
 - After the merge the maintainer runs `make vm-pi-tester` and checks that a tester pane starts and resumes.
