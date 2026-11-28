@@ -72,12 +72,15 @@ import (
 // is another CLI's read, as in `gcloud compute instances list --endpoint
 // https://example.com` — the text-wide refusal stands and names the first CLI whose
 // denied flag the field truncates (aws), and that read is still counted as
-// accepted: the line fails closed, as it does for a flag's full name. `az rest` reads only as one GET of the management endpoint, with no
-// resource, headers or body, and with its method flag spelt out.
+// accepted: the line fails closed, as it does for a flag's full name. `az rest`
+// reads only as one GET of the management endpoint, with no resource, headers or
+// body, and with its method flag spelt out.
 //
 // A single quote is no field separator, so a denied flag or an `az rest` flag that
-// an invocation quotes arrives with the quote on it; reads trims it before it names
-// the flag.
+// an invocation quotes arrives with the quote on it, at its ends or inside it
+// (`-'u'https`, `--me'thod'`, `--end'point-url'`). Bash removes a single quote
+// wherever it stands in a word, so the check removes every one before it reads a
+// word, and reads and reports the words bash hands the CLI.
 //
 // A global flag before the command path (`aws --output json ec2 describe-instances`)
 // is no read on purpose: the command path is the words up to the first flag, so the
@@ -96,9 +99,16 @@ import (
 //     is caught, since the assignment's value is a field of it.
 //   - An `az rest` that gives no address: the guide's prose names `az rest
 //     --method get --url` with no value, so a `--url` whose next word is no address
-//     (it starts with no scheme or `$`, and holds no `.` or `/`) and is followed by
-//     more words counts as no address given, and the one method, get, is what
-//     decides.
+//     (it starts with no scheme, and holds no `.` or `/`) and is followed by more
+//     words counts as no address given, and the one method, get, is what decides.
+//     The scan splits on `$`, so `--url $X` and `-u$X` reach the check as `--url X`
+//     and `-u X` and give no address either. A value-less URL flag never clears an
+//     address the sequence has already read.
+//   - A flag inside a parameter expansion's default: `${M:--mput}`,
+//     `${U:--uhttps://example.com/x}` and `${H:---headers} a=b` reach the check as
+//     the fields `M:--mput`, `U:--uhttps:` and `H:---headers`, which name no flag.
+//     It is a deliberately disguised spelling, like `a""ws`, not a shape a mistake
+//     takes, so the check leaves it.
 //   - A second `az rest --method` written after the closing quote of an argument
 //     that spans physical lines without a trailing `\`: the scan reads each logical
 //     line, so the method belongs to no `az rest` sequence and a write it changes is
@@ -223,8 +233,10 @@ var cloudCLIs = []cloudCLI{{
 	// `az rest --resource` addresses Microsoft Graph with the visitor's
 	// management token, and --headers and --body carry a request of the caller's
 	// choosing: no read passes any of them. --body's short alias -b is refused
-	// in azRestReads, inside an az rest sequence only, since -b is a common short
-	// flag of other commands. The variables make the CLI skip TLS
+	// in azRestReads, in an az rest sequence only, since -b is a common short flag
+	// of other commands. The sequence runs to the end of its logical line, pipes
+	// included, so a `| jq -b .a` after an az rest is refused as rest -b: the
+	// check fails closed there. The variables make the CLI skip TLS
 	// verification and trust another CA bundle where it has no flag to, and
 	// AZURE_CONFIG_DIR's config directory holds the cloud's endpoints and the
 	// caller's cached login.
@@ -336,16 +348,13 @@ func cloudCLIByName(name string) (cloudCLI, bool) {
 
 // reads returns the command path a field sequence names, as the guide writes it,
 // and whether the sequence is a read: the path must start with one of the CLI's read
-// commands, no word may name a flag the CLI denies (a single quote around a word is
-// trimmed, since the field scan keeps it on the word), and `az rest`, the one
-// command whose read depends on flags, must be one GET of the management endpoint.
-// The path it returns holds the word that made the sequence no read, so the message
-// says where the check stopped.
+// commands, no word may name a flag the CLI denies (every single quote in a word is
+// removed, as bash removes it, since the field scan keeps it on the word), and `az
+// rest`, the one command whose read depends on flags, must be one GET of the
+// management endpoint. The path it returns holds the word that made the sequence no
+// read, so the message says where the check stopped.
 func (c cloudCLI) reads(words []string) (string, bool) {
-	trimmed := make([]string, len(words))
-	for i, word := range words {
-		trimmed[i] = strings.Trim(word, "'")
-	}
+	trimmed := unquotedWords(words)
 
 	commandPath := subcommandPath(trimmed)
 	held := strings.Join(commandPath, " ")
@@ -367,6 +376,23 @@ func (c cloudCLI) reads(words []string) (string, bool) {
 	}
 
 	return held, true
+}
+
+// unquoted returns a word as bash hands it to a program, every single quote in it
+// removed: `-'u'https`, `--me'thod'` and `--end'point-url'` are `-uhttps`,
+// `--method` and `--endpoint-url`.
+func unquoted(word string) string {
+	return strings.ReplaceAll(word, "'", "")
+}
+
+// unquotedWords returns a new slice of the words, each one unquoted.
+func unquotedWords(words []string) []string {
+	out := make([]string, len(words))
+	for i, word := range words {
+		out[i] = unquoted(word)
+	}
+
+	return out
 }
 
 // denies reports whether a flag's name is one of the CLI's denied flags, in full or
@@ -407,13 +433,14 @@ func (c cloudCLI) denies(flag string) bool {
 // gives ends at the first of the `:` and the `-`, `+` and `?` a parameter expansion
 // puts after it, whether or not a word follows the operator: a variable's name holds
 // none of them, so `${AWS_ENDPOINT_URL:-https://example.com}` reaches it as
-// `AWS_ENDPOINT_URL:` and `${AZURE_CONFIG_DIR+set}` as `AZURE_CONFIG_DIR+`. The single
-// quote a shell text may put around it is trimmed too.
+// `AWS_ENDPOINT_URL:` and `${AZURE_CONFIG_DIR+set}` as `AZURE_CONFIG_DIR+`. Every
+// single quote a shell text puts in a field is removed first, as bash removes it:
+// `--end'point-url'` is --endpoint-url.
 func deniedToken(file string, line logicalLine) (problem string, denied, truncated bool) {
 	var truncation string
 
 	for _, field := range lineFields(line.text) {
-		word := strings.Trim(field, "'")
+		word := unquoted(field)
 		if word == "" {
 			continue
 		}
@@ -449,8 +476,9 @@ func deniedToken(file string, line logicalLine) (problem string, denied, truncat
 // exactly one method, get, and, when it gives an address, one on the management
 // endpoint. An invocation that abbreviates the method flag — `-mpost`, `-m=post`,
 // `--meth put` — is refused rather than read, since the check would otherwise take
-// it for one with no method at all and let the write through. A single quote around
-// a word is trimmed, since the field scan keeps it on the word. A shortened URL flag
+// it for one with no method at all and let the write through. Every single quote in
+// a word is removed, as bash removes it, since the field scan keeps it on the word:
+// `-'m'put` is `-mput`. A shortened URL flag
 // — `--u`, `--ur`, also with an inline value — is refused too, never completed to
 // `--url` or `--uri`: `--ur` is also a prefix of az rest's `--url-parameters` and
 // `--uri-parameters`, so what az's parser makes of it is nothing the check can rely
@@ -460,8 +488,14 @@ func deniedToken(file string, line logicalLine) (problem string, denied, truncat
 // management endpoint too. `-b`, az rest's short alias of the denied --body, is
 // refused here, with a value of its own or run on (`-bx`), and not in az's denied
 // flags, since -b is a common short flag of other commands that the text-wide rule
-// would then refuse everywhere. The inline `=` branches are a defence for reads called on unsplit words: the scan splits `=`
-// into a separator, so `--method=post` reaches it as `--method` and `post`.
+// would then refuse everywhere. A URL flag with no value — the last word, or one
+// that prose follows — never clears an address the sequence has already read:
+// `az rest --method get --url https://example.com/x | sort -u` holds the address
+// to the management endpoint, whatever `sort -u` gives. A URL flag with a value
+// replaces the address, as az's parser keeps the last one, so the address the
+// endpoint check holds is the one az would call. The inline `=` branches are a
+// defence for reads called on unsplit words: the scan splits `=` into a
+// separator, so `--method=post` reaches it as `--method` and `post`.
 func azRestReads(words []string) (string, bool) {
 	var (
 		methods []string
@@ -470,7 +504,7 @@ func azRestReads(words []string) (string, bool) {
 	)
 
 	for i := 0; i < len(words); i++ {
-		word := strings.Trim(words[i], "'")
+		word := unquoted(words[i])
 		name, value, inline := strings.Cut(word, "=")
 
 		switch {
@@ -488,7 +522,7 @@ func azRestReads(words []string) (string, bool) {
 				address, urlFlag = value, name
 			case i+1 == len(words):
 				// No value at all: the guide's prose ends a code span at `--url`.
-				address, urlFlag = "", name
+				// It gives no address, and clears none already read.
 			case looksLikeAddress(words[i+1]) || i+2 == len(words):
 				// The value is the next word: an address, or a word the check
 				// cannot tell from prose that ends the sequence, which the
@@ -501,14 +535,15 @@ func azRestReads(words []string) (string, bool) {
 				// The next word is prose and the sequence goes on after it: the
 				// guide's sentence continues after a code span that ended at
 				// `--url`, and no address is given. A write that gives none is
-				// held to its method alone.
-				address, urlFlag = "", name
+				// held to its method alone; an address already read stays.
 			}
 		case isURLFlagAbbreviation(name):
 			return azREST + " " + name, false
 		case strings.HasPrefix(name, "-u"):
-			// A short URL flag with its value run on: `-u` alone took the case above.
-			return azREST + " " + word, false
+			// A short URL flag with its value run on: `-u` alone took the case
+			// above. Reported by its name, as -b is: the word unless its value
+			// holds `=`.
+			return azREST + " " + name, false
 		case strings.HasPrefix(name, "-b"):
 			// az rest's short alias of the denied --body, alone or with its value
 			// run on.
@@ -1499,9 +1534,9 @@ type fieldScan struct {
 // shell reading: every line is split into fields wherever it sits. A denied flag or
 // variable is refused on its line before any field sequence is read, so the line is
 // reported once; a denied flag's truncation is refused text-wide only when no field
-// sequence on its line refuses it. A line break is a line break: `\r\n` becomes `\n` and a lone `\r`
-// too, as CommonMark reads them, so a command the text wraps with either arrives as
-// the two lines it is.
+// sequence on its line refuses it. A line break is a line break: `\r\n` becomes
+// `\n` and a lone `\r` too, as CommonMark reads them, so a command the text wraps
+// with either arrives as the two lines it is.
 func scanText(file, text string) fieldScan {
 	physical := strings.Split(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), "\n")
 
@@ -1561,6 +1596,10 @@ func scanLine(scan *fieldScan, file string, lines []logicalLine, at int, line lo
 		if next, ok := continuationOf(lines, at, line.text, fields); ok {
 			words = append(slices.Clone(words), continuationFields(next.text)...)
 		}
+
+		// The words bash hands the CLI, every single quote removed: the check
+		// reads them, and the refusal names them.
+		words = unquotedWords(words)
 
 		if len(words) == 0 {
 			// A bare mention: the name stands alone on its line, as the
@@ -1744,12 +1783,12 @@ func lineFields(line string) []string {
 }
 
 // cliNameField returns the cloud CLI's name a field names, and "" for a field that
-// names none: the field without the single quote around it, its last path element,
+// names none: the field without its single quotes, its last path element,
 // so `/usr/local/bin/aws` and `bash -c 'aws …'` name aws, and no name for a field
 // that ends in a path separator, which names a directory — the guide's
 // `inventories/aws/` is no invocation.
 func cliNameField(field string) string {
-	field = strings.Trim(field, "'")
+	field = unquoted(field)
 	if field == "" || strings.HasSuffix(field, "/") {
 		return ""
 	}
