@@ -290,7 +290,11 @@ func TestInventoryCommandsPerStep(t *testing.T) {
 		// a command of its own so that a reader whose policy leaves
 		// `dns.resourceRecordSets.list` out can skip it.
 		{key: "gcp", collect: 14, build: 1},
-		{key: "azure", collect: 8, build: 1},
+		// Azure's collect step gains PRD #581's DNSSEC loop as its ninth
+		// command: `az network dns dnssec-config show`, run once per public DNS
+		// zone the Resource Graph pages hold, its own command so that a reader
+		// whose policy leaves it out can skip it.
+		{key: "azure", collect: 9, build: 1},
 	}
 
 	doc := theBundle(t).html(t, inventoryPageName)
@@ -4321,4 +4325,247 @@ func guideRoleParagraphsOf(guide, name string) string {
 	}
 
 	return strings.Join(paragraphs, "\n\n")
+}
+
+// azureDNSZonesType is the Resource Manager type of a public DNS zone, in the
+// casing the guide's KQL compares a type in (Resource Graph writes types in lower
+// case). PRD #581's Azure row classifies the zones of this type, and the
+// privateDnsZones ones it does not name stay unclassified.
+const azureDNSZonesType = "microsoft.network/dnszones"
+
+// azureZoneTypeKey is the one property key the Resource Graph query keeps of a
+// DNS zone (PRD #581, *How the sources classify*, the Azure row): the zone type
+// that tells a public zone from a legacy private one. The zone's signing keys and
+// name servers are never projected.
+const azureZoneTypeKey = "zoneType"
+
+// azureDNSSECCall is the call PRD #581's Azure classification makes of Azure DNS,
+// once per public zone: the zone's DNSSEC configuration, read for its signed
+// state alone. The zones and their type come from the Resource Graph query the
+// guide already runs; this call adds what the graph does not hold.
+const azureDNSSECCall = "az network dns dnssec-config show"
+
+// azureDNSSECFile is the file the DNSSEC loop writes: one configuration per signed
+// public zone, and nothing for a zone Azure does not sign.
+const azureDNSSECFile = "dns-dnssec.json"
+
+// azureDNSSECQuery matches the `--query` argument of the guide's DNSSEC call,
+// quoted either way and written as one word or two: the projection Azure applies
+// before the output reaches the file.
+var azureDNSSECQuery = regexp.MustCompile(`--query(?:\s+|=)["']([^"']*)["']`)
+
+// azureDNSSECSeparateFlag matches one of the DNSSEC call's two loop-variable
+// flags written with its value as a separate word, `--resource-group "$rg"`: the
+// form in which the CLI reads a value that starts with `-` as an option of its
+// own, never as the flag's value.
+var azureDNSSECSeparateFlag = regexp.MustCompile(`--(?:resource-group|zone-name)\s`)
+
+// azureDNSSECQueryFields are the fields the guide's `--query` keeps of a zone's
+// DNSSEC configuration (PRD #581, *How the sources classify*): the configuration's
+// ID, which the program joins to its zone case-insensitively, its type, and the
+// provisioning state that says whether the zone is signed.
+var azureDNSSECQueryFields = []string{"id", "type", "provisioningState"}
+
+// azureDNSSECExcludedFields are the fields a DNS zone's DNSSEC configuration
+// carries and the guide keeps nowhere (PRD #581): the zone's signing keys with
+// their delegation signer records, and Azure's own name servers, which the
+// Resource Graph projection drops.
+var azureDNSSECExcludedFields = []string{"signingKeys", "publicKey", "delegationSignerInfo", "nameServers"}
+
+// azureZoneArm returns the part of the guide's Resource Graph query that reads a
+// DNS zone: the text from the type that names the zone type to the end of that
+// arm, which the next `type ...` arm or the case's `dynamic(null)` ends. It
+// reports false when the query names no DNS zone type at all, since without an
+// arm the zone's properties stay `null` and every zone is unclassified.
+func azureZoneArm(query string) (string, bool) {
+	start := strings.Index(strings.ToLower(query), azureDNSZonesType)
+	if start < 0 {
+		return "", false
+	}
+
+	end := len(query)
+	offset := 0
+
+	for _, line := range strings.Split(query, "\n") {
+		if offset > start {
+			trimmed := strings.ToLower(strings.TrimSpace(line))
+			if strings.HasPrefix(trimmed, "type ") || strings.HasPrefix(trimmed, "dynamic(") {
+				end = offset
+
+				break
+			}
+		}
+
+		offset += len(line) + 1
+	}
+
+	return query[start:end], true
+}
+
+// TestInventoryGuideAzureDNSZonesKeepOnlyTheZoneType pins the Azure half of
+// PRD #581's *How the sources classify* on the guide's own Resource Graph query:
+// the query has an arm for `microsoft.network/dnszones` that keeps the zone's
+// `properties.zoneType` and nothing else, so a public zone reaches the program
+// with the one property that tells it from a legacy private one, and no zone
+// reaches it with its signing keys or its name servers. The recorded fixture
+// cannot pin this on its own, since a fixture written after the fact could hold a
+// field a query without the arm never writes.
+func TestInventoryGuideAzureDNSZonesKeepOnlyTheZoneType(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	query := azureResourceGraphQuery(t, guide)
+
+	arm, ok := azureZoneArm(query)
+	if !ok {
+		t.Fatalf("%s's Resource Graph query names no %s, want the arm that keeps a DNS zone's zone type: without it a zone's properties stay null, and every public zone is unclassified (PRD #581, milestone 4)\n%s",
+			guidePath, azureDNSZonesType, query)
+	}
+
+	var paths []string
+
+	for _, loc := range azureFieldPath.FindAllStringIndex(arm, -1) {
+		paths = append(paths, withoutSpace(arm[loc[0]:loc[1]]))
+	}
+
+	if !slices.ContainsFunc(paths, func(path string) bool {
+		return strings.EqualFold(path, "properties."+azureZoneTypeKey)
+	}) {
+		t.Errorf("%s's Resource Graph query keeps no properties.%s for a DNS zone, want it: it is the field that says whether the zone is public, and `Public` is the API's default when it is missing (PRD #581, milestone 4)\n%s",
+			guidePath, azureZoneTypeKey, query)
+	}
+
+	if diff := cmp.Diff([]string{azureZoneTypeKey}, azureBagPackKeys(arm)); diff != "" {
+		t.Errorf("%s's Resource Graph query packs the wrong keys of a DNS zone (-want +got):\n%s\nwant only %q: the zone's signing keys and name servers are properties azure.jq reads nothing of, so the arm that keeps one of them would write the user's signing material to the file (PRD #581)\n%s",
+			guidePath, diff, azureZoneTypeKey, query)
+	}
+
+	lowered := strings.ToLower(query)
+
+	for _, field := range azureDNSSECExcludedFields {
+		if strings.Contains(lowered, strings.ToLower(field)) {
+			t.Errorf("%s's Resource Graph query names %q, want no field of a zone's keys or its name servers: none is read by azure.jq, and the zone resource holds its signing keys (PRD #581, milestone 4)\n%s",
+				guidePath, field, query)
+		}
+	}
+}
+
+// TestInventoryGuideAzureDNSSECCommandsKeepOnlyTheFieldsTheyRead pins PRD #581's
+// milestone 4 on the guide's Azure command text: `az network dns dnssec-config
+// show` runs once per public zone the Resource Graph pages hold, takes the zone's
+// resource group and name quoted and attached to their flags, and keeps of the
+// configuration only its ID, its type and its provisioning state. A `--query` that
+// named the signing keys would leave the zone's signing material in the raw output
+// the guide tells the reader to delete; a flag whose value is a word of its own
+// would let a resource group name that starts with `-` reach the CLI as an option.
+func TestInventoryGuideAzureDNSSECCommandsKeepOnlyTheFieldsTheyRead(t *testing.T) {
+	t.Parallel()
+
+	const guidePath = "docs/guide/inventory.md"
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+	azure := guideSourceByKey(t, "azure")
+	commands := guideCommands(t, guide, azure)
+
+	var calls []string
+
+	for _, command := range commands {
+		if strings.Contains(commandCode(command), azureDNSSECCall) {
+			calls = append(calls, command)
+		}
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("%s's %s section runs %q in %d command(s), want exactly one: PRD #581's Azure classification makes that call once per public zone, in one per-zone loop, and this check cannot tell which output the program reads otherwise\n%s",
+			guidePath, azure.name, azureDNSSECCall, len(calls), describeCommands(commands))
+	}
+
+	command := calls[0]
+	code := commandCode(command)
+
+	for _, want := range []struct {
+		name string
+		why  string
+	}{
+		{"graph-", "the Resource Graph pages the query wrote, which hold every zone with its resource group and its name"},
+		{azureDNSZonesType, "the type whose zones are DNS zones: a privateDnsZones zone is never signed, so the loop may not ask about one"},
+		{azureZoneTypeKey, "the zone type the query projects, which tells a public zone from a legacy private one"},
+		{"while", "the per-zone loop PRD #581's *The per-zone loops* describes"},
+		{"read -r", "the zone list read line by line, which a bare `read` would cut a name at its backslash"},
+		{azureDNSSECFile, "the file the loop writes the configurations to"},
+		{"--resource-group", "the zone's resource group, which the call needs beside the zone's name"},
+		{"--zone-name", "the zone's name, which the call takes"},
+		{`"$rg"`, "the resource group quoted, which the page shows whole and a visitor copies"},
+		{`"$zone"`, "the zone's name quoted, which the page shows whole and a visitor copies"},
+	} {
+		if !strings.Contains(code, want.name) {
+			t.Errorf("%s's `%s` command holds no %q, want %s (PRD #581, milestone 4)\n%s",
+				guidePath, azureDNSSECCall, want.name, want.why, command)
+		}
+	}
+
+	// A resource group's name may start with `-` (audit finding on PRD #581's
+	// milestone 4). With the flag and its value as two words the CLI parses
+	// `-rg-legacy` as an option, not as the flag's value, so the call fails; the
+	// loop's `|| :` hides that, and a signed zone loses dnssec. The attached form
+	// leaves the CLI no word of the value to parse as an option.
+	for _, want := range []string{`--resource-group="$rg"`, `--zone-name="$zone"`} {
+		if !strings.Contains(code, want) {
+			t.Errorf("%s's `%s` command passes no %s, want the flag and its value attached: a resource group name may start with `-`, which the CLI reads as an option when the flag and its value are two words, so the call fails, the loop's `|| :` hides it, and a signed zone loses dnssec (audit finding, PRD #581, milestone 4)\n%s",
+				guidePath, azureDNSSECCall, want, command)
+		}
+	}
+
+	if separate := azureDNSSECSeparateFlag.FindAllString(code, -1); len(separate) > 0 {
+		for i, flag := range separate {
+			separate[i] = strings.TrimSpace(flag)
+		}
+
+		t.Errorf("%s's `%s` command passes %s with its value as a separate word, want the attached form: a resource group name may start with `-`, which the CLI then reads as an option, so the call fails, the loop's `|| :` hides it, and a signed zone loses dnssec (audit finding, PRD #581, milestone 4)\n%s",
+			guidePath, azureDNSSECCall, strings.Join(separate, ", "), command)
+	}
+
+	if !strings.Contains(code, "--output json") && !strings.Contains(code, "--output=json") {
+		t.Errorf("%s's `%s` command passes no `--output json`, want the JSON output the program reads the provisioning state from (PRD #581, milestone 4)\n%s",
+			guidePath, azureDNSSECCall, command)
+	}
+
+	match := azureDNSSECQuery.FindStringSubmatch(code)
+	if match == nil {
+		t.Fatalf("%s's `%s` command passes no `--query`, want one naming only %s: without it the call writes each zone's signing keys to the file (PRD #581, milestone 4)\n%s",
+			guidePath, azureDNSSECCall, strings.Join(azureDNSSECQueryFields, ", "), command)
+	}
+
+	query := match[1]
+
+	for _, field := range azureDNSSECQueryFields {
+		if !strings.Contains(query, field) {
+			t.Errorf("%s's `%s` --query keeps no %q, want it: the program joins the configuration to its zone by the ID, and reads the provisioning state to decide dnssec\n%s",
+				guidePath, azureDNSSECCall, field, command)
+		}
+	}
+
+	for _, field := range azureDNSSECExcludedFields {
+		if strings.Contains(query, field) {
+			t.Errorf("%s's `%s` --query keeps %q, want no field of a zone's keys or its name servers: the configuration's signed state is all the program reads, and the keys are the zone's signing material (PRD #581)\n%s",
+				guidePath, azureDNSSECCall, field, command)
+		}
+	}
+
+	// The page shows each command whole and a visitor copies it, so a variable
+	// outside double quotes is the visitor's own resource group or zone reaching a
+	// read-only call split in two (PRD #581, *The per-zone loops*).
+	for _, azureCommand := range commands {
+		for _, reference := range unquotedLoopVariables(azureCommand) {
+			t.Errorf("%s's command holds the unquoted loop variable %s, want it inside double quotes: an unquoted variable splits on white space and expands the glob characters in it, so the call reads another zone's name, or several arguments\n%s",
+				guidePath, reference, azureCommand)
+		}
+
+		if holdsEval(azureCommand) {
+			t.Errorf("%s's command runs `eval`, want none: the guide runs the calls it writes, and `eval` runs whatever a provider's answer holds\n%s",
+				guidePath, azureCommand)
+		}
+	}
 }

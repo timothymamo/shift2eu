@@ -64,6 +64,70 @@ func TestToolsModuleFollowsTheRootModulesGo(t *testing.T) {
 	}
 }
 
+// TestModulesHoldNoToolchainDirective pins issue #710: the module's Go is its go
+// line, and that is what the audit's checks job reads at run time to build
+// govulncheck (issue #687). A toolchain directive is a second Go version in the
+// same go.mod, which `go mod edit -toolchain` and its own Renovate update move on
+// their own, so the go line would no longer be the one version the module builds
+// with. Both tracked modules are read through the go command's own parser.
+func TestModulesHoldNoToolchainDirective(t *testing.T) {
+	t.Parallel()
+
+	root := repositoryRoot(t)
+
+	for _, goMod := range trackedModules(t, root) {
+		if toolchain := readGoMod(t, filepath.Join(root, filepath.FromSlash(goMod))).Toolchain; toolchain != "" {
+			t.Errorf("%s holds the toolchain directive %q: the module's Go is its go line, which the audit's checks job reads at run time to build govulncheck, and a second version in the same file drifts from it on its own. Remove the toolchain line and keep the module's one Go in the go line (issue #710)",
+				goMod, toolchain)
+		}
+	}
+}
+
+// TestGoModToolchainDirective pins the check above where its input comes from: a
+// go.mod text with a toolchain directive is read as one, above or below the go
+// line, and a go.mod without one is read as having none, so a parser that lost
+// the field would not let the module pin pass silently (issue #710).
+func TestGoModToolchainDirective(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		goMod string
+		want  string
+	}{
+		{
+			name:  "a go.mod with no toolchain directive holds none",
+			goMod: "module example.com/m\n\ngo 1.27.4\n",
+		},
+		{
+			name:  "a toolchain directive below the go line is read",
+			goMod: "module example.com/m\n\ngo 1.27.4\n\ntoolchain go1.27.4\n",
+			want:  "go1.27.4",
+		},
+		{
+			name:  "a toolchain directive above the go line is read too",
+			goMod: "module example.com/m\n\ntoolchain go1.28.0\n\ngo 1.27.4\n",
+			want:  "go1.28.0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+
+			if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte(tc.goMod), 0o600); err != nil {
+				t.Fatalf("write go.mod: %v", err)
+			}
+
+			if diff := cmp.Diff(tc.want, readGoMod(t, filepath.Join(dir, "go.mod")).Toolchain); diff != "" {
+				t.Errorf("Toolchain (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestTrackedModulesFindsTheRootAndToolsModules pins the walk the two tests
 // above trust: a walk that found nothing would let every module through.
 func TestTrackedModulesFindsTheRootAndToolsModules(t *testing.T) {

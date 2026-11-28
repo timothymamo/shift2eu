@@ -69,6 +69,11 @@
       "region": "westeurope"
     },
     {
+      "id": "blog.example.com",
+      "rawType": "Microsoft.Network/dnsZones",
+      "category": "network.dns"
+    },
+    {
       "id": "ca-shop-api",
       "rawType": "Microsoft.App/containerApps",
       "category": "serverless.container",
@@ -132,6 +137,12 @@
       "size": {
         "storageGiB": 64
       }
+    },
+    {
+      "id": "dnsr-shop",
+      "rawType": "Microsoft.Network/dnsResolvers",
+      "category": "unclassified",
+      "region": "westeurope"
     },
     {
       "id": "docdb-shop-events",
@@ -233,6 +244,11 @@
       "rawType": "Microsoft.Web/sites",
       "category": "serverless.function",
       "region": "westeurope"
+    },
+    {
+      "id": "internal.example.com",
+      "rawType": "Microsoft.Network/privateDnsZones",
+      "category": "unclassified"
     },
     {
       "id": "kafka-shop-audit",
@@ -362,6 +378,11 @@
       "region": "westeurope"
     },
     {
+      "id": "legacy.example.com",
+      "rawType": "Microsoft.Network/dnsZones",
+      "category": "network.dns"
+    },
+    {
       "id": "mariadb-shop-legacy",
       "rawType": "Microsoft.DBforMariaDB/servers",
       "category": "unclassified",
@@ -412,6 +433,11 @@
       "rawType": "Microsoft.Network/networkInterfaces",
       "category": "unclassified",
       "region": "westeurope"
+    },
+    {
+      "id": "old-internal.example.com",
+      "rawType": "Microsoft.Network/dnsZones",
+      "category": "unclassified"
     },
     {
       "id": "pip-shop-dns-v6",
@@ -633,7 +659,10 @@
     {
       "id": "shop.example.com",
       "rawType": "Microsoft.Network/dnsZones",
-      "category": "unclassified"
+      "category": "network.dns",
+      "capabilities": [
+        "dnssec"
+      ]
     },
     {
       "id": "spark-shop-batch",
@@ -656,6 +685,11 @@
         "encryption-at-rest",
         "object-versioning"
       ]
+    },
+    {
+      "id": "tm-shop",
+      "rawType": "Microsoft.Network/trafficManagerProfiles",
+      "category": "unclassified"
     },
     {
       "id": "vm-shop-web-1",

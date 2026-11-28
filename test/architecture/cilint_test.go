@@ -658,7 +658,11 @@ func checkCoAuthorBaseCopyStep(t *testing.T, item ciItem) {
 	// worktree add at all (issue #689).
 	wantKeys(t, "coauthor-trailers base-copy step", item.lines, "name", "env", "run")
 
-	script, ok := ciRunScript(item.lines)
+	script, ok, err := ciRunScript(item.lines)
+	if err != nil {
+		t.Fatalf("the coauthor-trailers base-copy step on line %d: %v", item.num, err)
+	}
+
 	if !ok {
 		t.Fatalf("line %d: the coauthor-trailers job's second step holds no run:, want the copy of the base commit's "+
 			"test/lint: a job that copies nothing runs the pull request's own check, which the pull request can weaken "+
@@ -748,7 +752,11 @@ func checkCoAuthorTestStep(t *testing.T, item ciItem) {
 	// those three byte-identical and still pass (issue #689).
 	wantKeys(t, "coauthor-trailers test step", item.lines, "name", "run", "env")
 
-	script, ok := ciRunScript(item.lines)
+	script, ok, err := ciRunScript(item.lines)
+	if err != nil {
+		t.Fatalf("the coauthor-trailers test step on line %d: %v", item.num, err)
+	}
+
 	if !ok {
 		t.Fatalf("line %d: the coauthor-trailers step that runs the check holds no run:, so CI checks no co-author trailer",
 			item.num)
@@ -778,17 +786,158 @@ func checkCoAuthorTestStep(t *testing.T, item ciItem) {
 
 // ciRunScript returns the lines a step's run: hands the shell: the value of a
 // `run: command` line as its one line, or the lines of a `run: |` block scalar.
-func ciRunScript(step []ciLine) ([]ciLine, bool) {
+// Any other block indicator is an error naming the style it found: a folded or
+// chomped block hands the shell other text than the lines it holds (issue #706).
+func ciRunScript(step []ciLine) (script []ciLine, ok bool, err error) {
 	num, value, ok := ciScalar(step, "run")
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 
-	if value != "|" && value != ">" {
-		return []ciLine{{num: num, indent: 0, text: value}}, true
+	if value == "|" {
+		script, _ = ciBlock(step, "run")
+
+		return script, true, nil
 	}
 
-	return ciBlock(step, "run")
+	if strings.HasPrefix(value, "|") || strings.HasPrefix(value, ">") {
+		return nil, true, fmt.Errorf("line %d: run: uses the block indicator %q, want a literal `run: |` block or a "+
+			"one-line command: any other style hands the shell other text than the lines it holds (issue #706)", num, value)
+	}
+
+	return []ciLine{{num: num, indent: 0, text: value}}, true, nil
+}
+
+// TestCIRunScriptAcceptsOnlyALiteralBlockScalar pins ciRunScript to the styles
+// a workflow's run: may use and nothing else (issue #706): a `run: |` block
+// hands the shell exactly the lines it holds, a `run: command` line its one
+// command, and every other block indicator is refused with an error that names
+// it. A folded `run: >` joins its lines instead of keeping them apart, and the
+// chomping indicators of `|+`, `|-`, `>-` and `>+` change the value's trailing
+// newlines, so a pin read from one of them would pin a script the step never
+// runs: the coauthor-trailers pins are read through here (issue #689).
+func TestCIRunScriptAcceptsOnlyALiteralBlockScalar(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// doc is the YAML snippet of a step, fed to ciRunScript as its lines.
+		doc string
+		// want is the text of the lines the step's run: hands the shell, and nil
+		// when the style is refused or the step holds no run: at all.
+		want []string
+		// wantRun is whether the step holds a run:, whatever the style of its value.
+		wantRun bool
+		// refuses is the block indicator the run: uses, which the refusal's error
+		// must name, and empty for a step ciRunScript accepts.
+		refuses string
+	}{
+		{
+			name:    "a literal block scalar",
+			doc:     "run: |\n  make lint\n",
+			want:    []string{"make lint"},
+			wantRun: true,
+		},
+		{
+			name: "a literal block scalar of several lines",
+			doc:  "run: |\n  cd \"$RUNNER_TEMP/coauthor-base\"\n  go test ./test/lint/\n",
+			want: []string{
+				`cd "$RUNNER_TEMP/coauthor-base"`,
+				"go test ./test/lint/",
+			},
+			wantRun: true,
+		},
+		{
+			name:    "a one-line command",
+			doc:     "run: make lint\n",
+			want:    []string{"make lint"},
+			wantRun: true,
+		},
+		{
+			name:    "a folded block scalar",
+			doc:     "run: >\n  make lint\n",
+			wantRun: true,
+			refuses: ">",
+		},
+		{
+			name:    "a literal block scalar keeping its final newlines",
+			doc:     "run: |+\n  make lint\n",
+			wantRun: true,
+			refuses: "|+",
+		},
+		{
+			name:    "a literal block scalar stripping its final newline",
+			doc:     "run: |-\n  make lint\n",
+			wantRun: true,
+			refuses: "|-",
+		},
+		{
+			name:    "a folded block scalar stripping its final newline",
+			doc:     "run: >-\n  make lint\n",
+			wantRun: true,
+			refuses: ">-",
+		},
+		{
+			name:    "a folded block scalar keeping its final newlines",
+			doc:     "run: >+\n  make lint\n",
+			wantRun: true,
+			refuses: ">+",
+		},
+		{
+			name: "a step with no run:",
+			doc:  "uses: actions/checkout@v4\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			step, err := ciLines(tc.doc)
+			if err != nil {
+				t.Fatalf("ciLines(%q): %v", tc.doc, err)
+			}
+
+			script, ok, err := ciRunScript(step)
+
+			if ok != tc.wantRun {
+				t.Fatalf("ciRunScript(%q) reported that the step holds a run: %t, want %t", tc.doc, ok, tc.wantRun)
+			}
+
+			if tc.refuses != "" {
+				if err == nil {
+					t.Fatalf("ciRunScript(%q) accepted the block indicator %q, want an error naming it: a run: of that style "+
+						"does not hand the shell the lines it holds (issue #706)", tc.doc, tc.refuses)
+				}
+
+				if !strings.Contains(err.Error(), tc.refuses) {
+					t.Errorf("ciRunScript(%q) refused the block with %q, want the error to name the indicator %q it found",
+						tc.doc, err, tc.refuses)
+				}
+
+				if len(script) != 0 {
+					t.Errorf("ciRunScript(%q) refused the block and still returned %d script line(s), want none",
+						tc.doc, len(script))
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("ciRunScript(%q) returned %v, want no error", tc.doc, err)
+			}
+
+			var got []string
+
+			for _, l := range script {
+				got = append(got, l.text)
+			}
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("ciRunScript(%q) script lines (-want +got):\n%s", tc.doc, diff)
+			}
+		})
+	}
 }
 
 // checkLintShellJob pins the lint-shell job the Lint check needs (issue #164):

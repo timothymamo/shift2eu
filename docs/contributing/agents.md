@@ -23,26 +23,46 @@ The tester runs [pi](https://pi.dev) on DeepSeek V4.1 Flash; every other role ru
 the code they check come from different model families, so one model's blind spots are less likely to
 end up in both ([ADR 0003](../adr/0003-pi-with-deepseek-for-the-tester-role.md)).
 The tester signs its commits with one trailer, `Co-Authored-By: pi (DeepSeek V4.1 Flash)`, without an
-email address, so GitHub credits no account for it (the `go-tdd` skill, issue #653); CI's
-`coauthor-trailers` job refuses a pull request whose commits carry a co-author address
+email address, so GitHub credits no account for it (the `go-tdd` skill, issue #653); the required
+**Co-author trailers (base)** check refuses a pull request whose commits carry a co-author address
 `.github/co-author-addresses.txt` does not list, with or without spaces before the trailer's colon, or
 whose author or committer address it does not list, since a squash merge credits every distinct author
-(issue #663). The check reads the list from the pull request's base commit, never from its own checkout
-(issue #672): the base branch's list, main's for every pull request to main. A pull request into another
-branch is checked against that branch's list, and its commits again against main's when that branch is
-merged into main. A pull request that changes only the list is checked against the old one. The job runs
-the base commit's copy of `test/lint` too, from a detached worktree of the base, built under the base's
-`go.mod` and Go (issue #689), so a pull request that changes `test/lint` is checked by the base's check,
-and its own change takes effect once it is merged. For a pull request into a branch other than main, the
-copy is that branch's check, and main's copy checks the commits again when that branch merges into main.
-The copy covers `test/lint` only: the job's steps come from the pull request's own `ci.yml`, and
-`test/architecture`'s pin of them from the pull request too, so a change to either is for the maintainer's
-code-owner review. A workflow the pull request cannot edit (a ruleset-required workflow, or a
-`pull_request_target` job that runs no code of the pull request) would close that gap; this project does
-not use one. The check's git calls ignore the global and the system git configuration (`GIT_CONFIG_GLOBAL=/dev/null`,
-`GIT_CONFIG_NOSYSTEM=1`), so a developer's global or the machine's system configuration cannot change what
-it reads; the repository's own `.git/config` is not isolated. A fork's or a new contributor's pull
-request therefore fails Lint until their address is on the base branch's
+(issue #663). The check runs from `.github/workflows/coauthor-trailers.yml` under `pull_request_target`
+(issue #706, [ADR 0050](../adr/0050-run-the-co-author-check-from-the-base-branch-under-pull-request-target.md)):
+GitHub reads that workflow from the base branch, never from the pull request, so for every pull request
+into main the job's steps, the `test/lint` that runs, the Go it builds under and the allow list
+(issue #672) all come from main. The job checks out only the base commit and fetches the pull request's
+commits as git objects that it never checks out or runs. A pull request that changes the workflow,
+`test/lint` or `test/architecture`'s pin of the workflow is still checked by main's copies, and its own
+change takes effect once it is merged. A pull request into another branch runs that branch's copy; when
+it is retargeted to main, or that branch merges into main, main's copy checks the commits again. The
+check's git calls ignore the global and the system git configuration (`GIT_CONFIG_GLOBAL=/dev/null`,
+`GIT_CONFIG_NOSYSTEM=1`, issue #689); the repository's own `.git/config` is the one `actions/checkout`
+writes for the base commit. The move is a two-step rollout: issue #706's pull request keeps `ci.yml`'s
+old `coauthor-trailers` job (**Co-author trailers**, inside `Lint`), which runs the base commit's copy of
+`test/lint` (PR #703) but is defined by the pull request, and that job checks issue #706's pull request
+itself; the new workflow first runs on pull requests opened or updated after the merge. A follow-up pull
+request removes the old job, `Lint`'s need of it and the transition parts of the pin. It is merged only
+after **Co-author trailers (base)** is required, and it is the first pull request checked by main's
+definition alone. Risks remain (ADR 0050). The required check matches only the check run's name and the
+GitHub Actions app (15368), never the workflow file or the base branch, so a pull request could add an
+always-passing job of the same name to its own `ci.yml`, an edit its diff and the maintainer's
+code-owner review show. Also (plausible, not verified): someone with push rights (the agents App can
+write contents and workflows) can push a branch `x` whose own `coauthor-trailers.yml` keeps the job name
+but runs `exit 0`, then open a second pull request with the same head into `x`, or retarget one; its run
+posts a passing check run of that name on the same head SHA, and the pull request into main shows no
+workflow change in its diff. A re-run of an old main run replays that run's older allow list (bounded).
+The maintainer's pre-merge check in `docs/dev-environment.md` looks at every such check run, cancelled
+ones included, at each run's event, workflow file and head SHA, at every pull request with that head,
+through search (the only one that finds a closed, unmerged one) and through the commit's pulls endpoint,
+and at the pull request's retargets in its timeline. A run's own record names no base: its
+`pull_requests` lists only the pull requests open with that head when read, so a retarget to `x` and
+back, with `x`'s run re-run to cancel main's, shows only in the timeline, and then needs a new head
+commit; the
+longer-term fixes are an organization required workflow or a ruleset refusing `.github/workflows/**`
+changes on every branch but main. And the job trusts the runner image, the pinned actions and the Go
+toolchain, as every job does. A fork's or a new
+contributor's pull request therefore fails the check until their address is on the base branch's
 `.github/co-author-addresses.txt`: the address is added by a separate pull request, merged first.
 
 The agents run inside a [Lima](https://lima-vm.io) VM that can see this repository's workspace (the
