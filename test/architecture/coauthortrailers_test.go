@@ -584,6 +584,27 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 			wantNames: map[string]string{"build": "Build (linux)"},
 		},
 		{
+			name:      "a single-quoted name holding a # and no comment after it",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: 'Build # 1'\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Build # 1"},
+		},
+		{
+			name:      "a double-quoted name holding a # and no comment after it",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: \"Build # 1\"\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Build # 1"},
+		},
+		{
+			name:      "a single-quoted legacy name with no comment after it",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  build:\n    name: 'Co-author trailers'\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build": "Co-author trailers"},
+			wantProblems: []string{
+				`3: build: "Co-author trailers": ` + ruleLegacyName,
+			},
+		},
+		{
 			name:      "the legacy name and id on a job of ci.yml",
 			path:      ciWorkflowPath,
 			doc:       "jobs:\n  coauthor-trailers:\n    name: Co-author trailers\n    runs-on: ubuntu-latest\n",
@@ -628,6 +649,24 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 			wantNames: map[string]string{"coauthor-trailers": "coauthor-trailers"},
 			wantProblems: []string{
 				`0: coauthor-trailers: "coauthor-trailers": ` + ruleLegacyJobID,
+			},
+		},
+		{
+			name:      "a double-quoted legacy job id in ci.yml",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  \"coauthor-trailers\":\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"coauthor-trailers": "Build"},
+			wantProblems: []string{
+				`3: coauthor-trailers: "Build": ` + ruleLegacyJobID,
+			},
+		},
+		{
+			name:      "a single-quoted legacy job id in another workflow",
+			path:      otherWorkflowPath,
+			doc:       "jobs:\n  'coauthor-trailers':\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"coauthor-trailers": "Build"},
+			wantProblems: []string{
+				`3: coauthor-trailers: "Build": ` + ruleLegacyJobID,
 			},
 		},
 		{
@@ -691,6 +730,30 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 			name:    "a plain name with no (base) and a tab before its trailing comment",
 			path:    ciWorkflowPath,
 			doc:     "jobs:\n  build:\n    name: Build\t# the build job\n    runs-on: ubuntu-latest\n",
+			wantErr: "trailing comment",
+		},
+		{
+			name:    "a single-quoted legacy name with a trailing comment",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: 'Co-author trailers' # 'x'\n    runs-on: ubuntu-latest\n",
+			wantErr: "trailing comment",
+		},
+		{
+			name:    "a double-quoted legacy name with a trailing comment",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: \"Co-author trailers\" # \"x\"\n    runs-on: ubuntu-latest\n",
+			wantErr: "trailing comment",
+		},
+		{
+			name:    "a single-quoted legacy name with a tab before its trailing comment",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: 'Co-author trailers'\t# 'x'\n    runs-on: ubuntu-latest\n",
+			wantErr: "trailing comment",
+		},
+		{
+			name:    "a single-quoted (base) name with an escaped quote and a trailing comment",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  build:\n    name: 'Co-author ''x'' trailers' # 'y'\n    runs-on: ubuntu-latest\n",
 			wantErr: "trailing comment",
 		},
 		{
