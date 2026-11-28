@@ -881,11 +881,11 @@ func TestLayoutKeepsATilesFigureInsideItsTile(t *testing.T) {
 const tileRunDescent = 2
 
 // TestLayoutKeepsATilesCaptionInsideItsTile pins the summary's tile row for a
-// caption that wraps onto more lines than the row grows for: draw.go's tileRow
-// grows the row by a wrapped figure's extra lines alone, and a caption's lines
-// walk down from one fixed baseline (draw.go, tileRow), so a third caption line
-// lands below its tile's bottom edge, on the tile's outline. A five-tile row is
-// narrow enough for "of N resources" to take three lines once N is long.
+// caption that wraps onto more lines than a tile holds by default: a tile lays
+// its label, its figure and then its caption downwards from its top edge (draw.go,
+// tileRow), so a caption continues below its figure's last line, and a row grown
+// for the figures alone leaves its last line on the tile's outline. A five-tile
+// row is narrow enough for "of N resources" to take three lines once N is long.
 //
 // Criterion (PRD #584 milestone 1b, Unit): boxes across pages — the summary's
 // tiles: every run of a tile stays inside that tile's outline in both
@@ -902,7 +902,10 @@ func TestLayoutKeepsATilesCaptionInsideItsTile(t *testing.T) {
 	const eighteenDigits = 999_999_999_999_999_999
 
 	// sixteenDigits is the count whose caption takes two lines: "of 9999999999999999
-	// resources" wraps once, and its two lines clear the tile's bottom edge today.
+	// resources" wraps once and grows the row by one caption leading. Its second
+	// line clears the tile's bottom edge even in a row grown for the figures alone,
+	// so it pins the near side of that boundary, and the eighteen-digit case the
+	// far side.
 	const sixteenDigits = 9_999_999_999_999_999
 
 	tests := []struct {

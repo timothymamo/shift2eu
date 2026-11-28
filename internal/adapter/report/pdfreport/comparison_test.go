@@ -258,9 +258,9 @@ func TestReportComparisonErrors(t *testing.T) {
 // target's column, the number of that target's resources whose fit it is, and the
 // total row carries the plain word "total" with every resource counted.
 //
-// The labels are one fixed list paired with fitCounts' rows by position
-// (comparison.go, writeComparisonSummary), so a row added to fitCounts' rows, or
-// one moved within them, must not leave a row labelled with another fit's word.
+// Each row takes its label from its own fit (report.go, fitCount and its label
+// method), so a row given another fit's count, an added row, or a reordering of
+// the rows must not leave a row labelled with a word its cells do not count.
 func TestComparisonSummaryPairsEachRowWithItsFit(t *testing.T) {
 	t.Parallel()
 
