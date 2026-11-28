@@ -756,10 +756,13 @@ they name the operator table (below) or must expect the banner's text where it s
 - [ ] *Review:* the PR records a look at the bundled examples' PDFs, single and comparison, in the four
   viewers of *Decided, as recommended*, 10, and one printed or previewed in greyscale, in which every fit
   still reads by its word and icon.
-- [ ] *Review:* ADR 0049 is amended (*Amended 2026-11-28 (PRD #584 milestone 1b)*), and `pdfreport`'s
+- [x] *Review:* ADR 0049 is amended (*Amended 2026-11-28 (PRD #584 milestone 1b)*), and `pdfreport`'s
   `doc.go`, `docs/architecture.md` and the CLI guide (`docs/guide/assess.md`) describe the styling and the
   banner. The scope rows hold: no embedded font, no third-party dependency, no tagged PDF, no
   compression. The Markdown, JSON and HTML reporters' goldens do not change.
+  The reviewer held it in both review rounds: the ADR amendment, `doc.go`, `docs/architecture.md` and
+  `docs/guide/assess.md` match the code, and nothing changed under `markdown/`, `jsonreport/`,
+  `htmlreport/` or in `go.mod`.
 
 ### The site's PDF download (milestone 2)
 
