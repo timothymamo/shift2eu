@@ -19,6 +19,13 @@ import (
 // writes it: a flow mapping on one line, with a quoted cgo value.
 var ciMatrixEntry = regexp.MustCompile(`^- \{ goos: ([a-z0-9]+), goarch: ([a-z0-9]+), cgo: "([^"]*)" \}$`)
 
+// githubJobID is GitHub's job-id grammar: a letter or _, then letters, digits,
+// _ and -. workflowJobs holds every id to it once unquoted, so a spelling the
+// guards would read as another id (an escape, a space before the colon, a
+// quote on one side, an empty id) is an error, never a job no rule matches
+// (issue #723).
+var githubJobID = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
 // ciLine is one content line of a workflow: neither blank nor only a comment,
 // with the number of spaces before it.
 type ciLine struct {
@@ -773,7 +780,8 @@ func parseMatrixEntries(t *testing.T, lines []ciLine) []matrixEntry {
 // line at two spaces whose text ends in a colon; its block is every line below
 // it indented deeper, up to the next job or the next top-level key. It fails
 // closed: a document with no jobs: mapping, a line under jobs: that is not a
-// job id, and a line between the two indents are errors.
+// job id ending in a colon, an id (quoted ids unquoted) outside GitHub's
+// job-id grammar, and a line between the two indents are errors.
 func workflowJobs(doc string) (map[string][]ciLine, error) {
 	lines, err := ciLines(doc)
 	if err != nil {
@@ -810,6 +818,11 @@ func workflowJobs(doc string) (map[string][]ciLine, error) {
 			// is the job coauthor-trailers, so every caller compares that id
 			// (issue #723).
 			id = unquoteYAMLScalar(id)
+			if !githubJobID.MatchString(id) {
+				return nil, fmt.Errorf("line %d: %q is not a job id GitHub accepts, want letters, digits, _ and -",
+					l.num, id)
+			}
+
 			current = id
 			jobs[id] = nil
 		default:

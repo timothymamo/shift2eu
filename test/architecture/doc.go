@@ -46,11 +46,13 @@
 // coauthor-trailers on any job, ci.yml's included (issue #723). The guard
 // reads both .yml and .yaml workflows and refuses a coauthor-trailers.yaml
 // beside the .yml (TestCICoAuthorTrailersReadsBothWorkflowSpellings). It fails
-// closed, with an
-// error, on any job name it cannot read as one plain or quoted line: a block
-// scalar, a value below the key or continued onto the lines below, a backslash
-// escape, a quoted key, a flow-collection job, leading spaces or a trailing
-// comment.
+// closed, with an error, on any job name it cannot read as one plain or quoted
+// line: a block scalar, a value below the key or continued onto the lines
+// below, a backslash escape, a quoted name key, a flow-collection job, leading
+// spaces or a trailing comment. A quoted job id is read unquoted, as GitHub
+// reads it, and then held to GitHub's job-id grammar (letters, digits, _ and
+// -): an id outside it, such as an escape, a space before the colon or an
+// empty id, is an error too.
 //
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml, strict
 // or not, against the copy pinnedDepguardRules: its list-mode, its files and
