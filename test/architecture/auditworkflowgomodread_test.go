@@ -118,7 +118,11 @@ func auditGoModReadFragmentOf(script []string) ([]string, string) {
 	fragment := script[read:install]
 
 	for _, line := range fragment {
-		trimmed := strings.TrimSpace(line)
+		trimmed, printable := auditStepLineOf(line)
+		if !printable {
+			return nil, fmt.Sprintf(`%s's install step holds %q between its read of go.mod's Go and the install, and that line holds a byte outside printable ASCII: bash treats no Unicode space, no vertical tab, no form feed and no carriage return as a blank, while strings.TrimSpace strips them all, so a line that begins with one of them and then "#" reads as a comment to a TrimSpace and runs as a command under bash. Every line this test runs must be printable ASCII, and a line is a comment only when it begins with "#" after its ASCII spaces and tabs, so the whole fragment - the read, the checks and their echoes, and the write of the checked value to $GITHUB_ENV - stays what the step's own lines are (issues #710 and #713)`,
+				auditWorkflow, trimmed)
+		}
 
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
@@ -275,13 +279,36 @@ func auditModulesShapeOf(trimmed string) (auditFragmentLineShape, bool) {
 	return auditFragmentLineShape{}, false
 }
 
+// auditStepLineOf returns line trimmed of its leading and trailing ASCII spaces
+// and tabs, which is how bash reads a blank, and false for a line that holds a
+// byte outside printable ASCII (0x20 to 0x7e) anywhere inside it, a tab there
+// included (issue #713). strings.TrimSpace is no trim for a line this test runs:
+// it strips U+00A0, \v, \f, U+0085, U+2003 and a trailing \r, which bash treats
+// as no blank, so " <U+00A0># || curl x" would read as a comment here and run as a
+// command under bash.
+func auditStepLineOf(line string) (string, bool) {
+	trimmed := strings.Trim(line, " \t")
+
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] < 0x20 || trimmed[i] > 0x7e {
+			return trimmed, false
+		}
+	}
+
+	return trimmed, true
+}
+
 // auditModulesStepScriptOf returns the script auditModulesStepScript runs, and the
 // reason the step's script holds none this test may run, as the message that
 // reason deserves: every non-comment line of it must match one of the exact shapes
 // the step uses before this test runs any of them (issue #713).
 func auditModulesStepScriptOf(script []string) ([]string, string) {
 	for _, line := range script {
-		trimmed := strings.TrimSpace(line)
+		trimmed, printable := auditStepLineOf(line)
+		if !printable {
+			return nil, fmt.Sprintf(`%s's checks job, step %q, holds %q, and that line holds a byte outside printable ASCII: bash treats no Unicode space, no vertical tab, no form feed and no carriage return as a blank, while strings.TrimSpace strips them all, so a line that begins with one of them and then "#" reads as a comment to a TrimSpace and runs as a command under bash. Every line this test runs must be printable ASCII, and a line is a comment only when it begins with "#" after its ASCII spaces and tabs, so the whole step - the guard, the value it takes and the checks that hold every Go command to it - stays what the step's own lines are (issues #710 and #713)`,
+				auditWorkflow, auditGoModulesStepName, trimmed)
+		}
 
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
