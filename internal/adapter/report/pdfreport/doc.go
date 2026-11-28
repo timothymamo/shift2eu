@@ -89,7 +89,9 @@
 //
 // The single-target summary is a row of tiles, one per fit, the total and,
 // with estimates on, the monthly estimate, each with a 0.5 pt --ring outline,
-// a 3 pt rule along its top and a big Helvetica-Bold figure in its colour.
+// a 3 pt rule along its top and a big Helvetica-Bold figure in its colour. A
+// figure shrinks to fit its tile, down to 8 pt; one too wide even then wraps
+// onto more lines inside the tile, never cut, and the whole row grows with it.
 // Required changes stand in an --info-bg box with an --info-rule left rule;
 // blockers, and a comparison's blockers on every target, in a --warn-bg box
 // with a --warn-rule left rule and a filled warning triangle, holding a white
@@ -109,10 +111,11 @@
 // band) whose heading and first line do not both fit in the space left starts
 // on the next page. A box that continues on a new page is drawn again there,
 // its fill, left rule and outline covering its part on each page, and no part
-// is shorter than 26 pt, so no box is ever as short as a badge. The banner, the tile row and a workload
-// card move whole to the next page when they do not fit; a card taller than a
-// page continues as a box does. A table's header row and its first row move to
-// the next page together.
+// is shorter than 26 pt, so no box is ever as short as a badge. The banner,
+// the tile row and a workload card move whole to the next page when they do
+// not fit; a card taller than a page continues as a box does. A table's header
+// row and its first row (its first line, when the row is taller than a page)
+// move to the next page together.
 //
 // A single-target report is: the title "Migration assessment: " and the
 // target, the header facts (inventory file, left out when the metadata names
@@ -121,11 +124,11 @@
 // Resources (ID, category, fit, best offering with its tie note and, with
 // estimates on, plan and monthly estimate), Required changes, Blockers,
 // Workloads (only when the assessment shows workloads), Cost estimate (only
-// with estimates on), the contact banner, Resource details (per resource: raw type, category,
-// region, workload, fit, best offering, relations and "affected by a blocker
-// on" notes, every candidate offering with its fit and missing capabilities,
-// the reasons, the required changes, the blockers and, with estimates on, the
-// estimate's breakdown), How this report is worked out, and About this report
+// with estimates on), the contact banner, Resource details (per resource: raw
+// type, category, region, workload, fit, best offering, relations and
+// "affected by a blocker on" notes, every candidate offering with its fit and
+// missing capabilities, the reasons, the required changes, the blockers and,
+// with estimates on, the estimate's breakdown), How this report is worked out, and About this report
 // (the version line, every catalog snapshot with its source URL, retrieval
 // date and default region for estimates, the regions, "Estimates: on" or
 // "Estimates: off", the inventory file and the source). The words follow the

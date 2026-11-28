@@ -287,8 +287,13 @@ func writeShapes(b *strings.Builder, shapes []shape) {
 
 // decimal writes n thousandths as a decimal with exactly three places and no
 // sign: 500 is "0.500", 43 is "0.043". The layout never draws below zero, so n
-// is never negative.
+// is never negative; a negative n is a bug of the layout, and decimal panics
+// rather than write a signed or malformed number into the PDF.
 func decimal(n int) string {
+	if n < 0 {
+		panic("pdfreport: decimal of a negative number " + strconv.Itoa(n) + ": the layout drew below zero")
+	}
+
 	fraction := strconv.Itoa(n % milli)
 
 	return strconv.Itoa(n/milli) + "." + strings.Repeat("0", 3-len(fraction)) + fraction

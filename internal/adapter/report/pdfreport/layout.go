@@ -417,6 +417,19 @@ func (d *document) ensure(height int) {
 	shift := d.top - d.kept.y
 	y := d.y + shift
 
+	// A box opened under the chain has its fill's placeholder among the
+	// shapes that move: the box opens on the new page with the chain, so it
+	// has no part on the old page to close and newPage must not open a second
+	// one. The box is set aside while newPage runs and its part follows its
+	// placeholder. A box opened before the chain keeps its placeholder on the
+	// old page, and newPage closes and opens its parts as for any break.
+	box := d.box
+	movesBox := box != nil && box.page == old && box.slot >= d.kept.shape
+
+	if movesBox {
+		d.box = nil
+	}
+
 	d.newPage()
 
 	first := len(d.page().shapes)
@@ -429,6 +442,13 @@ func (d *document) ensure(height int) {
 	for _, run := range moved {
 		run.y += shift
 		d.page().runs = append(d.page().runs, run)
+	}
+
+	if movesBox {
+		box.page = d.page()
+		box.slot = first + box.slot - d.kept.shape
+		box.top += shift
+		d.box = box
 	}
 
 	d.kept = keptHeadings{active: true, run: len(d.page().runs) - len(moved), shape: first, y: d.top}

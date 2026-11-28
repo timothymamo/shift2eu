@@ -368,24 +368,42 @@ type tile struct {
 }
 
 // The tile row's geometry, in points: the gap between two tiles, the top
-// rule's height, the padding, the figure's largest and smallest size, and the
-// row's height.
+// rule's height, the padding, the figure's largest and smallest size, the
+// leading of a figure wrapped onto more lines, and the row's height when every
+// figure is one line.
 const (
 	tileGap        = 6
 	tileRule       = 3
 	tilePad        = 6
 	tileFigureSize = 18
 	tileFigureMin  = 8
+	tileFigureLead = 10
 	tileHeight     = 62
 )
 
 // tileRow draws the summary's tiles side by side across the text width, moved
-// whole to the next page when they do not fit.
+// whole to the next page when they do not fit. A figure shrinks to fit its
+// tile, down to tileFigureMin; one too wide even then is wrapped onto more
+// lines inside its tile, never cut, and every tile of the row grows by the
+// extra lines of the tallest figure, so the row keeps one height.
 func (d *document) tileRow(tiles []tile) {
-	d.space(6)
-	d.ensure(tileHeight)
-
 	width := (d.width - tileGap*(len(tiles)-1)) / len(tiles)
+	inside := (width - 2*tilePad) * milli
+
+	sizes := make([]int, len(tiles))
+	figures := make([][]string, len(tiles))
+	extra := 0
+
+	for i, t := range tiles {
+		sizes[i], figures[i] = tileFigure(t.figure, inside)
+		extra = max(extra, (len(figures[i])-1)*tileFigureLead)
+	}
+
+	height := tileHeight + extra
+
+	d.space(6)
+	d.ensure(height)
+
 	top := d.y
 
 	for i, t := range tiles {
@@ -393,7 +411,7 @@ func (d *document) tileRow(tiles []tile) {
 
 		d.addShape(shape{
 			stroke: true, colour: ringColour, width: hairline,
-			rects: []rect{{x: x, y: top - tileHeight, w: width, h: tileHeight}},
+			rects: []rect{{x: x, y: top - height, w: width, h: height}},
 		})
 		d.addShape(fillRect(x, top-tileRule, width, tileRule, t.ink))
 
@@ -401,13 +419,14 @@ func (d *document) tileRow(tiles []tile) {
 		label := top - tileRule - tilePad - badgeHeight + badgeBelow
 		d.drawLineAt(layoutSegs(width-2*tilePad, t.label)[0], inner, label)
 
-		size := tileFigureSize
-		for size > tileFigureMin && textWidth(helveticaBold, size, t.figure) > (width-2*tilePad)*milli {
-			size--
-		}
-
 		figure := label - badgeBelow - tileFigureGap
-		d.run(textRun{font: helveticaBold, size: size, x: inner, y: figure, text: t.figure, colour: t.ink})
+		for j, line := range figures[i] {
+			if j > 0 {
+				figure -= tileFigureLead
+			}
+
+			d.run(textRun{font: helveticaBold, size: sizes[i], x: inner, y: figure, text: line, colour: t.ink})
+		}
 
 		caption := figure - furnitureLeading - 2
 		for _, line := range layoutSegs(width-2*tilePad, words(helvetica, furnitureSize, t.caption)) {
@@ -416,7 +435,47 @@ func (d *document) tileRow(tiles []tile) {
 		}
 	}
 
-	d.y = top - tileHeight
+	d.y = top - height
+}
+
+// tileFigure returns the size a tile's figure is drawn in and its lines: the
+// largest size from tileFigureSize down to tileFigureMin at which it fits
+// inside milli-points on one line, or else tileFigureMin and the figure
+// wrapped onto as many lines as it needs, each broken after its last comma
+// that fits, or after its last character that fits when none does. The lines
+// put together are the figure.
+func tileFigure(figure string, inside int) (int, []string) {
+	size := tileFigureSize
+	for size > tileFigureMin && textWidth(helveticaBold, size, figure) > inside {
+		size--
+	}
+
+	var lines []string
+
+	rest := []rune(figure)
+	for textWidth(helveticaBold, size, string(rest)) > inside {
+		fits, comma := 0, 0
+
+		for fits < len(rest) && textWidth(helveticaBold, size, string(rest[:fits+1])) <= inside {
+			fits++
+
+			if rest[fits-1] == ',' {
+				comma = fits
+			}
+		}
+
+		// A tile narrower than one character still takes one per line, so
+		// the loop ends.
+		cut := max(fits, 1)
+		if comma > 0 {
+			cut = comma
+		}
+
+		lines = append(lines, string(rest[:cut]))
+		rest = rest[cut:]
+	}
+
+	return size, append(lines, string(rest))
 }
 
 // tileFigureGap is how far a tile's figure's baseline sits under its label's
