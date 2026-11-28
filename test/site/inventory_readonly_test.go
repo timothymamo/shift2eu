@@ -66,7 +66,9 @@ import (
 // file holds rather than for a flag (`the auth/disable_ssl_validation property`), so
 // cloudCLIs says what each one stands in for and the refusal names that. The
 // text-wide rule runs once per line, before any field sequence is read, so a line is
-// reported once. `az rest` reads only as one GET of the management endpoint, with no
+// reported once; it refuses a denied flag's truncation as the sequence does, and
+// leaves the report to a sequence on the line that refuses it, so the message names
+// the command. `az rest` reads only as one GET of the management endpoint, with no
 // resource, headers or body, and with its method flag spelt out.
 //
 // A single quote is no field separator, so a denied flag or an `az rest` flag that
@@ -380,17 +382,26 @@ func (c cloudCLI) denies(flag string) bool {
 }
 
 // deniedToken returns the problem a line gets for the first field that names a
-// denied flag or a denied variable of any CLI, and whether there is one. A denied
-// flag and a denied variable fail wherever they stand, on a line of their own or on
-// the line an argument before them wraps onto, and no CLI need be named on the line:
-// the CLIs read the variable and take the flag in every invocation. It runs once per
-// logical line, before the field loop, so a line is reported once. The name a field
+// denied flag or a denied variable of any CLI, whether there is one, and whether the
+// flag is a truncation. A denied flag is held as the field sequence holds it (denies):
+// in full, or as a truncation the CLI's parser completes (`--endpoint`), so the
+// whole-text rule and the in-command one refuse the same flags. A field that names a
+// flag or variable in full wins over an earlier truncation. A denied flag and a
+// denied variable fail wherever they stand, on a line of their own or on the line an
+// argument before them wraps onto, and no CLI need be named on the line: the CLIs
+// read the variable and take the flag in every invocation. It runs once per logical
+// line, before the field loop; a line it refuses in full is reported once and not
+// read further, while scanText reports a truncation's problem only when no field
+// sequence on the line refuses it, so a truncation a read's own line gives keeps the
+// sequence's message, which names the command it stopped at. The name a field
 // gives ends at the first of the `:` and the `-`, `+` and `?` a parameter expansion
 // puts after it, whether or not a word follows the operator: a variable's name holds
 // none of them, so `${AWS_ENDPOINT_URL:-https://example.com}` reaches it as
 // `AWS_ENDPOINT_URL:` and `${AZURE_CONFIG_DIR+set}` as `AZURE_CONFIG_DIR+`. The single
 // quote a shell text may put around it is trimmed too.
-func deniedToken(file string, line logicalLine) (string, bool) {
+func deniedToken(file string, line logicalLine) (problem string, denied, truncated bool) {
+	var truncation string
+
 	for _, field := range lineFields(line.text) {
 		word := strings.Trim(field, "'")
 		if word == "" {
@@ -406,18 +417,22 @@ func deniedToken(file string, line logicalLine) (string, bool) {
 
 		for _, cli := range cloudCLIs {
 			if slices.Contains(cli.deniedFlags, flag) {
-				return deniedFlagRefusal(file, line.number, flag, line.text, cli), true
+				return deniedFlagRefusal(file, line.number, flag, line.text, cli), true, false
+			}
+
+			if truncation == "" && cli.denies(flag) {
+				truncation = deniedFlagRefusal(file, line.number, flag, line.text, cli)
 			}
 
 			for _, denied := range cli.deniedEnv {
 				if name == denied.variable || strings.HasPrefix(name, denied.variable+"_") {
-					return environmentRefusal(file, line.number, name, denied.standsFor, line.text, cli), true
+					return environmentRefusal(file, line.number, name, denied.standsFor, line.text, cli), true, false
 				}
 			}
 		}
 	}
 
-	return "", false
+	return truncation, truncation != "", truncation != ""
 }
 
 // azRestReads returns what an `az rest` sequence is held to, and whether it reads:
@@ -425,7 +440,11 @@ func deniedToken(file string, line logicalLine) (string, bool) {
 // endpoint. An invocation that abbreviates the method flag — `-mpost`, `-m=post`,
 // `--meth put` — is refused rather than read, since the check would otherwise take
 // it for one with no method at all and let the write through. A single quote around
-// a word is trimmed, since the field scan keeps it on the word. The inline `=`
+// a word is trimmed, since the field scan keeps it on the word. A shortened URL flag
+// — `--u`, `--ur`, also with an inline value — is refused too, never completed to
+// `--url` or `--uri`: `--ur` is also a prefix of az rest's `--url-parameters` and
+// `--uri-parameters`, so what az's parser makes of it is nothing the check can rely
+// on, and a write it hid would skip the management-endpoint rule. The inline `=`
 // branches are a defence for reads called on unsplit words: the scan splits `=`
 // into a separator, so `--method=post` reaches it as `--method` and `post`.
 func azRestReads(words []string) (string, bool) {
@@ -470,6 +489,8 @@ func azRestReads(words []string) (string, bool) {
 				// held to its method alone.
 				address, urlFlag = "", name
 			}
+		case isURLFlagAbbreviation(name):
+			return azREST + " " + name, false
 		case isMethodAbbreviation(word):
 			return azREST + " " + word, false
 		}
@@ -504,6 +525,23 @@ func looksLikeAddress(word string) bool {
 	return strings.HasPrefix(word, "http://") || strings.HasPrefix(word, "https://") ||
 		strings.HasPrefix(word, "$") || strings.HasPrefix(word, "/") ||
 		strings.ContainsAny(word, "./")
+}
+
+// isURLFlagAbbreviation reports whether a flag's name is a proper prefix of `--url`
+// or `--uri` longer than the two dashes: `--u` and `--ur`. The full names are no
+// abbreviations.
+func isURLFlagAbbreviation(name string) bool {
+	if len(name) <= len("--") {
+		return false
+	}
+
+	for _, full := range []string{"--url", "--uri"} {
+		if name != full && strings.HasPrefix(full, name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isMethodAbbreviation reports whether a word spells the method flag in a shape az
@@ -1350,7 +1388,8 @@ type fieldScan struct {
 // program's. It is the check's one mechanism, and it trusts no Markdown and no
 // shell reading: every line is split into fields wherever it sits. A denied flag or
 // variable is refused on its line before any field sequence is read, so the line is
-// reported once. A line break is a line break: `\r\n` becomes `\n` and a lone `\r`
+// reported once; a denied flag's truncation is refused text-wide only when no field
+// sequence on its line refuses it. A line break is a line break: `\r\n` becomes `\n` and a lone `\r`
 // too, as CommonMark reads them, so a command the text wraps with either arrives as
 // the two lines it is.
 func scanText(file, text string) fieldScan {
@@ -1362,61 +1401,77 @@ func scanText(file, text string) fieldScan {
 	lines := joinContinuations(physical)
 
 	for at, line := range lines {
-		if problem, denied := deniedToken(file, line); denied {
+		problem, denied, truncated := deniedToken(file, line)
+		if denied && !truncated {
 			scan.problems = append(scan.problems, problem)
 
 			continue
 		}
 
-		fields := lineFields(line.text)
+		before := len(scan.problems)
 
-		for i, field := range fields {
-			name := cliNameField(field)
-			if name == "" {
-				continue
-			}
+		scanLine(&scan, file, lines, at, line)
 
-			cli, known := cloudCLIByName(name)
-			if !known {
-				continue
-			}
-
-			words := fields[i+1:]
-
-			// A line that ends at its last field takes the next line's fields as
-			// the sequence's continuation, whether or not the words so far read:
-			// the words after a command path are positionals, so prose appended to
-			// a read changes nothing, while a denied flag or a second method the
-			// text wraps onto the line is read where it belongs. A next line whose
-			// first field names a CLI is that CLI's own command, not this one's
-			// continuation: the text wrote two commands, one per line.
-			if next, ok := continuationOf(lines, at, line.text, fields); ok {
-				words = append(slices.Clone(words), continuationFields(next.text)...)
-			}
-
-			if len(words) == 0 {
-				// A bare mention: the name stands alone on its line, as the
-				// guide's JSON writes `"source": "aws",`, whose comma ends the
-				// mention rather than the array below it.
-				continue
-			}
-
-			if slices.Contains(guideBareMentions, path.Base(words[0])) {
-				continue
-			}
-
-			held, read := cli.reads(words)
-			if read {
-				scan.accepted[name]++
-
-				continue
-			}
-
-			scan.problems = append(scan.problems, refusal(file, line.number, name, words, held))
+		// A truncation no field sequence on the line refused, because the line
+		// names no CLI or the flag stands outside every sequence, is refused
+		// text-wide, as its full name is.
+		if truncated && len(scan.problems) == before {
+			scan.problems = append(scan.problems, problem)
 		}
 	}
 
 	return scan
+}
+
+// scanLine reads every field sequence of one logical line that a CLI's name opens,
+// counting the reads it accepts and adding a problem for every sequence it refuses.
+func scanLine(scan *fieldScan, file string, lines []logicalLine, at int, line logicalLine) {
+	fields := lineFields(line.text)
+
+	for i, field := range fields {
+		name := cliNameField(field)
+		if name == "" {
+			continue
+		}
+
+		cli, known := cloudCLIByName(name)
+		if !known {
+			continue
+		}
+
+		words := fields[i+1:]
+
+		// A line that ends at its last field takes the next line's fields as
+		// the sequence's continuation, whether or not the words so far read:
+		// the words after a command path are positionals, so prose appended to
+		// a read changes nothing, while a denied flag or a second method the
+		// text wraps onto the line is read where it belongs. A next line whose
+		// first field names a CLI is that CLI's own command, not this one's
+		// continuation: the text wrote two commands, one per line.
+		if next, ok := continuationOf(lines, at, line.text, fields); ok {
+			words = append(slices.Clone(words), continuationFields(next.text)...)
+		}
+
+		if len(words) == 0 {
+			// A bare mention: the name stands alone on its line, as the
+			// guide's JSON writes `"source": "aws",`, whose comma ends the
+			// mention rather than the array below it.
+			continue
+		}
+
+		if slices.Contains(guideBareMentions, path.Base(words[0])) {
+			continue
+		}
+
+		held, read := cli.reads(words)
+		if read {
+			scan.accepted[name]++
+
+			continue
+		}
+
+		scan.problems = append(scan.problems, refusal(file, line.number, name, words, held))
+	}
 }
 
 // refusal is the problem a CLI-name field and the fields after it get when they
@@ -1553,8 +1608,8 @@ func continuationOf(lines []logicalLine, at int, text string, fields []string) (
 //   - "calls", azure.jq's and gcp.jq's first lines: "the read-only az calls".
 //   - "gcp", the guide's source table: "`aws`, `gcp` or `azure` here".
 //   - "or", the guide's requirements: "the provider's CLI (`aws` version 2, `gcloud`, or `az` …)".
-//   - "pages", the note on the regions: "the gcloud" (inventory.md:1119) "pages
-//     document no "all regions" value" (inventory.md:1120).
+//   - "pages", the note on the regions, which wraps after the name: "the gcloud
+//     pages document no "all regions" value for them".
 //   - "so", the note on the projections: "for `gcloud`), so it runs once".
 //   - "version", the requirements line: "`aws` version 2".
 //   - "with", the requirements line: "`az` with the `resource-graph` extension".
