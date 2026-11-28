@@ -915,7 +915,7 @@ Each milestone ships as one PR, in this order, and each gets the security audit 
 Milestones 1 and 2 touch the handling of hostile text and the site's trust model; milestone 1b changes
 the content streams' operator set.
 
-1. [x] **The PDF writer, `pdfreport`, `--format pdf` and the ADR.**
+- [x] **1. The PDF writer, `pdfreport`, `--format pdf` and the ADR.**
    - The reporter, standard library only, with:
      - the deterministic writer: objects, cross-reference table (20-byte entries ending in `SP LF`),
        trailer, content streams, literal string escaping;
@@ -969,7 +969,7 @@ the content streams' operator set.
   - ADR 0049 amended; `pdfreport`'s `doc.go`, `docs/architecture.md` and the CLI guide.
   - The site does not change in this milestone.
 
-2. [ ] **The site's switch to the PDF download.** Depends on 1b.
+- [ ] **2. The site's switch to the PDF download.** Depends on 1b.
    - `internal/web`'s `Deps`, `Options` and `Result`, and `wire` constructing `pdfreport` and
      `htmlreport` only.
    - The glue's `Uint8Array` hand-over.
@@ -992,7 +992,7 @@ the content streams' operator set.
      recommended*, 1).
    - Ships on PRD #297's site track. It does not depend on PRD #297 milestone 4, and the first deploy does
      not wait for it.
-3. [ ] **Polish round on layout and the detail sections.** Planned on PRD #297's site track **after the
+- [ ] **3. Polish round on layout and the detail sections.** Planned on PRD #297's site track **after the
    first deploy** (PRD #297 milestone 4), so it does not delay it. Depends on 2 and on PRD #297
    milestone 4.
    - The maintainer reviews the PDFs of the bundled examples and of a large inventory, and their

@@ -140,11 +140,10 @@
 // with one column per target, a Resources table whose cell per target stacks
 // its fit, best offering and estimate, and Blockers on every target), the
 // contact banner, one section per target headed by its display name holding
-// its sections from
-// Summary to Resource details one heading level lower, and How this report is
-// worked out and About this report once. It ranks no target. A comparison with
-// no target, or whose targets assess different resources, is an error, and
-// nothing is written.
+// its sections from Summary to Resource details one heading level lower, and
+// How this report is worked out and About this report once. It ranks no
+// target. A comparison with no target, or whose targets assess different
+// resources, is an error, and nothing is written.
 //
 // The bytes depend only on the assessment, the report metadata and the version
 // line: never on the clock, the environment or map iteration. A report is
