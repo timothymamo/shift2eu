@@ -1112,6 +1112,53 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		mutated: fence("```bash", "```", "az rest --method get -uhttps://example.com/x"),
 		want:    []string{at(plantedLine+1, "az rest --method get -uhttps://example.com/x")},
 	}, {
+		// A single quote is no field separator, and bash removes the quotes it
+		// meets anywhere in a word, not only at a word's ends: `-'u'https` is
+		// `-uhttps` to the CLI, so a check that trims a quote only at a word's ends
+		// reads no URL flag here and passes an address off the management endpoint,
+		// as it passes a run-on method and body flag. Each plant is refused as the
+		// words bash hands the CLI read, with every quote off.
+		name:    "an az rest whose url short flag quotes its letter",
+		mutated: fence("```bash", "```", "az rest --method get -'u'https://example.com/x"),
+		want:    []string{at(plantedLine+1, "az rest --method get -uhttps://example.com/x")},
+	}, {
+		name:    "an az rest whose url flag quotes its middle",
+		mutated: fence("```bash", "```", "az rest --method get --u'rl' https://example.com/x"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://example.com/x")},
+	}, {
+		name:    "an az rest whose method short flag quotes its letter",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x -'m'put"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://management.azure.com/x -mput")},
+	}, {
+		name:    "an az rest whose method flag quotes its middle",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x --me'thod' put"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://management.azure.com/x --method put")},
+	}, {
+		name:    "an az rest whose body short alias quotes its letter",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x -'b'x"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://management.azure.com/x -bx")},
+	}, {
+		// A denied flag the text quotes in the middle is the denied flag it is:
+		// the text-wide rule refuses it wherever its quote stands, as it refuses
+		// the flag's truncation.
+		name:    "an aws read whose endpoint flag quotes its middle",
+		mutated: fence("```bash", "```", "aws ec2 describe-instances --end'point-url' https://example.com"),
+		want:    []string{at(plantedLine+1, "--endpoint-url is a flag aws denies")},
+	}, {
+		// A URL flag that gives no value leaves the address already read alone:
+		// the `-u` of `sort -u` after the pipe is no `az rest` flag, and the
+		// sequence gives the management endpoint nowhere, so the address it did
+		// give is the one the endpoint check holds.
+		name:    "an az rest whose address a value-less url flag clears",
+		mutated: fence("```bash", "```", "az rest --method get --url https://example.com/x | sort -u"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://example.com/x sort -u")},
+	}, {
+		// -b is az rest's short alias of the denied --body, and az rest only, so it
+		// is refused inside the sequence with its value run on, as -mpost is.
+		name:    "an az rest whose body short alias carries its value run on",
+		mutated: fence("```bash", "```", "az rest --method get --url https://management.azure.com/x -bx"),
+		want:    []string{at(plantedLine+1, "az rest --method get --url https://management.azure.com/x -bx")},
+	}, {
 		// A read that points the CLI somewhere else, feeds it input of the
 		// caller's choosing or turns its checks off writes to a cloud even where
 		// its command path reads — in full or as the prefix the parser completes.
@@ -1374,6 +1421,9 @@ func TestCloudReadDecisions(t *testing.T) {
 		// other commands.
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "-b", "x"}, verb: "rest -b"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "-bx"}, verb: "rest -bx"},
+		// -b is refused inside an az rest sequence only: it is a common short flag
+		// of other commands, and storage account list reads with it.
+		{cli: "az", words: []string{"storage", "account", "list", "-b", "x"}, verb: "storage account list", read: true},
 		// A truncation of --method that carries its value inline is refused as the
 		// split truncation is: `--meth=put` is no --method=put the check reads.
 		{cli: "az", words: []string{"rest", "--method", "get", "--meth=put", "--url", "https://management.azure.com/x"}, verb: "rest --meth"},
