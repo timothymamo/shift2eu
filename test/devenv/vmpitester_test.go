@@ -420,10 +420,12 @@ func TestVMPiTesterScriptRunsNothingOnATruncatedStream(t *testing.T) {
 }
 
 // TestVMPiTesterScriptInstallsOnlyAWrapperEndingWithItsExecLine pins the second half of ADR 0044's amendment (issue
-// #702): the printed script accepts a wrapper only when its last line is the new exec line, and refuses a wrapper
-// whose last line is the one from before (`--extension` and pi's own discovery, with project trust) or that lost its
-// exec line, like any other stream cut short. A VM never installs a wrapper that loads the unit folder's extensions
-// or trusts its settings.
+// #702, issue #717): the printed script accepts a wrapper only when its last line is the new exec line - with the
+// --session-dir the wrapper pins -, and refuses a wrapper whose last line is the one from before issue #717 (no
+// --session-dir, so the unit folder's .pi/settings.json chooses where pi writes its sessions), the one from before
+// issue #702 (`--extension` and pi's own discovery, with project trust), or that lost its exec line, like any other
+// stream cut short. A VM never installs a wrapper whose sessions a branch could choose, nor one that loads the unit
+// folder's extensions or trusts its settings.
 func TestVMPiTesterScriptInstallsOnlyAWrapperEndingWithItsExecLine(t *testing.T) {
 	t.Parallel()
 
@@ -434,6 +436,7 @@ func TestVMPiTesterScriptInstallsOnlyAWrapperEndingWithItsExecLine(t *testing.T)
 		refuses  bool
 	}{
 		{name: "the wrapper ends with the new exec line", lastLine: piTesterExecLine},
+		{name: "the wrapper ends with the line from before issue #717", lastLine: piTesterPreviousExecLine, refuses: true},
 		{name: "the wrapper ends with the line from before issue #702", lastLine: piTesterOldExecLine, refuses: true},
 		{name: "the wrapper's exec line is gone", refuses: true},
 	}

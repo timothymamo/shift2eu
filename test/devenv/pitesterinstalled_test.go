@@ -99,17 +99,20 @@ func writePiTesterUnit(t *testing.T, root string, extension, list, wrapper piFil
 	return dir
 }
 
-// piTesterWantArgv is the argv pi starts with since ADR 0044's amendment "the tester loads no project extension
-// or setting" (issue #702): no project trust and no discovered extension, the installed refusal and the deck's
-// extension by --extension, the unit folder's skills by --skill - whether or not that directory exists - and then
-// every argument the deck's command passed unchanged. The shell reports PWD resolved, so the project is resolved
-// before its skills path is compared.
+// piTesterWantArgv is the argv pi starts with since issue #717 (within ADR 0044's amendment "the tester loads no
+// project extension and applies no trusted project setting", issue #702): no project trust and no discovered
+// extension, the session directory the wrapper pins right after --no-extensions so the unit folder's
+// .pi/settings.json cannot choose it, the installed refusal and the deck's extension by --extension, the unit
+// folder's skills by --skill - whether or not that directory exists - and then every argument the deck's command
+// passed unchanged. The shell reports PWD resolved, so the project is resolved before its skills path and its
+// session directory are compared.
 func piTesterWantArgv(t *testing.T, installed piTesterInstalled, home, project string, args []string) []string {
 	t.Helper()
 
 	want := []string{
 		"--no-approve",
 		"--no-extensions",
+		"--session-dir", piTesterSessionDir(t, home, project),
 		"--extension", installed.extension,
 		"--extension", piTesterDeckDir(home),
 		"--skill", piTesterSkillsDir(resolvePiTesterDir(t, project)),
