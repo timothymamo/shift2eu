@@ -27,32 +27,45 @@ const (
 )
 
 // pdfContentOperators is the writer's fixed content-stream operator table: each
-// operator with the operands it takes, exactly the set contentStream emits (q Q
-// G w re S BT ET Tf Tm Tj). The tests pin it so that a writer cannot slip in an
-// operator of its own: no graphics state dictionary (gs), no XObject (Do), no
-// inline image, and no fill or colour operator (f, g, rg, RG) is in it.
+// operator with the operands it takes, exactly ADR 0049's amended set of sixteen
+// (q Q h f S BT ET w rg RG re m l Tf Tm Tj). The tests pin it so that a writer
+// cannot slip in an operator of its own: no graphics state dictionary (gs), no
+// XObject (Do), no inline image (BI), no clipping, curve, dash or other colour
+// operator, and none of the other text operators. Milestone 1's grey G is gone:
+// RG strokes the palette's colours.
 //
-// Operands are integers, literal strings and font resource names; the reader
-// checks each operator's operands against its row here, and that the font
+// Operands are integers (re, Tf's size and Tm), decimals (w, rg, RG, m and l),
+// literal strings (Tj) and font resource names (Tf), and the reader checks each
+// operator's operands against its row here, that a decimal is digits, a dot and
+// exactly three digits, that an integer is digits alone, and that the font
 // resource a Tf selects is one of the writer's constant names /F1, /F2, /F3.
 var pdfContentOperators = map[string][]pdfValueKind{
-	"BT": {},
-	"ET": {},
-	"Tf": {pdfValueName, pdfValueNumber},
-	"Tm": {pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber},
-	"Tj": {pdfValueString},
-	"re": {pdfValueNumber, pdfValueNumber, pdfValueNumber, pdfValueNumber},
-	"S":  {},
-	"w":  {pdfValueNumber},
 	"q":  {},
 	"Q":  {},
-	"G":  {pdfValueNumber},
+	"h":  {},
+	"f":  {},
+	"S":  {},
+	"BT": {},
+	"ET": {},
+	"w":  {pdfValueDecimal},
+	"rg": {pdfValueDecimal, pdfValueDecimal, pdfValueDecimal},
+	"RG": {pdfValueDecimal, pdfValueDecimal, pdfValueDecimal},
+	"re": {pdfValueInteger, pdfValueInteger, pdfValueInteger, pdfValueInteger},
+	"m":  {pdfValueDecimal, pdfValueDecimal},
+	"l":  {pdfValueDecimal, pdfValueDecimal},
+	"Tf": {pdfValueName, pdfValueInteger},
+	"Tm": {pdfValueInteger, pdfValueInteger, pdfValueInteger, pdfValueInteger, pdfValueInteger, pdfValueInteger},
+	"Tj": {pdfValueString},
 }
 
 // pdfBannedNames are the names a file must never hold, outside a string: each
-// one would make a reader act on the file, or name metadata that varies between
-// runs (URLs, actions, scripts, forms, embedded files and fonts, dates, the
-// document ID and the producer).
+// one would make a reader act on the file, name an image, a graphic state, a
+// pattern, a shading or a colour space of its own, or name metadata that varies
+// between runs (URLs, actions, scripts, forms, embedded files and fonts, dates,
+// the document ID and the producer). ADR 0049's amendment adds the six names of
+// its own: no /Link beside the banner's address, no /XObject, /ExtGState,
+// /Pattern, /Shading or /ColorSpace anywhere, since each page's /Resources holds
+// only /Font.
 var pdfBannedNames = []string{
 	"Annots",
 	"URI",
@@ -72,6 +85,12 @@ var pdfBannedNames = []string{
 	"ModDate",
 	"ID",
 	"Producer",
+	"Link",
+	"XObject",
+	"ExtGState",
+	"Pattern",
+	"Shading",
+	"ColorSpace",
 }
 
 // pdfTitle is the one constant entry of the /Info dictionary (Decided, as
@@ -91,8 +110,10 @@ func checkPDFStructure(tb testing.TB, data []byte) *testPDF {
 	checkFonts(tb, file)
 	checkInfo(tb, file)
 	checkBannedNames(tb, file)
+	checkColoursComeFromThePalette(tb, file)
 	checkRunsStayInsideTheirBoxes(tb, file)
 	checkNoHeadingEndsAPage(tb, file)
+	checkNoBoxHeaderEndsAPage(tb, file)
 
 	return file
 }
@@ -200,20 +221,27 @@ func checkMediaBox(tb testing.TB, page *pdfPage, obj *pdfObject) {
 	}
 
 	for i, number := range box {
-		if number.kind != pdfValueNumber || number.num != want[i] {
+		if number.kind != pdfValueInteger || number.num != want[i] {
 			tb.Fatalf("pdf: page %d's /MediaBox is not A4 portrait [0 0 595 842]", page.num)
 		}
 	}
 }
 
-// checkPageFonts checks that the page's /Resources names every font its text
-// runs use, as an indirect reference to a font object.
+// checkPageFonts checks that a page's /Resources holds only a /Font dictionary,
+// and that the dictionary names every font its text runs use, as an indirect
+// reference to a font object. ADR 0049's amendment allows no other resource:
+// no /XObject, /ExtGState, /Pattern, /Shading or /ColorSpace.
 func checkPageFonts(tb testing.TB, file *testPDF, page *pdfPage, obj *pdfObject) {
 	tb.Helper()
 
 	resources, ok := obj.dict.get("Resources")
 	if !ok || resources.kind != pdfValueDict {
 		tb.Fatalf("pdf: page %d has no /Resources dictionary", page.num)
+	}
+
+	if names := resources.dict.names(); len(names) != 1 || names[0] != "Font" {
+		tb.Fatalf("pdf: page %d's /Resources holds %q, want only /Font: no XObject, ExtGState, Pattern, Shading or ColorSpace resource is in the file",
+			page.num, names)
 	}
 
 	fonts, ok := resources.dict.get("Font")
@@ -344,7 +372,7 @@ func collectValueNames(value pdfValue, names map[string]bool) {
 		}
 	case pdfValueDict:
 		collectNames(value.dict, names)
-	case pdfValueNumber, pdfValueString, pdfValueRef:
+	case pdfValueInteger, pdfValueDecimal, pdfValueString, pdfValueRef:
 		// A number, a string and a reference hold no name; a value that spells
 		// one inside a string is text, never a name.
 	}
@@ -361,6 +389,17 @@ const courierAdvance = 600
 // first row further below it, so a rule with no line within this gap above it is
 // no table's.
 const headerRuleGap = 9
+
+// tableHeaderFont and tableHeaderSize are what a table's header cells are drawn
+// in: Helvetica-Bold at the table size (PRD, Look: table header cells in
+// Helvetica-Bold). A styled page draws more zero-height rules than a table has —
+// the 0.5 pt rule above a section heading, the gold rules of the title block and
+// the banner — so a header row is recognised by its font and size too, not by
+// its rule alone.
+const (
+	tableHeaderFont = "F2"
+	tableHeaderSize = 8
+)
 
 // checkRunsStayInsideTheirBoxes checks that no value the report draws ends past
 // the right edge of its box: a value drawn in a table cell stays inside its
@@ -455,7 +494,7 @@ func pageTables(tb testing.TB, page *pdfPage) []pdfPageTable {
 		}
 
 		header, found := headerLineAbove(lines, rule.Y)
-		if !found || len(header.runs) == 0 {
+		if !found || len(header.runs) == 0 || header.runs[0].Font != tableHeaderFont || header.runs[0].Size != tableHeaderSize {
 			continue
 		}
 
@@ -727,11 +766,21 @@ func checkNoHeadingEndsAPage(tb testing.TB, file *testPDF) {
 func checkPageDoesNotEndWithAHeading(tb testing.TB, pageIndex int, page *pdfPage) {
 	tb.Helper()
 
+	last, found := lowestBodyLine(page)
+	if !found || !isHeadingLine(last) {
+		return
+	}
+
+	tb.Errorf("pdf: page %d ends its body with the heading %s at y %d pt, so the heading alone sits at the foot of the page: a heading never ends a page (PRD, Tables and page breaks)",
+		pageIndex+1, shortened(lineText(last)), last.Y)
+}
+
+// lowestBodyLine returns the page's lowest line inside its band, the last line of
+// its body, and false for a page with no body line.
+func lowestBodyLine(page *pdfPage) (pdfRunLine, bool) {
 	lowest, highest, ok := pageBand(page)
 	if !ok {
-		// A page that draws no rule, such as the tests' own hand-built minimal
-		// PDF, has no body to measure.
-		return
+		return pdfRunLine{}, false
 	}
 
 	var (
@@ -750,12 +799,132 @@ func checkPageDoesNotEndWithAHeading(tb testing.TB, pageIndex int, page *pdfPage
 		}
 	}
 
-	if !found || !isHeadingLine(last) {
+	return last, found
+}
+
+// boxMinHeight is how tall a filled shape must be to be a box rather than a
+// badge, a table row's fill, a block's ID band or a rule, in thousandths of a
+// point. A badge is one line of text tall (PRD, Look, Fit badges).
+const boxMinHeight = 24 * milli
+
+// boxSlack is how far a point may lie outside a box and still belong to it, in
+// thousandths of a point: a fill's edge and a line's baseline are computed
+// separately, so a line sits a point or so inside or outside an edge.
+const boxSlack = milli
+
+// boxFills returns the page's boxes: the filled shapes too tall to be a badge, a
+// table row's fill, a block's ID band or a rule (PRD, Look, Boxes across pages).
+func boxFills(page *pdfPage) []pdfShape {
+	boxes := make([]pdfShape, 0, len(page.shapes))
+
+	for _, shape := range page.shapes {
+		if shape.Op == "f" && shape.Box.H > boxMinHeight {
+			boxes = append(boxes, shape)
+		}
+	}
+
+	return boxes
+}
+
+// lineStartsInside reports whether the line's leftmost run starts inside the box:
+// a line of a box begins at the box's padding.
+func lineStartsInside(line pdfRunLine, box pdfShape) bool {
+	if len(line.runs) == 0 {
+		return false
+	}
+
+	left := line.runs[0]
+	for _, run := range line.runs {
+		if run.X < left.X {
+			left = run
+		}
+	}
+
+	return box.Box.contains(pdfPoint{X: left.X * milli, Y: left.Y * milli}, boxSlack)
+}
+
+// checkNoBoxHeaderEndsAPage checks the PRD's rule that a box's header never ends
+// a page (Look, Boxes across pages): a box whose heading is the last line of a
+// page's body would be a heading alone at the foot, with its first row on the
+// next page, and a table's header row is a box's header too.
+func checkNoBoxHeaderEndsAPage(tb testing.TB, file *testPDF) {
+	tb.Helper()
+
+	for index, page := range file.pages {
+		checkPageDoesNotEndWithABoxHeader(tb, index, page)
+	}
+}
+
+// checkPageDoesNotEndWithABoxHeader fails the test when the lowest body line of
+// one page is a box's first line or a table's header row.
+func checkPageDoesNotEndWithABoxHeader(tb testing.TB, pageIndex int, page *pdfPage) {
+	tb.Helper()
+
+	last, found := lowestBodyLine(page)
+	if !found {
 		return
 	}
 
-	tb.Errorf("pdf: page %d ends its body with the heading %s at y %d pt, so the heading alone sits at the foot of the page: a heading never ends a page (PRD, Tables and page breaks)",
-		pageIndex+1, shortened(lineText(last)), last.Y)
+	tables := pageTables(tb, page)
+	if table, inTable := tableAt(tables, last.Y); inTable && table.headerY == last.Y {
+		tb.Errorf("pdf: page %d ends its body with the header row %s of the table whose rule is at y %d pt, so the header row alone sits at the foot of the page: a box's header never ends a page (PRD, Look, Boxes across pages)",
+			pageIndex+1, shortened(lineText(last)), table.rule.Y)
+
+		return
+	}
+
+	for _, box := range boxFills(page) {
+		first, ok := highestLineInside(page, box)
+		if !ok || first.Y != last.Y {
+			continue
+		}
+
+		tb.Errorf("pdf: page %d ends its body with the line %s at y %d pt, which is the first line of the %s box (x %s pt, y %s pt, %s × %s pt): the box's header alone sits at the foot of the page, and a box's header never ends a page (PRD, Look, Boxes across pages)",
+			pageIndex+1, shortened(lineText(first)), first.Y, colourName(box.Fill),
+			points(box.Box.X), points(box.Box.Y), points(box.Box.W), points(box.Box.H))
+
+		return
+	}
+}
+
+// highestLineInside returns the highest line of the page that starts inside the
+// box: its first line.
+func highestLineInside(page *pdfPage, box pdfShape) (pdfRunLine, bool) {
+	var (
+		first pdfRunLine
+		found bool
+	)
+
+	for _, line := range pageRunLines(page) {
+		if !lineStartsInside(line, box) {
+			continue
+		}
+
+		if !found || line.Y > first.Y {
+			first, found = line, true
+		}
+	}
+
+	return first, found
+}
+
+// checkColoursComeFromThePalette checks that every colour a content stream sets
+// with rg or RG is one of the palette's rows, written exactly as the palette
+// writes it (PRD, Look: the colours are the site's light-theme tokens, nothing
+// else).
+func checkColoursComeFromThePalette(tb testing.TB, file *testPDF) {
+	tb.Helper()
+
+	for index, page := range file.pages {
+		for _, colour := range page.colors {
+			if _, ok := paletteName(colour); ok {
+				continue
+			}
+
+			tb.Errorf("pdf: page %d sets the colour %s %s %s, which is no row of the palette: the report's colours are the site's light-theme tokens, nothing else (PRD, Look)",
+				index+1, points(colour.R), points(colour.G), points(colour.B))
+		}
+	}
 }
 
 // isHeadingLine reports whether a line is a heading: every run of it is drawn at
@@ -997,5 +1166,209 @@ func checkValueInsideItsColumn(tb testing.TB, file *testPDF, value string) {
 
 	if checked == 0 {
 		tb.Fatalf("the report draws no table cell holding the value %q", value)
+	}
+}
+
+// operatorWords names the operand kinds as ADR 0049's table words them.
+var operatorWords = map[pdfValueKind]string{
+	pdfValueInteger: "integer",
+	pdfValueDecimal: "decimal",
+	pdfValueName:    "name",
+	pdfValueString:  "string",
+}
+
+// TestContentStreamOperatorTableIsTheADRs pins the operator table's keys and
+// operand shapes against ADR 0049's amended set, which is exactly what the writer
+// may emit: sixteen operators, no more and no fewer, and the two number kinds
+// kept apart.
+//
+// Criterion (PRD #584 milestone 1b, Unit): the test-only reader's operator table
+// is exactly ADR 0049's amended set, each with its operand shape, and nothing
+// else: BT, ET, q, Q, f, S and h with no operand; Tf with a font resource name
+// and an integer; Tm with six integers; Tj with a literal string; re with four
+// integers; w with one decimal; rg and RG with three decimals; m and l with two
+// decimals. G, milestone 1's grey operator, is gone.
+func TestContentStreamOperatorTableIsTheADRs(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"q":  "",
+		"Q":  "",
+		"h":  "",
+		"f":  "",
+		"S":  "",
+		"BT": "",
+		"ET": "",
+		"w":  "decimal",
+		"rg": "decimal decimal decimal",
+		"RG": "decimal decimal decimal",
+		"re": "integer integer integer integer",
+		"m":  "decimal decimal",
+		"l":  "decimal decimal",
+		"Tf": "name integer",
+		"Tm": "integer integer integer integer integer integer",
+		"Tj": "string",
+	}
+
+	if len(pdfContentOperators) != len(want) {
+		keys := make([]string, 0, len(pdfContentOperators))
+		for operator := range pdfContentOperators {
+			keys = append(keys, operator)
+		}
+
+		slices.Sort(keys)
+
+		t.Fatalf("the operator table holds %d operators (%s), want ADR 0049's sixteen",
+			len(pdfContentOperators), strings.Join(keys, " "))
+	}
+
+	for operator, shape := range pdfContentOperators {
+		wantShape, ok := want[operator]
+		if !ok {
+			t.Errorf("the operator table holds %q, which ADR 0049's amended set does not", operator)
+
+			continue
+		}
+
+		words := make([]string, 0, len(shape))
+		for _, kind := range shape {
+			words = append(words, operatorWords[kind])
+		}
+
+		if got := strings.Join(words, " "); got != wantShape {
+			t.Errorf("the operator %s takes %q, want %q", operator, got, wantShape)
+		}
+	}
+}
+
+// TestReaderRejectsWhatTheOperatorTableDoesNotHold feeds hand-written content
+// streams through the reader the invariants use and requires every one of them to
+// fail: an operator outside the table, an operand of the wrong number or shape, a
+// number without its written form, and a colour outside 0.000 to 1.000.
+//
+// Criterion (PRD #584 milestone 1b, Unit): a content stream built in-test with an
+// operator outside the table fails the reader, for each of G, c, sh, gs, Do, BI
+// and TJ; so does a listed operator with an operand of the wrong shape (an integer
+// for rg, a decimal for re, a missing or an extra operand), a signed or exponent
+// number, and a colour component above 1.000.
+func TestReaderRejectsWhatTheOperatorTableDoesNotHold(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		stream string
+	}{
+		{name: "the unlisted operator Do", stream: "q Do Q"},
+		{name: "the unlisted operator sh", stream: "q sh Q"},
+		{name: "the unlisted operator gs", stream: "q gs Q"},
+		{name: "milestone 1's grey operator G", stream: "q 0.500 G Q"},
+		{name: "the curve operator c", stream: "q 0.000 0.000 m 1.000 1.000 2.000 2.000 3.000 3.000 c S Q"},
+		{name: "the unlisted text operator TJ", stream: "BT /F1 8 Tf 1 0 0 1 50 700 Tm (a) TJ ET"},
+		{name: "the inline image operator BI", stream: "q BI Q"},
+		{name: "the clipping operator W", stream: "q 10 10 100 100 re W n Q"},
+		{name: "a missing operand of rg", stream: "q 0.500 0.500 rg Q"},
+		{name: "an extra operand of rg", stream: "q 0.500 0.500 0.500 0.500 rg Q"},
+		{name: "a missing operand of m", stream: "q 1.000 m 2.000 3.000 l S Q"},
+		{name: "an integer for rg's decimal", stream: "q 1 1 1 rg Q"},
+		{name: "a decimal for re's integer", stream: "q 10.000 20.000 30.000 40.000 re f Q"},
+		{name: "a signed number", stream: "q -1.000 0.500 0.500 rg Q"},
+		{name: "a number with an exponent", stream: "q 1e3 0.500 0.500 rg Q"},
+		{name: "a decimal of two places", stream: "q 0.50 0.500 0.500 rg Q"},
+		{name: "a colour component above 1.000", stream: "q 1.001 0.500 0.500 rg Q"},
+		{name: "a stroking colour component above 1.000", stream: "q 0.500 0.500 1.001 RG Q"},
+		{name: "a path coordinate beyond the page", stream: "q 596.000 20.000 m 30.000 40.000 l S Q"},
+		{name: "a font outside F1 to F3", stream: "BT /F4 8 Tf ET"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := checkContentStream(test.stream); err == nil {
+				t.Errorf("the reader accepted the content stream %q, want it refused", test.stream)
+			} else {
+				t.Logf("refused: %v", err)
+			}
+		})
+	}
+}
+
+// TestReaderAcceptsEveryOperatorOfTheTable is the positive case: a content stream
+// holding all sixteen operators, each with the operands its row gives, passes, and
+// the reader reads what it draws — the colour of a fill and of a stroke, a path's
+// subpaths, a rectangle's box and the colour a run is drawn in.
+//
+// Criterion (PRD #584 milestone 1b, Unit): one positive case with all sixteen
+// operators passes.
+func TestReaderAcceptsEveryOperatorOfTheTable(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		"q",
+		"0.500 w",
+		"0.078 0.129 0.239 RG",
+		"0.078 0.129 0.239 rg",
+		"50 100 495 0 re",
+		"S",
+		"50 100 495 20 re",
+		"f",
+		"50.000 100.000 m",
+		"60.000 110.000 l",
+		"70.000 100.000 l",
+		"h",
+		"S",
+		"BT",
+		"/F1 9 Tf",
+		"1 0 0 1 50 700 Tm",
+		"(hello) Tj",
+		"ET",
+		"Q",
+	}, "\n")
+
+	if err := checkContentStream(stream); err != nil {
+		t.Fatalf("the reader refused a content stream holding every operator of the table: %v\n%s", err, stream)
+	}
+
+	// The reader parses a stream it accepts, and fails the test on a departure, so
+	// the drawing it reads is the one the checks of this package measure.
+	file := openTestPDF(t, buildPagePDF(t, stream))
+
+	if len(file.pages) != 1 {
+		t.Fatalf("the file has %d pages, want the one its content stream draws", len(file.pages))
+	}
+
+	page := file.pages[0]
+
+	if len(page.colors) != 2 {
+		t.Fatalf("the page sets %d colours, want the two the stream gives", len(page.colors))
+	}
+
+	ink := pdfRGB{78, 129, 239}
+	if page.colors[0] != ink || page.colors[1] != ink {
+		t.Errorf("the page's colours are %v, want the ink %v twice", page.colors, ink)
+	}
+
+	if len(page.shapes) != 3 {
+		t.Fatalf("the page draws %d shapes, want the rule, the fill and the closed path", len(page.shapes))
+	}
+
+	if rule := page.shapes[0]; rule.Op != "S" || rule.Width != 500 || rule.Stroke != ink || rule.Box != (pdfBox{X: 50000, Y: 100000, W: 495000, H: 0}) {
+		t.Errorf("the first shape is %+v, want the 0.5 pt ink rule from (50, 100) pt, 495 pt long", rule)
+	}
+
+	if fill := page.shapes[1]; fill.Op != "f" || fill.Fill != ink || fill.Box.H != 20000 {
+		t.Errorf("the second shape is %+v, want the 20 pt tall ink fill", fill)
+	}
+
+	if icon := page.shapes[2]; icon.Op != "S" || len(icon.Subpaths) != 1 || !icon.Subpaths[0].Closed || len(icon.Subpaths[0].Points) != 3 {
+		t.Errorf("the third shape is %+v, want the closed three-point path", icon)
+	}
+
+	if len(page.runs) != 1 {
+		t.Fatalf("the page draws %d runs, want the one Tj", len(page.runs))
+	}
+
+	if run := page.runs[0]; run.Text != "hello" || run.Colour != ink || run.Font != "F1" || run.Size != 9 {
+		t.Errorf("the run is %+v, want %q in the ink colour, /F1 at 9 pt", run, "hello")
 	}
 }
