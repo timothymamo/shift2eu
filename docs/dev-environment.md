@@ -3335,10 +3335,11 @@ shows one line naming the project and installed paths and `make vm-pi-tester`; t
 branch that changes one of the three files. pi loads no extension and no trusted setting of the project
 (`--no-extensions`, `--no-approve`, issue #702); the skills it reads by `--skill` are still the branch's text.
 What stays open (ADR 0044, What is left): pi reads the project's settings as data before trust and runs its
-migrations there (a branch's `.pi/hooks` or `.pi/tools` makes it wait for a key); the user-level config under `~/.pi/agent` (`settings.json`, `models.json`, `SYSTEM.md`,
-`APPEND_SYSTEM.md`, `AGENTS.md`) is always trusted and writable by any process of the same uid, so a write
-there runs at the next tester start; and the deck's tester command in `.dot-agent-deck.toml` controls pi's
-later arguments, pinned word for word by `TestPiTesterCommandRunsTheLaunchWrapper`.
+migrations there (a branch's `.pi/hooks` or `.pi/tools` makes it wait for a key); the user-level config under
+`~/.pi/agent` (`settings.json`, `models.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`) is always
+trusted and writable by any process of the same uid, so a write there runs at the next tester start; and the
+deck's tester command in `.dot-agent-deck.toml` controls pi's later arguments, pinned word for word by
+`TestPiTesterCommandRunsTheLaunchWrapper`.
 Lima runs provisioning on every boot, so it installs the three
 files as one set, guarded on the installed wrapper, which both installers write last and which so marks a
 complete installation: with the wrapper there a boot installs nothing and keeps what `make vm-pi-tester`
