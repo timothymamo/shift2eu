@@ -13,14 +13,14 @@ internal/
     inventory/                  what runs in the source today
     catalog/                    what a target offers
     mapping/                    matching resources to offerings
-    assessment/                 verdicts, blockers, readiness
+    assessment/                 verdicts, blockers
   app/analysis/               The analyse use case and the ports it needs
   adapter/
     internal/jsondoc            the strict JSON decoder adapters share
     source/inventoryfile        the JSON inventory file
     source/{aws,azure,gcp}      read-only discovery   (+ sourcetest contract suite)
     target/{ovhcloud,scaleway,upcloud}  EU catalogs   (+ targettest contract suite)
-    report/{markdown,jsonreport,htmlreport}  renderers
+    report/{markdown,jsonreport,pdfreport,htmlreport}  renderers
   cli/                        Command-line parsing (driving adapter)
   web/                        The site's driving adapter
   config/                     Configuration loading

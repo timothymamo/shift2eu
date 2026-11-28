@@ -42,7 +42,7 @@ one of them, such as `/dev/stdout`) or the inventory file itself (the same path,
 symbolic link to it) is refused with exit code 1 before the inventory is read; leave out `--output` to
 write to standard output.
 
-`--format` chooses the report format: `markdown` (the default) or `json`. The JSON report holds the same
+`--format` chooses the report format: `markdown` (the default), `json` or `pdf`. The JSON report holds the same
 content as the Markdown one, as a versioned document (`"schemaVersion": 3`, `"kind": "assessment"`, or
 `"comparison"` for several targets) for scripts and other tools: per resource its plan and estimate,
 then the workloads, the estimate's basis (region, price date, currency, what it excludes) and total,
@@ -67,6 +67,26 @@ version 3. Its schemas are `assessment-v3.schema.json` and `comparison-v3.schema
 beside the version 2 ones ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md),
 issue #307). `--schema-version` with any format but `json`, or a version other than 2 or 3, is a usage
 error (exit code 2).
+
+`--format pdf` writes the report as a PDF, for people to keep and pass on
+([ADR 0049](../adr/0049-write-the-pdf-report-with-a-standard-library-writer.md), PRD #584). It holds the
+Markdown report's content, in the same order and words: the header facts, the summary, the resources,
+the required changes, the blockers, the workloads, the cost estimate, each resource's details, how the
+report is worked out and what it is based on. Every page's header names the target (or the number of
+targets compared), and its footer names the build (the line `shift2eu version` prints) and the page
+number. It is A4, uses the PDF's standard fonts (values from the inventory and the catalogs in Courier)
+and holds no creation date, link, script, form or embedded file, so the same inventory and options give
+the same bytes on every run of the same build. A resource's estimate details say whether its hours were assumed (730 a
+month) or given by the inventory, and any billing cap, but do not print the hours the inventory gives.
+The PDF goes to standard output or, with `--output`, to the file, exactly as the other formats; use
+`--output` or a redirect to keep it as a file. With several targets
+(`--target all` or a list) it is the comparison report, followed by each target's own report. The PDF
+has no schema version: `--format pdf --schema-version` is a usage error (exit code 2), and nothing is
+written.
+
+```bash
+./bin/shift2eu assess --inventory inventory.json --target all --format pdf --output comparison.pdf
+```
 
 With two or more targets, `assess` reads the inventory once and writes one comparison report. The
 targets are compared in sorted key order, whatever order they are given in. The report starts with a

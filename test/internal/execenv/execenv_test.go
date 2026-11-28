@@ -51,10 +51,11 @@ func noExemption(string, string, []string) bool { return false }
 func nameOnlyExemption(name, _ string, _ []string) bool { return name == "go" }
 
 // toolchainFlags is the allow-list of the go command's flags an exempt call may
-// carry (P4), the same list test/lint's e2eToolchainFlags is: after the
+// carry (P4), the first three of test/lint's e2eToolchainFlags: after the
 // subcommand, every literal argument that starts with "-" must be one of these,
-// or the exemption is lost. A flag the go command gains later is refused until
-// it is added here on purpose.
+// or the exemption is lost. Its fourth, -ldflags, test/lint admits for a value
+// of -X stamps alone, a rule of its own that no probe here needs. A flag the go
+// command gains later is refused until it is added here on purpose.
 var toolchainFlags = []string{"-trimpath", "-o", "-deps"}
 
 // toolchainExemption admits the go toolchain's two commands whose calls in the

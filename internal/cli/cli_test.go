@@ -46,14 +46,20 @@ const (
 	inventoryName = "inv.json"
 	// targetKey is the one target the fake deps support, as the CLI spells it.
 	targetKey = "scaleway"
-	// markdownFormat and jsonFormat are the two --format values the fake deps
-	// support, and supportedFormats is the list a usage error gives, sorted.
+	// markdownFormat, jsonFormat and pdfFormat are the three --format values the
+	// fake deps support, and supportedFormats is the list a usage error gives,
+	// sorted.
 	markdownFormat   = "markdown"
 	jsonFormat       = "json"
-	supportedFormats = jsonFormat + ", " + markdownFormat
+	pdfFormat        = "pdf"
+	supportedFormats = jsonFormat + ", " + markdownFormat + ", " + pdfFormat
 	// jsonReportBody is what the fake json reporter writes, so a test can tell a
 	// --format json run from the default one.
 	jsonReportBody = `{"schemaVersion": 1, "kind": "assessment"}` + "\n"
+	// pdfReportBody is what the fake pdf reporter writes: a PDF header, a comment
+	// line that is not valid UTF-8 and the %%EOF line, so a test can see that a
+	// run copies the reporter's bytes unchanged rather than text.
+	pdfReportBody = "%PDF-1.7\n%\xe2\xe3\xcf\xd3\n%%EOF\n"
 	// errPrefix is how the CLI writes an error to stderr.
 	errPrefix = "shift2eu: "
 	// maxErrorLine is the longest error line the CLI may write: the cap on the
@@ -155,6 +161,9 @@ type harness struct {
 	// jsonReporter and jsonComparison are the reporters of the "json" format.
 	jsonReporter   *fakeReporter
 	jsonComparison *fakeComparisonReporter
+	// pdfReporter and pdfComparison are the reporters of the "pdf" format.
+	pdfReporter   *fakeReporter
+	pdfComparison *fakeComparisonReporter
 	// paths is every --inventory value the CLI passed to NewInventorySource.
 	paths []string
 }
@@ -180,6 +189,27 @@ func newHarness(t *testing.T) *harness {
 		comparison:     &fakeComparisonReporter{},
 		jsonReporter:   &fakeReporter{body: []byte(jsonReportBody)},
 		jsonComparison: &fakeComparisonReporter{},
+		pdfReporter:    &fakeReporter{body: []byte(pdfReportBody)},
+		pdfComparison:  &fakeComparisonReporter{},
+	}
+}
+
+// reporters returns the single-target reporter of every supported --format value,
+// so a test can see which format rendered a report.
+func (h *harness) reporters() map[string]*fakeReporter {
+	return map[string]*fakeReporter{
+		markdownFormat: h.reporter,
+		jsonFormat:     h.jsonReporter,
+		pdfFormat:      h.pdfReporter,
+	}
+}
+
+// comparisons returns the comparison reporter of every supported --format value.
+func (h *harness) comparisons() map[string]*fakeComparisonReporter {
+	return map[string]*fakeComparisonReporter{
+		markdownFormat: h.comparison,
+		jsonFormat:     h.jsonComparison,
+		pdfFormat:      h.pdfComparison,
 	}
 }
 
@@ -203,6 +233,10 @@ func (h *harness) deps() cli.Deps {
 			jsonFormat: {
 				NewReporter:           func(int) analysis.Reporter { return h.jsonReporter },
 				NewComparisonReporter: func(int) analysis.ComparisonReporter { return h.jsonComparison },
+			},
+			pdfFormat: {
+				NewReporter:           func(int) analysis.Reporter { return h.pdfReporter },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return h.pdfComparison },
 			},
 		},
 	}
@@ -330,6 +364,43 @@ func TestRunAssessToFile(t *testing.T) {
 
 		checkFileMode(t, dest)
 		checkOnlyFile(t, dir, "report.md")
+	})
+
+	t.Run("writes the pdf report's bytes unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		dest := filepath.Join(dir, "report.pdf")
+		h := newHarness(t)
+
+		code, stdout, stderr := h.run(t.Context(), "assess", "--inventory", inventoryPath,
+			"--target", targetKey, "--format", pdfFormat, "--output", dest)
+
+		if code != 0 {
+			t.Errorf("Run() = %d, want 0; stderr = %q", code, stderr)
+		}
+
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty with --output", stdout)
+		}
+
+		if stderr != "" {
+			t.Errorf("stderr = %q, want empty", stderr)
+		}
+
+		got, err := os.ReadFile(dest)
+		if err != nil {
+			t.Fatalf("the report file was not written: %v", err)
+		}
+
+		// The file holds the pdf reporter's bytes exactly, never a
+		// rendering of them.
+		if !bytes.Equal(got, []byte(pdfReportBody)) {
+			t.Errorf("report file = %q, want the pdf reporter's bytes %q", got, pdfReportBody)
+		}
+
+		checkFileMode(t, dest)
+		checkOnlyFile(t, dir, "report.pdf")
 	})
 
 	t.Run("replaces an existing file", func(t *testing.T) {
@@ -577,12 +648,14 @@ func TestRunAssessFormat(t *testing.T) {
 		format string
 		// wantBody is what stdout holds.
 		wantBody string
-		// wantJSON is true when the "json" format must have rendered the report.
-		wantJSON bool
+		// wantReporter is the --format value whose reporter must have rendered the
+		// report.
+		wantReporter string
 	}{
-		{name: "no format is markdown", wantBody: reportBody},
-		{name: "markdown named explicitly", format: markdownFormat, wantBody: reportBody},
-		{name: "json", format: jsonFormat, wantBody: jsonReportBody, wantJSON: true},
+		{name: "no format is markdown", wantBody: reportBody, wantReporter: markdownFormat},
+		{name: "markdown named explicitly", format: markdownFormat, wantBody: reportBody, wantReporter: markdownFormat},
+		{name: "json", format: jsonFormat, wantBody: jsonReportBody, wantReporter: jsonFormat},
+		{name: "pdf", format: pdfFormat, wantBody: pdfReportBody, wantReporter: pdfFormat},
 	}
 
 	for _, tc := range tests {
@@ -610,23 +683,23 @@ func TestRunAssessFormat(t *testing.T) {
 				t.Errorf("stdout = %q, want the selected format's output %q", stdout, tc.wantBody)
 			}
 
-			wantMarkdown, wantJSON := 1, 0
-			if tc.wantJSON {
-				wantMarkdown, wantJSON = 0, 1
-			}
+			// One format renders the report, through its own reporter.
+			for name, reporter := range h.reporters() {
+				want := 0
+				if name == tc.wantReporter {
+					want = 1
+				}
 
-			if h.reporter.calls != wantMarkdown {
-				t.Errorf("the markdown reporter was called %d times, want %d", h.reporter.calls, wantMarkdown)
-			}
-
-			if h.jsonReporter.calls != wantJSON {
-				t.Errorf("the json reporter was called %d times, want %d", h.jsonReporter.calls, wantJSON)
+				if reporter.calls != want {
+					t.Errorf("the %s reporter was called %d times, want %d", name, reporter.calls, want)
+				}
 			}
 
 			// One target renders a report, never a comparison.
-			if h.comparison.calls != 0 || h.jsonComparison.calls != 0 {
-				t.Errorf("a comparison reporter was called %d (markdown) and %d (json) times, want 0",
-					h.comparison.calls, h.jsonComparison.calls)
+			for name, comparison := range h.comparisons() {
+				if comparison.calls != 0 {
+					t.Errorf("the %s comparison reporter was called %d times, want 0", name, comparison.calls)
+				}
 			}
 		})
 	}
@@ -643,6 +716,7 @@ func TestRunAssessFormatUsage(t *testing.T) {
 		format string
 	}{
 		{name: "an unknown format", format: "yaml"},
+		{name: "an unknown format docx", format: "docx"},
 		{name: "an empty format", format: ""},
 		{name: "a format in another case", format: "JSON"},
 	}
@@ -664,6 +738,8 @@ func TestRunAssessFormatUsage(t *testing.T) {
 				t.Errorf("stdout = %q, want empty", stdout)
 			}
 
+			// The alternatives are the supported formats, sorted, so a user who
+			// mistypes one is offered the PDF report next to the others.
 			wantFirstLine := errPrefix + "unknown format " + text.Quote(tc.format) +
 				"; supported formats: " + supportedFormats
 
@@ -676,11 +752,62 @@ func TestRunAssessFormatUsage(t *testing.T) {
 				t.Errorf("stderr = %q, want usage text", stderr)
 			}
 
-			if len(h.paths) != 0 || h.reporter.calls != 0 || h.jsonReporter.calls != 0 {
-				t.Errorf("a usage error built adapters: inventory paths %q, markdown calls %d, json calls %d",
-					h.paths, h.reporter.calls, h.jsonReporter.calls)
+			if len(h.paths) != 0 || h.reporter.calls != 0 || h.jsonReporter.calls != 0 || h.pdfReporter.calls != 0 {
+				t.Errorf("a usage error built adapters: inventory paths %q, markdown calls %d, json calls %d, pdf calls %d",
+					h.paths, h.reporter.calls, h.jsonReporter.calls, h.pdfReporter.calls)
 			}
 		})
+	}
+}
+
+// TestRunAssessPDFSchemaVersionUsage pins --schema-version with --format pdf (PRD
+// #584 milestone 1, ADR 0049): the PDF report has no schemaVersion, so naming one
+// is a usage error, and a run never quietly ignores the flag. The error line
+// names both the flag and the format, the usage text follows it, nothing goes to
+// standard output, and no report is rendered or inventory read.
+func TestRunAssessPDFSchemaVersionUsage(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	code, stdout, stderr := h.run(t.Context(), "assess", "--inventory", inventoryPath,
+		"--target", targetKey, "--format", pdfFormat, "--schema-version", "3")
+
+	if code != 2 {
+		t.Errorf("Run() = %d, want 2; stderr = %q", code, stderr)
+	}
+
+	if stdout != "" {
+		t.Errorf("stdout = %q, want empty", stdout)
+	}
+
+	firstLine, _, _ := strings.Cut(stderr, "\n")
+
+	for _, want := range []string{"--schema-version", text.Quote(pdfFormat)} {
+		if !strings.Contains(firstLine, want) {
+			t.Errorf("the error line %q, want it to name %q", firstLine, want)
+		}
+	}
+
+	if !strings.Contains(strings.ToLower(stderr), "usage") {
+		t.Errorf("stderr = %q, want the usage text", stderr)
+	}
+
+	// No format renders a report, whether or not it is the one that was named.
+	for name, reporter := range h.reporters() {
+		if reporter.calls != 0 {
+			t.Errorf("the %s reporter was called %d times, want 0", name, reporter.calls)
+		}
+	}
+
+	for name, comparison := range h.comparisons() {
+		if comparison.calls != 0 {
+			t.Errorf("the %s comparison reporter was called %d times, want 0", name, comparison.calls)
+		}
+	}
+
+	if len(h.paths) != 0 {
+		t.Errorf("a usage error built adapters: inventory paths %q", h.paths)
 	}
 }
 

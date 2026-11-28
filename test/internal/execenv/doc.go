@@ -66,10 +66,18 @@
 // Env, once bound to a variable (a run chained to the construction is always
 // refused). test/lint admits `go build` and `go list`, which need the
 // environment and print none of it, and only while every literal flag is one
-// of its allow-list, e2eToolchainFlags (-trimpath, -o, -deps), so a flag the
-// go command gains later is refused until review adds it. The checker itself
-// takes the exemption away from a spread argument and on an assignment to
-// Path or Args.
+// of its allow-list, e2eToolchainFlags (-trimpath, -o, -deps, and -ldflags for
+// a value of -X stamps alone, each an import path, a symbol, one = and a plain
+// value, with no quote, no backslash and no white space other than a space or
+// a tab anywhere in the value, since cmd/go splits it with
+// cmd/internal/quoted.Split, where a quote at the start of a field opens a
+// field that runs to the matching quote, spaces included, so one quoted span
+// can carry a second linker flag, a backslash is an ordinary byte it never
+// unescapes and is refused defensively, and which splits on fewer characters
+// than strings.Fields: space, tab, \n and \r, not all of Unicode's white
+// space), so a flag the go command gains later is refused until review adds
+// it. The checker itself takes the exemption away from a spread argument and
+// on an assignment to Path or Args.
 //
 // Four gaps are accepted, and review holds them:
 //   - Flow-insensitivity: the check follows the source, not the flow, so an
