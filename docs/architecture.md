@@ -64,7 +64,11 @@ Arrows are imports. They point inwards only:
   and makes no network call. The PDF reporter, `adapter/report/pdfreport`
   ([ADR 0049](adr/0049-write-the-pdf-report-with-a-standard-library-writer.md), PRD #584), carries its
   own small PDF writer on the standard library: integer layout, the standard core fonts, every value
-  escaped into a literal string, the bytes the same on every release target. It cannot import
+  escaped into a literal string, the bytes the same on every release target. Since PRD #584 milestone
+  1b it draws the site's look with ADR 0049's sixteen content-stream operators: the site's light-theme
+  colours, fit badges whose vector icons sit beside their word, summary tiles, the required-changes and
+  blockers boxes, workload cards, and the site's "Planning a migration?" contact banner as plain text on
+  a filled box, with no link; each page's `/Resources` holds only `/Font`. It cannot import
   `internal/version`, so the composition root passes it the version line its footer shows
   (`pdfreport.New(version.String())`); `cmd/shift2eu` constructs it for `--format pdf`. The live
   sources share one strict allow list, `cloud-adapters-reach-the-cloud-through-the-sdk` (Cloud

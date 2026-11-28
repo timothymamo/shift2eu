@@ -43,13 +43,16 @@ const (
 const milli = 1000
 
 // seg is one piece of a paragraph: the report's own words (prose), which wrap
-// at spaces, or a value, already escaped, drawn in Courier and wrapped at the
-// boundaries of its escaped form.
+// at spaces, a value, already escaped, drawn in Courier and wrapped at the
+// boundaries of its escaped form, or a fit badge, which never wraps. colour,
+// when set, overrides the document's ink for the segment.
 type seg struct {
-	font  font
-	size  int
-	text  string
-	value bool
+	font   font
+	size   int
+	text   string
+	value  bool
+	colour colour
+	badge  *fitStyle
 }
 
 // words returns the report's own words in f at size.
@@ -62,13 +65,15 @@ func value(size int, raw string) seg {
 }
 
 // piece is one Tj of a laid-out line: its offset from the line's start, in
-// whole points, and its text.
+// whole points, and its text; or, for a badge, the badge drawn there.
 type piece struct {
-	font  font
-	size  int
-	x     int
-	text  string
-	value bool
+	font   font
+	size   int
+	x      int
+	text   string
+	value  bool
+	colour colour
+	badge  *fitStyle
 }
 
 // textLine is one laid-out line.
@@ -112,7 +117,7 @@ func (lb *lineBuilder) addWords(s seg, text string) {
 
 	if n := len(line.pieces); n > 0 {
 		last := &line.pieces[n-1]
-		if !last.value && last.font == s.font && last.size == s.size {
+		if !last.value && last.badge == nil && last.font == s.font && last.size == s.size && last.colour == s.colour {
 			last.text += text
 			lb.width += w
 
@@ -121,7 +126,29 @@ func (lb *lineBuilder) addWords(s seg, text string) {
 	}
 
 	x := lb.start()
-	line.pieces = append(line.pieces, piece{font: s.font, size: s.size, x: x / milli, text: text})
+	line.pieces = append(line.pieces, piece{font: s.font, size: s.size, x: x / milli, text: text, colour: s.colour})
+	lb.width = x + w
+}
+
+// addBadge adds a fit badge: a unit that never wraps, set a gap apart from a
+// badge or words before it on its line, and starting a new line when it does
+// not fit in what is left of this one.
+func (lb *lineBuilder) addBadge(s seg) {
+	w := badgeWidth(s.text) * milli
+
+	if lb.width > 0 {
+		if lb.start()+badgeGap*milli+w > lb.limit {
+			lb.newline()
+		} else {
+			lb.width = lb.start() + badgeGap*milli
+		}
+	}
+
+	x := lb.start()
+	line := lb.current()
+	line.pieces = append(line.pieces, piece{
+		font: helveticaBold, size: badgeSize, x: x / milli, text: s.text, badge: s.badge,
+	})
 	lb.width = x + w
 }
 
@@ -208,6 +235,7 @@ func (lb *lineBuilder) addValue(s seg) {
 			line := lb.current()
 			line.pieces = append(line.pieces, piece{
 				font: s.font, size: s.size, x: x / milli, text: strings.Join(units[:upTo], ""), value: true,
+				colour: s.colour,
 			})
 		}
 	}
@@ -267,9 +295,12 @@ func layoutSegs(width int, segs ...seg) []textLine {
 	lb := newLineBuilder(width)
 
 	for _, s := range segs {
-		if s.value {
+		switch {
+		case s.badge != nil:
+			lb.addBadge(s)
+		case s.value:
 			lb.addValue(s)
-		} else {
+		default:
 			lb.addProse(s)
 		}
 	}
@@ -295,19 +326,30 @@ type document struct {
 	kept keptHeadings
 	// inHeading is true while a heading's own lines are drawn.
 	inHeading bool
+	// left and width are the text column: the content area, or the inside of
+	// the box being drawn.
+	left, width int
+	// ink is the colour text is drawn in unless its segment sets its own.
+	ink colour
+	// box is the box being drawn, if any: a page break inside it closes its
+	// part on the old page and opens a part on the new one.
+	box *openBox
 }
 
 // keptHeadings marks the headings at the foot of the current page that no
-// body line has followed yet: they start at run index run of the page, at y.
+// body line has followed yet: they start at run index run and shape index
+// shape of the page, at y.
 type keptHeadings struct {
 	active bool
 	run    int
+	shape  int
 	y      int
 }
 
-// newDocument returns a document whose body runs from top down to bottom.
+// newDocument returns a document whose body runs from top down to bottom, its
+// text column the content area, drawn in --ink.
 func newDocument(top, bottom int) *document {
-	d := &document{top: top, bottom: bottom}
+	d := &document{top: top, bottom: bottom, left: marginLeft, width: contentWidth, ink: inkColour}
 	d.newPage()
 
 	return d
@@ -316,11 +358,28 @@ func newDocument(top, bottom int) *document {
 // page returns the page being drawn.
 func (d *document) page() *page { return d.pages[len(d.pages)-1] }
 
-// newPage starts a new page.
+// addShape adds a shape to the page being drawn and returns its index.
+func (d *document) addShape(s shape) int {
+	p := d.page()
+	p.shapes = append(p.shapes, s)
+
+	return len(p.shapes) - 1
+}
+
+// newPage starts a new page. A box being drawn closes its part on the old page
+// and opens its part on the new one first.
 func (d *document) newPage() {
+	if d.box != nil && len(d.pages) > 0 {
+		d.box.closePart(max(d.y-boxBreakGap, d.bottom-boxBreakGap))
+	}
+
 	d.pages = append(d.pages, &page{})
 	d.y = d.top
 	d.atTop = true
+
+	if d.box != nil {
+		d.box.openPart(d, d.top+boxContinueTop)
+	}
 
 	if d.onNewPage != nil {
 		draw := d.onNewPage
@@ -352,18 +411,27 @@ func (d *document) ensure(height int) {
 
 	old := d.page()
 	moved := slices.Clone(old.runs[d.kept.run:])
+	movedShapes := slices.Clone(old.shapes[d.kept.shape:])
 	old.runs = old.runs[:d.kept.run]
+	old.shapes = old.shapes[:d.kept.shape]
 	shift := d.top - d.kept.y
 	y := d.y + shift
 
 	d.newPage()
+
+	first := len(d.page().shapes)
+
+	for _, s := range movedShapes {
+		s.shift(shift)
+		d.page().shapes = append(d.page().shapes, s)
+	}
 
 	for _, run := range moved {
 		run.y += shift
 		d.page().runs = append(d.page().runs, run)
 	}
 
-	d.kept = keptHeadings{active: true, run: 0, y: d.top}
+	d.kept = keptHeadings{active: true, run: len(d.page().runs) - len(moved), shape: first, y: d.top}
 	d.y = y
 	d.atTop = false
 }
@@ -385,11 +453,25 @@ func (d *document) drawLine(line textLine, x, size, leading int) {
 
 // drawLineHere draws one line at the current position without moving down.
 func (d *document) drawLineHere(line textLine, x, size int) {
-	baseline := d.y - size
-	p := d.page()
+	d.drawLineAt(line, x, d.y-size)
+}
 
+// drawLineAt draws one line with its baseline at the y given, its badges
+// included.
+func (d *document) drawLineAt(line textLine, x, baseline int) {
 	for _, pc := range line.pieces {
-		p.runs = append(p.runs, textRun{font: pc.font, size: pc.size, x: x + pc.x, y: baseline, text: pc.text})
+		if pc.badge != nil {
+			d.drawBadge(x+pc.x, baseline, pc.badge, pc.text)
+
+			continue
+		}
+
+		ink := pc.colour
+		if ink == 0 {
+			ink = d.ink
+		}
+
+		d.run(textRun{font: pc.font, size: pc.size, x: x + pc.x, y: baseline, text: pc.text, colour: ink})
 	}
 
 	d.atTop = false
@@ -399,10 +481,24 @@ func (d *document) drawLineHere(line textLine, x, size int) {
 	}
 }
 
-// paragraph lays out segs at the left edge plus indent and draws them.
+// run draws one text run as it is given and marks the page as drawn on: a
+// body run ends a chain of kept headings.
+func (d *document) run(r textRun) {
+	p := d.page()
+	p.runs = append(p.runs, r)
+
+	d.atTop = false
+
+	if !d.inHeading {
+		d.kept = keptHeadings{}
+	}
+}
+
+// paragraph lays out segs at the text column's left edge plus indent and draws
+// them.
 func (d *document) paragraph(indent, size, leading int, segs ...seg) {
-	for _, line := range layoutSegs(contentWidth-indent, segs...) {
-		d.drawLine(line, marginLeft+indent, size, leading)
+	for _, line := range layoutSegs(d.width-indent, segs...) {
+		d.drawLine(line, d.left+indent, size, leading)
 	}
 }
 
@@ -413,17 +509,51 @@ func (d *document) body(segs ...seg) {
 
 // item draws a list item: a bullet, and the item's text indented after it.
 func (d *document) item(indent int, segs ...seg) {
-	lines := layoutSegs(contentWidth-indent-bulletIndent, segs...)
+	lines := layoutSegs(d.width-indent-bulletIndent, segs...)
 
 	for i, line := range lines {
 		d.ensure(bodyLeading)
 
 		if i == 0 {
 			d.drawLineHere(textLine{pieces: []piece{{font: helvetica, size: bodySize, text: "•"}}},
-				marginLeft+indent, bodySize)
+				d.left+indent, bodySize)
 		}
 
-		d.drawLine(line, marginLeft+indent+bulletIndent, bodySize, bodyLeading)
+		d.drawLine(line, d.left+indent+bulletIndent, bodySize, bodyLeading)
+	}
+}
+
+// headingStyle is how a heading is drawn: its ink, and whether a --ring rule
+// runs above it (a section heading), a 4 pt --gold rule stands at its left (a
+// comparison's per-target heading) or a --surface-2 band lies behind it (a
+// Resource details block's ID).
+type headingStyle struct {
+	ink      colour
+	rule     bool
+	goldLeft bool
+	band     bool
+}
+
+// The headings' shapes, in points: the gap under a section heading's rule, the
+// gold rule's width and the text's offset after it, and the band's padding.
+const (
+	headingRuleGap = 4
+	goldRuleWidth  = 4
+	goldRuleOffset = 10
+	bandPad        = 4
+	bandBelow      = 3
+)
+
+// indentOf returns how far a heading's text stands in from the column's left
+// edge, and the space its shapes add under its lines.
+func (s headingStyle) indentOf() (indent, extra int) {
+	switch {
+	case s.goldLeft:
+		return goldRuleOffset, 0
+	case s.band:
+		return bandPad, bandBelow
+	default:
+		return 0, 0
 	}
 }
 
@@ -432,12 +562,17 @@ func (d *document) item(indent int, segs ...seg) {
 // itself and keepWithHeading more; when the block that follows needs more than
 // that, the page break that block's ensure makes moves the heading along
 // (document.ensure).
-func (d *document) heading(size, leading, before int, segs ...seg) {
-	lines := layoutSegs(contentWidth, segs...)
+func (d *document) heading(style headingStyle, size, leading, before int, segs ...seg) {
+	indent, extra := style.indentOf()
+	lines := layoutSegs(d.width-indent, segs...)
 
 	d.space(before)
 
-	need := len(lines)*leading + keepWithHeading
+	if style.rule {
+		extra += headingRuleGap
+	}
+
+	need := len(lines)*leading + extra + keepWithHeading
 
 	chain := 0
 	if d.kept.active {
@@ -453,7 +588,10 @@ func (d *document) heading(size, leading, before int, segs ...seg) {
 		// lines; its first line follows the chain, and moves it along once
 		// when the page has no room for that line (a chain at the top of a
 		// page always leaves room for it).
+		ink := d.ink
+		d.ink = style.ink
 		d.body(resized(bodySize, segs)...)
+		d.ink = ink
 		d.y -= 2
 
 		return
@@ -462,19 +600,45 @@ func (d *document) heading(size, leading, before int, segs ...seg) {
 	d.ensure(need)
 
 	if !d.kept.active {
-		d.kept = keptHeadings{active: true, run: len(d.page().runs), y: d.y}
+		d.kept = keptHeadings{active: true, run: len(d.page().runs), shape: len(d.page().shapes), y: d.y}
 	}
+
+	d.headingShapes(style, len(lines)*leading)
 
 	// The ensure above left room for every line, so none of them breaks the
 	// page.
 	d.inHeading = true
 
+	ink := d.ink
+	d.ink = style.ink
+
 	for _, line := range lines {
-		d.drawLine(line, marginLeft, size, leading)
+		d.drawLine(line, d.left+indent, size, leading)
 	}
 
+	d.ink = ink
 	d.inHeading = false
+
+	if style.band {
+		d.y -= bandBelow
+	}
+
 	d.y -= 2
+}
+
+// headingShapes draws a heading's shapes for its lines, height points tall,
+// starting at the current position: the rule above it, which moves the text
+// down, the gold rule at its left, or the band behind it.
+func (d *document) headingShapes(style headingStyle, height int) {
+	switch {
+	case style.rule:
+		d.addShape(ruleLine(d.left, d.y, d.width))
+		d.y -= headingRuleGap
+	case style.goldLeft:
+		d.addShape(fillRect(d.left, d.y-height, goldRuleWidth, height, goldColour))
+	case style.band:
+		d.addShape(fillRect(d.left, d.y-height-bandBelow, d.width, height+bandBelow, surface2Colour))
+	}
 }
 
 // resized returns segs drawn at size, in their own fonts.
@@ -501,22 +665,28 @@ func headingSize(level int) int {
 }
 
 // section draws a heading of level 1, 2 or 3 made of segs, which are sized
-// with headingSize.
+// with headingSize, in --accent.
 func (d *document) section(level int, segs ...seg) {
+	d.styledSection(headingStyle{ink: accentColour}, level, segs...)
+}
+
+// styledSection draws a heading of level 1, 2 or 3 made of segs in style.
+func (d *document) styledSection(style headingStyle, level int, segs ...seg) {
 	switch level {
 	case 1:
-		d.heading(sectionSize, sectionLeading, 10, segs...)
+		d.heading(style, sectionSize, sectionLeading, 10, segs...)
 	case 2:
-		d.heading(subsectionSize, subLeading, 8, segs...)
+		d.heading(style, subsectionSize, subLeading, 8, segs...)
 	default:
-		d.heading(blockSize, blockLeading, 8, segs...)
+		d.heading(style, blockSize, blockLeading, 8, segs...)
 	}
 }
 
-// title draws a heading of the given level holding only the report's own
-// words.
+// title draws a section heading of the given level holding only the report's
+// own words: Helvetica-Bold in --accent under a --ring rule, as the site's
+// report parts.
 func (d *document) title(level int, text string) {
-	d.section(level, words(helveticaBold, headingSize(level), text))
+	d.styledSection(headingStyle{ink: accentColour, rule: true}, level, words(helveticaBold, headingSize(level), text))
 }
 
 // cell is one table cell: its paragraphs, stacked.
@@ -575,15 +745,28 @@ func (d *document) drawTable(t table) {
 		tableWidth += w
 	}
 
+	left := d.left
+
+	// drawHeader draws the header row on its --surface-2 fill, with the
+	// --ring rule under it.
 	drawHeader := func() {
-		d.drawRowLines(t.widths, header, 0, tallest(header))
-		d.page().rules = append(d.page().rules, rule{x: marginLeft, y: d.y - 1, w: tableWidth})
+		d.addShape(fillRect(left, d.y-headerHeight, tableWidth, headerHeight, surface2Colour))
+		d.drawRowLines(left, t.widths, header, 0, tallest(header))
 		d.y -= rowGap
+		d.addShape(ruleLine(left, d.y, tableWidth))
 	}
 
+	// The header row is a box's header: it never ends a page. It asks for room
+	// for itself and its first row, or the first row's first line when the
+	// row is taller than a page and is split anyway.
 	first := headerHeight
 	if len(rows) > 0 {
-		first += min(tallest(rows[0]), 3) * tableLeading
+		height := tallest(rows[0]) * tableLeading
+		if height > d.top-d.bottom-headerHeight {
+			height = tableLeading
+		}
+
+		first += height
 	}
 
 	d.ensure(first)
@@ -591,7 +774,7 @@ func (d *document) drawTable(t table) {
 
 	d.onNewPage = drawHeader
 
-	for _, row := range rows {
+	for r, row := range rows {
 		n := tallest(row)
 		height := n * tableLeading
 
@@ -606,11 +789,24 @@ func (d *document) drawTable(t table) {
 
 			fit := max(1, (d.y-d.bottom)/tableLeading)
 			end := min(n, i+fit)
-			d.drawRowLines(t.widths, row, i, end)
+
+			// An even row (the second, the fourth, ...) lies on --bg, its
+			// part on each page filled where it is drawn.
+			part := (end - i) * tableLeading
+			if end == n {
+				part += rowGap
+			}
+
+			if r%2 == 1 {
+				d.addShape(fillRect(left, d.y-part, tableWidth, part, bgColour))
+			}
+
+			d.drawRowLines(left, t.widths, row, i, end)
 			i = end
 		}
 
 		d.y -= rowGap
+		d.addShape(ruleLine(left, d.y, tableWidth))
 	}
 
 	d.onNewPage = nil
@@ -628,9 +824,9 @@ func tallest(row [][]textLine) int {
 
 // drawRowLines draws the lines from to end of every cell of a row, line by
 // line across the cells, so that each line's runs are drawn together.
-func (d *document) drawRowLines(widths []int, row [][]textLine, from, end int) {
+func (d *document) drawRowLines(left int, widths []int, row [][]textLine, from, end int) {
 	for i := from; i < end; i++ {
-		x := marginLeft
+		x := left
 
 		for c, lines := range row {
 			if i < len(lines) {

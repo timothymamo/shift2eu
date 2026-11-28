@@ -696,9 +696,9 @@ Test levels:
 Every milestone 1 criterion above keeps holding on the restyled goldens. Their tests change only where
 they name the operator table (below) or must expect the banner's text where it sits.
 
-- [ ] *Unit:* every golden of milestone 1 is regenerated with `-update` and matches byte for byte. No
+- [x] *Unit:* every golden of milestone 1 is regenerated with `-update` and matches byte for byte. No
   golden is added or dropped: each carries the styling, and each carries the banner once.
-- [ ] *Unit:* the test-only reader's operator table is exactly ADR 0049's amended set, each with its
+- [x] *Unit:* the test-only reader's operator table is exactly ADR 0049's amended set, each with its
   operand shape, and nothing else: `BT`, `ET`, `q`, `Q`, `f`, `S` and `h` with no operand; `Tf` with a
   font resource name and an integer; `Tm` with six integers; `Tj` with a literal string; `re` with four
   integers; `w` with one decimal; `rg` and `RG` with three decimals; `m` and `l` with two decimals. `G`,
@@ -707,20 +707,20 @@ they name the operator table (below) or must expect the banner's text where it s
   each of `G`, `g`, `k`, `K`, `B`, `b`, `c`, `v`, `y`, `F`, `f*`, `W`, `n`, `J`, `j`, `d`, `cs`, `scn`, `sh`,
   `gs`, `Do`, `BI`, `TJ`, `'` and `"`; so does a listed operator with an operand of the wrong shape (an
   integer for `rg`, a decimal for `re`, a missing or an extra operand).
-- [ ] *Unit:* every number in every content stream has its written form: an integer is ASCII digits
+- [x] *Unit:* every number in every content stream has its written form: an integer is ASCII digits
   only; a decimal is ASCII digits, `.`, and exactly three digits; neither has a sign or an exponent.
   Every `rg` and `RG` component is between `0.000` and `1.000`, every `m` and `l` coordinate within the
   page (0 to 595 and 0 to 842), and every `rg`/`RG` triple of every golden is a row of *Look*'s palette,
   written exactly as the table gives it.
-- [ ] *Unit:* the colour conversion, from a 0 to 255 byte, gives `(byte × 1000 + 127) / 255` thousandths
+- [x] *Unit:* the colour conversion, from a 0 to 255 byte, gives `(byte × 1000 + 127) / 255` thousandths
   written with three places: `0` is `0.000`, `11` is `0.043`, `255` is `1.000`, and every palette entry's
   hex gives the table's value. The no-floating-point test of milestone 1 passes unchanged.
-- [ ] *Unit:* badge words: in every golden, every rectangle filled in a fit's `-bg` colour is a badge,
+- [x] *Unit:* badge words: in every golden, every rectangle filled in a fit's `-bg` colour is a badge,
   holding one icon path and one text run, both in that fit's `-ink` colour, the text being the fit's word
   ("Direct", "Partial", "None"), alone or after a count. Every fit the page shows as a word in a Fit cell,
   a stacked comparison cell, a candidate table, a tile or a workload card is in such a badge. No `-bg`
   fill holds another fit's word.
-- [ ] *Unit:* icons: each badge's icon is its fit's shape: three points stroked for direct; a 16-sided
+- [x] *Unit:* icons: each badge's icon is its fit's shape: three points stroked for direct; a 16-sided
   closed polygon stroked plus a filled half for partial; two separate stroked lines for none. The
   blockers box's heading carries the filled triangle. No icon is a font glyph.
 - [ ] *Unit:* the banner: every golden holds, once, the four runs "Planning a migration?", "Questions
@@ -733,12 +733,12 @@ they name the operator table (below) or must expect the banner's text where it s
   builds a box near a page's end: a box's heading or header row is never the last text on a page; every
   text run of a box that spans pages lies inside a fill or outline of that box drawn on its own page; the
   banner, a tile row and a workload card that fits a page's body never span two pages.
-- [ ] *Unit:* the structural invariants of milestone 1 hold for every golden and in the fuzz test, with
+- [x] *Unit:* the structural invariants of milestone 1 hold for every golden and in the fuzz test, with
   the amended operator table, and the banned names gain `/Link`, `/XObject`, `/ExtGState`, `/Pattern`,
   `/Shading` and `/ColorSpace`: each page's `/Resources` holds only `/Font`. No `/Annots`, `/URI` or
   other milestone 1 banned name appears, the banner's address included. The object types stay
   milestone 1's set.
-- [ ] *Unit:* the text extracted from each golden still holds every section, value and detail milestone 1's
+- [x] *Unit:* the text extracted from each golden still holds every section, value and detail milestone 1's
   text tests check, in the same order; the only new text is the banner's.
 - [ ] *Review:* the PR states every golden PDF's size before and after, and the WebAssembly module's raw
   size and gzip size before and after. The module does not construct `pdfreport` until milestone 2, so

@@ -43,7 +43,7 @@ func plain(text string) seg { return words(helvetica, bodySize, text) }
 func writeVerdictDetails(d *document, a assessment.Assessment, v assessment.Verdict, blockers []mapping.Reason, level int) {
 	r := v.Resource
 
-	d.section(level, value(headingSize(level), r.ID))
+	d.styledSection(headingStyle{ink: inkColour, band: true}, level, value(headingSize(level), r.ID))
 
 	d.body(label("Raw type"), value(bodySize, r.RawType))
 	d.body(label("Category"), value(bodySize, string(r.Category)))
@@ -131,7 +131,7 @@ func writeCandidates(d *document, candidates []mapping.Candidate) {
 
 		t.rows = append(t.rows, []cell{
 			{append([]seg{value(tableSize, c.Offering.Name)}, globalMark(tableSize, c.Offering.Global)...)},
-			{{words(helvetica, tableSize, string(c.Fit))}},
+			{{badge(c.Fit, "")}},
 			{missing},
 		})
 	}

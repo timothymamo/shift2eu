@@ -32,24 +32,76 @@ const (
 )
 
 // textRun is one Tj: text, already escaped where it is a value, drawn in font
-// at size points with its baseline starting at x, y (points).
+// at size points and in colour with its baseline starting at x, y (points).
 type textRun struct {
-	font font
-	size int
+	font   font
+	size   int
+	x, y   int
+	text   string
+	colour colour
+}
+
+// rect is a rectangle in whole points: its left x, bottom y, width and height.
+// A rule is a rect of height 0, stroked.
+type rect struct {
+	x, y, w, h int
+}
+
+// point is one point of a path, in thousandths of a point.
+type point struct {
 	x, y int
-	text string
 }
 
-// rule is a horizontal hairline from x, y, w points long: a rectangle of
-// height 0, stroked with the thinnest line a device draws (line width 0).
-type rule struct {
-	x, y, w int
+// subpath is one subpath of a path: its points, joined by straight lines, and
+// whether it is closed back to its first point.
+type subpath struct {
+	points []point
+	closed bool
 }
 
-// page is what one page draws: its rules and its text runs, in drawing order.
+// shape is one path the page fills or strokes: its rectangles and subpaths, in
+// one colour, and for a stroke its line width in thousandths of a point. A
+// shape with neither rectangles nor subpaths draws nothing: a box keeps such a
+// placeholder where its fill goes until it knows the fill's height.
+type shape struct {
+	stroke   bool
+	colour   colour
+	width    int
+	rects    []rect
+	subpaths []subpath
+}
+
+// shift moves the shape up by dy points (down for a negative dy).
+func (s *shape) shift(dy int) {
+	for i := range s.rects {
+		s.rects[i].y += dy
+	}
+
+	for i := range s.subpaths {
+		for j := range s.subpaths[i].points {
+			s.subpaths[i].points[j].y += dy * milli
+		}
+	}
+}
+
+// fillRect returns a rectangle filled in c.
+func fillRect(x, y, w, h int, c colour) shape {
+	return shape{colour: c, rects: []rect{{x: x, y: y, w: w, h: h}}}
+}
+
+// ruleLine returns a horizontal 0.5 pt --ring rule from x, y, w points long.
+func ruleLine(x, y, w int) shape {
+	return shape{stroke: true, colour: ringColour, width: hairline, rects: []rect{{x: x, y: y, w: w}}}
+}
+
+// hairline is the width of every rule and outline: 0.5 pt, in thousandths.
+const hairline = 500
+
+// page is what one page draws: its shapes, then its text runs, each in drawing
+// order. Every shape is drawn under every run.
 type page struct {
-	rules []rule
-	runs  []textRun
+	shapes []shape
+	runs   []textRun
 }
 
 // pdfFile assembles the objects of the file and its cross-reference table.
@@ -133,20 +185,19 @@ func writeFile(pages []*page) string {
 // ref returns an indirect reference to object num.
 func ref(num int) string { return strconv.Itoa(num) + " 0 R" }
 
-// contentStream returns the content stream of p: its rules as black hairlines,
-// then one text object holding every run, each placed by an absolute text
-// matrix and drawn with Tj, the font selected only when it changes. Every
-// operand is an integer, a literal string or a font resource name.
+// contentStream returns the content stream of p: its shapes inside q and Q,
+// each pathed with re, m, l and h and completed with f or S, then one text
+// object holding every run, each placed by an absolute text matrix and drawn
+// with Tj. A colour (rg, RG), a line width (w) and a font (Tf) are set only
+// when they change. These sixteen operators are the whole set (ADR 0049,
+// Drawing: the operator set): every operand is an integer, a decimal of three
+// places, a literal string or a font resource name.
 func contentStream(p *page) string {
 	var b strings.Builder
 
-	if len(p.rules) > 0 {
-		b.WriteString("q\n0 G\n0 w\n")
-
-		for _, r := range p.rules {
-			b.WriteString(strconv.Itoa(r.x) + " " + strconv.Itoa(r.y) + " " + strconv.Itoa(r.w) + " 0 re\nS\n")
-		}
-
+	if len(p.shapes) > 0 {
+		b.WriteString("q\n")
+		writeShapes(&b, p.shapes)
 		b.WriteString("Q\n")
 	}
 
@@ -155,9 +206,15 @@ func contentStream(p *page) string {
 	var (
 		current font
 		size    int
+		ink     colour
 	)
 
 	for _, run := range p.runs {
+		if run.colour != ink {
+			ink = run.colour
+			b.WriteString("\n" + ink.operands() + " rg")
+		}
+
 		if run.font != current || run.size != size {
 			current, size = run.font, run.size
 			b.WriteString("\n/" + current.resourceName() + " " + strconv.Itoa(size) + " Tf")
@@ -170,4 +227,69 @@ func contentStream(p *page) string {
 	b.WriteString("\nET")
 
 	return b.String()
+}
+
+// writeShapes writes the shapes in order. The colour and line width start
+// unset after q, so the first shape of each kind sets its own.
+func writeShapes(b *strings.Builder, shapes []shape) {
+	var fill, stroke colour
+
+	width := -1
+
+	for _, s := range shapes {
+		if len(s.rects) == 0 && len(s.subpaths) == 0 {
+			continue
+		}
+
+		switch {
+		case s.stroke:
+			if s.colour != stroke {
+				stroke = s.colour
+				b.WriteString(stroke.operands() + " RG\n")
+			}
+
+			if s.width != width {
+				width = s.width
+				b.WriteString(decimal(width) + " w\n")
+			}
+		case s.colour != fill:
+			fill = s.colour
+			b.WriteString(fill.operands() + " rg\n")
+		}
+
+		for _, r := range s.rects {
+			b.WriteString(strconv.Itoa(r.x) + " " + strconv.Itoa(r.y) + " " + strconv.Itoa(r.w) + " " +
+				strconv.Itoa(r.h) + " re\n")
+		}
+
+		for _, sp := range s.subpaths {
+			for i, pt := range sp.points {
+				op := " l\n"
+				if i == 0 {
+					op = " m\n"
+				}
+
+				b.WriteString(decimal(pt.x) + " " + decimal(pt.y) + op)
+			}
+
+			if sp.closed {
+				b.WriteString("h\n")
+			}
+		}
+
+		if s.stroke {
+			b.WriteString("S\n")
+		} else {
+			b.WriteString("f\n")
+		}
+	}
+}
+
+// decimal writes n thousandths as a decimal with exactly three places and no
+// sign: 500 is "0.500", 43 is "0.043". The layout never draws below zero, so n
+// is never negative.
+func decimal(n int) string {
+	fraction := strconv.Itoa(n % milli)
+
+	return strconv.Itoa(n/milli) + "." + strings.Repeat("0", 3-len(fraction)) + fraction
 }

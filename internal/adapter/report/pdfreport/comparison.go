@@ -9,6 +9,7 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
+	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 )
 
 // ReportComparison writes the PDF comparison report of c and meta to w, laid
@@ -53,7 +54,7 @@ func (r *Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessme
 			title = append(title, value(titleSize, a.Target))
 		}
 
-		d.paragraph(0, titleSize, titleLeading, title...)
+		writeTitle(d, title...)
 		writeFacts(d, meta, source, assessments, true)
 
 		d.title(1, "Comparison")
@@ -66,9 +67,10 @@ func (r *Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessme
 		}
 
 		writeSharedBlockers(d, c)
+		d.banner()
 
 		for _, a := range assessments {
-			d.section(1, value(sectionSize, a.Target))
+			d.styledSection(headingStyle{ink: inkColour, goldLeft: true}, 1, value(sectionSize, a.Target))
 			writeBody(d, a, 2, noted)
 			writeDetails(d, a, 2)
 		}
@@ -113,8 +115,12 @@ func writeComparisonSummary(d *document, assessments []assessment.Assessment) {
 		counts[i] = fitCounts(a.Summary)
 	}
 
-	for row, label := range counts[0] {
-		cells := []cell{{{words(helvetica, tableSize, label[0])}}}
+	labels := []seg{
+		badge(mapping.Direct, ""), badge(mapping.Partial, ""), badge(mapping.None, ""), words(helvetica, tableSize, "total"),
+	}
+
+	for row := range counts[0] {
+		cells := []cell{{{labels[row]}}}
 
 		for _, c := range counts {
 			cells = append(cells, cell{{words(helvetica, tableSize, c[row][1])}})
@@ -169,7 +175,7 @@ func writeComparisonResources(d *document, assessments []assessment.Assessment) 
 
 		for _, a := range assessments {
 			tv := a.Verdicts[i]
-			stacked := cell{{words(helvetica, tableSize, string(tv.Fit))}}
+			stacked := cell{{badge(tv.Fit, "")}}
 
 			if tv.BestOffering != "" {
 				stacked = append(stacked, append([]seg{value(tableSize, tv.BestOffering)},
@@ -193,14 +199,6 @@ func writeComparisonResources(d *document, assessments []assessment.Assessment) 
 // with one nested item per target, named by its display name, giving its
 // reasons, or "None.".
 func writeSharedBlockers(d *document, c assessment.Comparison) {
-	d.title(2, "Blockers on every target")
-
-	if len(c.SharedBlockers) == 0 {
-		none(d)
-
-		return
-	}
-
 	// Target keys are unique by contract, and Validate has checked that every
 	// key a shared blocker names is compared.
 	names := make(map[string]string, len(c.Targets))
@@ -208,12 +206,18 @@ func writeSharedBlockers(d *document, c assessment.Comparison) {
 		names[t.Key] = t.Assessment.Target
 	}
 
+	var items []func(*document)
+
 	for _, blocker := range c.SharedBlockers {
-		d.item(0, value(bodySize, blocker.ResourceID))
+		items = append(items, func(d *document) { d.item(0, value(bodySize, blocker.ResourceID)) })
 
 		for _, t := range blocker.Targets {
-			d.item(bulletIndent, append([]seg{value(bodySize, names[t.Key]), plain(": ")},
-				reasonsSegs(bodySize, t.Reasons)...)...)
+			items = append(items, func(d *document) {
+				d.item(bulletIndent, append([]seg{value(bodySize, names[t.Key]), plain(": ")},
+					reasonsSegs(bodySize, t.Reasons)...)...)
+			})
 		}
 	}
+
+	d.noticeBox(warnBox, 2, warnInkColour, true, "Blockers on every target", items)
 }

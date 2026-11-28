@@ -74,7 +74,12 @@ Markdown report's content, in the same order and words: the header facts, the su
 the required changes, the blockers, the workloads, the cost estimate, each resource's details, how the
 report is worked out and what it is based on. Every page's header names the target (or the number of
 targets compared), and its footer names the build (the line `shift2eu version` prints) and the page
-number. It is A4, uses the PDF's standard fonts (values from the inventory and the catalogs in Courier)
+number. It has the site's look: its colours, a badge for every fit with an icon beside the word
+(Direct, Partial, None, so a fit reads the same printed in greyscale), summary tiles, the required changes
+and blockers in boxes, and a card per workload. Once per document, after the results (in a comparison,
+after the Comparison section) and before the resource details, it carries the site's "Planning a
+migration?" banner with the project's contact address as plain text, not a link.
+It is A4, uses the PDF's standard fonts (values from the inventory and the catalogs in Courier)
 and holds no creation date, link, script, form or embedded file, so the same inventory and options give
 the same bytes on every run of the same build. A resource's estimate details say whether its hours were assumed (730 a
 month) or given by the inventory, and any billing cap, but do not print the hours the inventory gives.

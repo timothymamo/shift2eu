@@ -412,14 +412,17 @@ var publicTLDs = []string{
 var exampleDomains = []string{"example.com", "example.net", "example.org"}
 
 // providerDomains are the public domains of the sources, the targets and the
-// tools this repository names. Their apex and a name exactly one label below it
-// (a service's endpoint) are no finding; a deeper name is one a customer chose
-// (a bucket, a database, a registry), the value most likely to be real.
+// tools this repository names, and the project's own (its site and the contact
+// address every PDF report's banner shows, PRD #584 milestone 1b). Their apex
+// and a name exactly one label below it (a service's endpoint) are no finding;
+// a deeper name is one a customer chose (a bucket, a database, a registry), the
+// value most likely to be real.
 var providerDomains = []string{
 	"amazon.com", "amazonaws.com", "azure.com", "azure.net", "microsoft.com", "windows.net",
 	"google.com", "googleapis.com",
 	"ovh.com", "ovh.net", "ovhcloud.com", "scaleway.com", "scw.cloud", "upcloud.com",
 	"github.com", "githubusercontent.com", "ghcr.io", "go.dev", "golang.org",
+	"shift2eu.com",
 }
 
 // isAllowedHost reports whether host, lower-case, is an example domain's name
