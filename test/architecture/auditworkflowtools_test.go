@@ -17,7 +17,10 @@ import (
 // GOWORK=off, and fails the run with a clear ::error when the read gives nothing
 // or more than one line, so a failed read cannot end the step with a bare
 // non-zero exit and a two-line read cannot build the tool with a value that is
-// no Go version.
+// no Go version. The value those two checks let through is held to the shapes
+// go.mod's go line takes by issue #713's third check, the shape pin of
+// auditworkflowgomodread_test.go: here, the empty-value and the one-line check
+// are read out of the step, and there the whole fragment runs.
 
 // auditGoDirective matches go.mod's go line: the Go version every build of the
 // module uses, and the one the checks job must build govulncheck with (issue
@@ -889,9 +892,12 @@ func auditGovulncheckToolchainReadsTheVariable(install, name, where string) []st
 	return nil
 }
 
-// auditGoModReadCheck is one of the two checks the read of go.mod's Go needs: the
-// condition that identifies its if block, and the block the step holds for it,
-// which is nil until one matches (issue #710).
+// auditGoModReadCheck is one of the two checks the read of go.mod's Go needs here:
+// the condition that identifies its if block, and the block the step holds for it,
+// which is nil until one matches (issue #710). The read's third check - that the
+// value is a Go version - is issue #713's shape pin in
+// auditworkflowgomodread_test.go's auditInstallGoModGoShapeCheck, which compares
+// the block's opening line with the one form the check takes.
 type auditGoModReadCheck struct {
 	label string
 	match func(condition string) bool
@@ -901,7 +907,11 @@ type auditGoModReadCheck struct {
 // auditGovulncheckGoModReadChecks returns what the step lacks to fail the run with
 // an ::error when the read of go.mod's Go gives nothing or more than one line: an
 // if block between the read and the install for each, with the block's own
-// ::error and exit 1 (issue #710). The step runs under set -euo pipefail, so a
+// ::error and exit 1 (issue #710). It checks those two and no more: the third
+// check of the read, that the value is a Go version, is issue #713's shape pin,
+// auditInstallGoModGoShapeCheck in auditworkflowgomodread_test.go, and the
+// fragment that runs all three is that file's
+// TestAuditGovulncheckGoModReadFailsTheStepClearly. The step runs under set -euo pipefail, so a
 // check that only prints, or that exits outside its block, either ends the step
 // with no message or goes on to build govulncheck with a value that is no Go
 // version at all.
@@ -1031,10 +1041,12 @@ func auditReadsWithGOWORKOff(lines []string, at int) bool {
 	return false
 }
 
-// auditGoModReadStep is the install step's read of go.mod's Go and the checks that
-// fail the run when it gives nothing or more than one line, as the case's lines
-// give them: the base shape every case of
-// TestAuditGovulncheckGoModReadFailsClearly is written from (issue #710).
+// auditGoModReadStep is the install step's read of go.mod's Go and the two checks
+// that fail the run when it gives nothing or more than one line, as the case's
+// lines give them: the base shape every case of
+// TestAuditGovulncheckGoModReadFailsClearly is written from (issue #710). The
+// read's third check, that the value is a Go version, is issue #713's shape pin in
+// auditworkflowgomodread_test.go, whose cases add those lines to this base.
 var auditGoModReadStep = []string{
 	`gomod_go="$(GOWORK=off go list -m -f '{{.GoVersion}}')" || gomod_go=""`,
 	`if [ -z "${gomod_go}" ]; then`,

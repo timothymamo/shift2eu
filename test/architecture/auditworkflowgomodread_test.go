@@ -135,9 +135,9 @@ func auditGoModReadFragmentOf(script []string) ([]string, string) {
 	return fragment, ""
 }
 
-// auditFragmentLineShape is one of the exact line shapes the install step's
-// fragment may hold: a name for the reader, and the expression every line of that
-// shape matches in full (issue #713).
+// auditFragmentLineShape is one of the exact line shapes a step's script this file
+// runs may hold: a name for the reader, and the expression every line of that shape
+// matches in full (issue #713).
 type auditFragmentLineShape struct {
 	name    string
 	pattern *regexp.Regexp
@@ -196,10 +196,127 @@ func auditFragmentShapeOf(trimmed string) (auditFragmentLineShape, bool) {
 	return auditFragmentLineShape{}, false
 }
 
+// auditModulesLineShapes are the exact line shapes the checks job's "Download the
+// Go modules" step may hold (issue #713): the shell's strict-mode line, the guard
+// that fails the run when the value the install step checked never reached the
+// step, the line that takes that value, the two module downloads, and the three
+// checks that hold every Go command after them to it, with their ::error, exit 1
+// and fi lines. This file runs the whole step under make test, so every line of it
+// must match one of these in full, and nothing else: a list of words that fetch
+// cannot bound a script this test runs, as a curl line in the step proved.
+var auditModulesLineShapes = []auditFragmentLineShape{
+	{
+		name:    "the shell's strict mode",
+		pattern: regexp.MustCompile(`^set -euo pipefail$`),
+	},
+	{
+		name:    "the guard that the install step's value reached the step",
+		pattern: regexp.MustCompile(`^if \[ -z "\$\{gomod_go:-\}" \]; then$`),
+	},
+	{
+		name:    "the line that takes the value from the job's environment",
+		pattern: regexp.MustCompile(`^want="go\$\{gomod_go\}"$`),
+	},
+	{
+		name:    "the download of the root module's modules",
+		pattern: regexp.MustCompile(`^go mod download$`),
+	},
+	{
+		name:    "the download of the tools module's modules",
+		pattern: regexp.MustCompile(`^go -C tools mod download$`),
+	},
+	{
+		name:    "the check that the go command is go.mod's Go",
+		pattern: regexp.MustCompile(`^if \[ "\$\(go env GOVERSION\)" != "\$\{want\}" \]; then$`),
+	},
+	{
+		name:    "the reset of the exit code a timed run records",
+		pattern: regexp.MustCompile(`^rc=0$`),
+	},
+	{
+		name:    "the timed read of govulncheck's version",
+		pattern: regexp.MustCompile(`^timeout 1m govulncheck -version > "\$\{RUNNER_TEMP\}/govulncheck-version\.txt" 2>&1 \|\| rc=\$\?$`),
+	},
+	{
+		name:    "the check that govulncheck -version names go.mod's Go",
+		pattern: regexp.MustCompile(`^if \[ "\$\{rc\}" -ne 0 \] \|\| ! grep -qxF "Go: \$\{want\}" "\$\{RUNNER_TEMP\}/govulncheck-version\.txt"; then$`),
+	},
+	{
+		name:    "the read of the built tool's Go",
+		pattern: regexp.MustCompile(`^built="\$\(go version "\$\{RUNNER_TEMP\}/bin/govulncheck"\)"$`),
+	},
+	{
+		name:    "the check that the tool was built with go.mod's Go",
+		pattern: regexp.MustCompile(`^if \[ "\$\{built##\* \}" != "\$\{want\}" \]; then$`),
+	},
+	{
+		name:    "the ::error of a check",
+		pattern: regexp.MustCompile(`^echo "::error title=[A-Za-z0-9 ]+::([^"$\x60\\]|\$\{want\})*"$`),
+	},
+	{
+		name:    "the exit 1 of a check",
+		pattern: regexp.MustCompile(`^exit 1$`),
+	},
+	{
+		name:    "the fi that closes a check",
+		pattern: regexp.MustCompile(`^fi$`),
+	},
+}
+
+// auditModulesShapeOf returns the shape trimmed matches, and false for a line no
+// shape of the modules step holds (issue #713).
+func auditModulesShapeOf(trimmed string) (auditFragmentLineShape, bool) {
+	for _, shape := range auditModulesLineShapes {
+		if shape.pattern.MatchString(trimmed) {
+			return shape, true
+		}
+	}
+
+	return auditFragmentLineShape{}, false
+}
+
+// auditModulesStepScriptOf returns the script auditModulesStepScript runs, and the
+// reason the step's script holds none this test may run, as the message that
+// reason deserves: every non-comment line of it must match one of the exact shapes
+// the step uses before this test runs any of them (issue #713).
+func auditModulesStepScriptOf(script []string) ([]string, string) {
+	for _, line := range script {
+		trimmed := strings.TrimSpace(line)
+
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		if _, ok := auditModulesShapeOf(trimmed); ok {
+			continue
+		}
+
+		return nil, fmt.Sprintf(`%s's checks job, step %q, holds %q, and that line is no shape this test runs: this test runs the whole step - the guard, the value it takes and the checks that hold every Go command to it - under set -euo pipefail, so every line of it must match one of the exact shapes the step uses, in full, and nothing else. A list of words that fetch cannot bound a script this test runs: a command of another name, a tab where the list counted a space, or a substitution inside a message all reach the network without naming anything such a list holds (issues #710 and #713)`,
+			auditWorkflow, auditGoModulesStepName, trimmed)
+	}
+
+	return script, ""
+}
+
+// auditModulesStepScript returns the modules step's script, its every line held to
+// the exact shapes the step uses before this file runs it (issue #713).
+func auditModulesStepScript(t *testing.T, step auditJobStep) []string {
+	t.Helper()
+
+	script, problem := auditModulesStepScriptOf(auditStepScript(t, step))
+	if problem != "" {
+		t.Fatal(problem)
+	}
+
+	return script
+}
+
 // auditGoModGoEnvWrite matches the line that hands the install step's checked
 // value to the job's later steps: echo "gomod_go=${gomod_go}" >> "$GITHUB_ENV"
-// (issue #713).
-var auditGoModGoEnvWrite = regexp.MustCompile(`^echo "([A-Za-z_][A-Za-z0-9_]*)=\$\{([A-Za-z_][A-Za-z0-9_]*)\}" >> "\$\{?GITHUB_ENV\}?"$`)
+// or its braces spelling, and neither a brace it never opened nor one it never
+// closes, which is a path of another name that hands the job nothing (issue
+// #713).
+var auditGoModGoEnvWrite = regexp.MustCompile(`^echo "([A-Za-z_][A-Za-z0-9_]*)=\$\{([A-Za-z_][A-Za-z0-9_]*)\}" >> "(\$GITHUB_ENV|\$\{GITHUB_ENV\})"$`)
 
 // auditGoModGoDefault matches the line a step gives gomod_go its empty default on,
 // above the guard that reports a value the step never received (issue #713).
@@ -226,22 +343,23 @@ var auditGoListCommand = regexp.MustCompile(`\bgo list\b`)
 
 // auditGoModGoShapeCheck returns the if block between a step's read of go.mod's Go
 // and the line that uses it at which the step holds the value to the shapes
-// go.mod's go line takes, and false when the step holds none (issue #713).
-func auditGoModGoShapeCheck(lines []string, readAt, usedAt int) (auditShellIfBlock, bool) {
+// go.mod's go line takes, and false when the step holds none (issue #713). The
+// line that opens the block is compared with the one form the check takes, in
+// full: a check that only holds the shape somewhere lets every value through with
+// one alternation beside it, as ^1\.[0-9]+(\.[0-9]+)?$|^.*$ does (issue #713).
+func auditGoModGoShapeCheck(lines []string, readAt, usedAt int, name string) (auditShellIfBlock, bool) {
+	want := fmt.Sprintf(`if ! [[ "${%s}" =~ %s ]]; then`, name, auditGoModGoVersionShape)
+
 	for _, block := range auditShellIfBlocks(lines) {
 		if block.open <= readAt || block.open >= usedAt {
 			continue
 		}
 
-		condition := auditIfBlockCondition(block.body)
-
-		if !strings.HasPrefix(strings.TrimSpace(lines[block.open]), "if !") {
+		if strings.TrimSpace(lines[block.open]) != want {
 			continue
 		}
 
-		if strings.Contains(condition, "=~") && strings.Contains(condition, auditGoModGoVersionShape) {
-			return block, true
-		}
+		return block, true
 	}
 
 	return auditShellIfBlock{}, false
@@ -254,7 +372,7 @@ func auditGoModGoShapeCheck(lines []string, readAt, usedAt int) (auditShellIfBlo
 // cannot fetch, so the step would fail with a go error instead of a message of its
 // own.
 func auditInstallGoModGoShapeCheck(lines []string, readAt, usedAt int, name, where string) []string {
-	block, ok := auditGoModGoShapeCheck(lines, readAt, usedAt)
+	block, ok := auditGoModGoShapeCheck(lines, readAt, usedAt, name)
 	if !ok {
 		return []string{fmt.Sprintf(`%s holds no if block between its read of go.mod's Go and the line that uses it which tests %s against %s: the step needs it as if ! [[ "${%s}" =~ %s ]]; then, with an ::error and an exit 1 of its own, before anything builds with the value (issue #713)`,
 			where, name, auditGoModGoVersionShape, name, auditGoModGoVersionShape)}
@@ -710,6 +828,14 @@ func TestAuditFragmentLineShapesHoldTheFragmentToTheStepsOwnLines(t *testing.T) 
 			shaped: true,
 		},
 		{
+			name: "a write that closes a brace it never opened",
+			line: `echo "gomod_go=${gomod_go}" >> "$GITHUB_ENV}"`,
+		},
+		{
+			name: "a write that opens a brace it never closes",
+			line: `echo "gomod_go=${gomod_go}" >> "${GITHUB_ENV"`,
+		},
+		{
 			name: "an if block whose condition runs another program",
 			line: `if python3 -c 'x'; then`,
 		},
@@ -765,21 +891,8 @@ func TestAuditFragmentLineShapesHoldTheFragmentToTheStepsOwnLines(t *testing.T) 
 func auditWriteFakeGo(t *testing.T, dir, body string) {
 	t.Helper()
 
-	script := "#!/bin/sh\n" +
-		"printf '%s' \"${GOWORK-none}\" > '" + filepath.Join(dir, "gowork") + "'\n" +
-		body + "\n"
-
-	path := filepath.Join(dir, "go")
-	if err := os.WriteFile(path, []byte(script), 0o600); err != nil {
-		t.Fatalf("write the fake go command into %s: %v", dir, err)
-	}
-
-	// A shell script the fragment's PATH finds needs its execute bit.
-	// The write itself stays at 0600, which gosec wants, and the mode comes
-	// after it.
-	if err := os.Chmod(path, os.FileMode(0o755)); err != nil {
-		t.Fatalf("make the fake go command %s executable: %v", path, err)
-	}
+	auditWriteFakeProgram(t, dir, "go",
+		"printf '%s' \"${GOWORK-none}\" > '"+filepath.Join(dir, "gowork")+"'\n"+body)
 }
 
 // TestAuditGovulncheckGoModReadFailsTheStepClearly runs the checks job's read of
@@ -914,6 +1027,20 @@ func TestAuditGovulncheckGoModReadFailsTheStepClearly(t *testing.T) {
 					string(recorded), "off")
 			}
 
+			if tc.wantFail {
+				written, readErr := os.ReadFile(envFile)
+
+				switch {
+				case readErr != nil && !os.IsNotExist(readErr):
+					t.Fatalf("read the environment file the step's write goes to: %v", readErr)
+				case len(written) != 0:
+					t.Errorf("the step wrote %q to $GITHUB_ENV (%s), want no file or an empty one: the step's checks failed the read, and a failed read must hand nothing to the job's later steps, or a step after it builds with a value this one refused (issue #713)",
+						string(written), tc.name)
+				}
+
+				return
+			}
+
 			if tc.wantValue == "" {
 				return
 			}
@@ -943,6 +1070,9 @@ func auditWriteFakeProgram(t *testing.T, dir, name, body string) {
 		t.Fatalf("write the fake %s command into %s: %v", name, dir, err)
 	}
 
+	// The 0755 is what makes the file a command the step's PATH finds: it
+	// lives in the case's own t.TempDir(), so the write stays 0600 and the
+	// mode follows it.
 	if err := os.Chmod(path, os.FileMode(0o755)); err != nil {
 		t.Fatalf("make the fake %s command %s executable: %v", name, path, err)
 	}
@@ -955,7 +1085,9 @@ func auditWriteFakeProgram(t *testing.T, dir, name, body string) {
 // install step, through the job's environment: a step that never received it -
 // unset or empty - fails the run with its own ::error and exit 1, and the value
 // the install step checked lets the step through past its guard, after which its
-// go commands run with no go list of their own.
+// go commands run with no go list of their own. The step's lines are held to the
+// exact shapes the step uses before any of them runs, so this test runs nothing
+// the step does not do (issues #710 and #713).
 func TestAuditGoModulesStepTakesTheInstallStepsCheckedValue(t *testing.T) {
 	t.Parallel()
 
@@ -967,7 +1099,7 @@ func TestAuditGoModulesStepTakesTheInstallStepsCheckedValue(t *testing.T) {
 			auditWorkflow, auditGoModulesStepName)
 	}
 
-	script := auditStepScript(t, step)
+	script := auditModulesStepScript(t, step)
 
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -1078,6 +1210,212 @@ func TestAuditGoModulesStepTakesTheInstallStepsCheckedValue(t *testing.T) {
 
 			if !strings.Contains(string(recorded), "mod download") {
 				t.Errorf("the step ran no go mod download (%q): the value the install step checked must let the step past its guard to the work it does (issue #713)", string(recorded))
+			}
+		})
+	}
+}
+
+// TestAuditGoModulesStepAllowsOnlyTheShapesTheStepUses pins which lines of the
+// checks job's "Download the Go modules" step this file runs (issue #713): the
+// step's script runs under make test, so every one of its lines must match one of
+// the exact shapes the step uses, in full, and a line of another shape is refused
+// before any of them runs. A curl line added to the step ran with every test
+// passing before this pin: the shapes hold the test to the step's own lines and
+// nothing else.
+func TestAuditGoModulesStepAllowsOnlyTheShapesTheStepUses(t *testing.T) {
+	t.Parallel()
+
+	steps := auditJobSteps(auditJobLines(t, "checks"))
+
+	step, ok := auditGoModulesStep(steps)
+	if !ok {
+		t.Fatalf("%s's checks job holds no %q step: that step's script is what this test reads (issue #713)",
+			auditWorkflow, auditGoModulesStepName)
+	}
+
+	script := auditStepScript(t, step)
+
+	// The line goes straight after set -euo pipefail, where a line the step
+	// grows would land.
+	withLine := func(line string) []string {
+		return slices.Concat(script[:1], []string{"          " + line}, script[1:])
+	}
+
+	for _, tc := range []struct {
+		name   string
+		script []string
+		line   string // the offending line, for a step this test may not run
+	}{
+		{
+			name:   "the step's own script",
+			script: script,
+		},
+		{
+			name:   "a curl line in the step",
+			script: withLine(`curl --version > "${RUNNER_TEMP}/curl-ran"`),
+			line:   `curl --version > "${RUNNER_TEMP}/curl-ran"`,
+		},
+		{
+			name:   "a git fetch line in the step",
+			script: withLine(`git fetch origin`),
+			line:   `git fetch origin`,
+		},
+		{
+			name:   "a git fetch behind a literal tab",
+			script: withLine("git\tfetch"),
+			line:   "git\tfetch",
+		},
+		{
+			name:   "a go list in the step",
+			script: withLine(`go list -m -f '{{.GoVersion}}'`),
+			line:   `go list -m -f '{{.GoVersion}}'`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, problem := auditModulesStepScriptOf(tc.script)
+
+			if tc.line == "" {
+				if problem != "" {
+					t.Fatalf("auditModulesStepScriptOf(the step's own script) = %q, want no problem: every line of the step the checks job runs is one of the shapes this test holds it to (issue #713)", problem)
+				}
+
+				if len(got) == 0 {
+					t.Fatalf("auditModulesStepScriptOf(the step's own script) returned no script: this test runs the step's own lines, never a copy of them (issue #713)")
+				}
+
+				return
+			}
+
+			if problem == "" {
+				t.Fatalf("auditModulesStepScriptOf(a step whose script holds %q) reported no problem, want that line refused: this test runs the whole step, so every line of it must match one of the exact shapes the step uses, in full (issue #713)", tc.line)
+			}
+
+			if len(got) != 0 {
+				t.Errorf("auditModulesStepScriptOf(a step whose script holds %q) returned the script %q beside its problem %q, want none: a script the test may not run is no script to run (issue #713)", tc.line, got, problem)
+			}
+
+			if !strings.Contains(problem, fmt.Sprintf("%q", tc.line)) {
+				t.Errorf("auditModulesStepScriptOf(a step whose script holds %q) = %q, want a message quoting that line: the refusal must say which line of the step the test may not run (issue #713)", tc.line, problem)
+			}
+		})
+	}
+}
+
+// auditGoModGoShapeCheckLines is the install step's check that go.mod's Go is a Go
+// version and the write of the checked value to $GITHUB_ENV, as the step has them
+// (issue #713): the lines a case of
+// TestAuditGoModGoOncePerJobRejectsALoosenedShapeOrWrite keeps, or mutates in the
+// one line it changes.
+var auditGoModGoShapeCheckLines = []string{
+	`if ! [[ "${gomod_go}" =~ ^1\.[0-9]+(\.[0-9]+)?$ ]]; then`,
+	`  echo "::error title=Audit checks::go.mod's go line read as no Go version"`,
+	`  exit 1`,
+	`fi`,
+	`echo "gomod_go=${gomod_go}" >> "${GITHUB_ENV}"`,
+}
+
+// auditGoModulesStepLines is the "Download the Go modules" step's guard and the
+// line that takes the install step's checked value, as the step has them (issue
+// #713).
+var auditGoModulesStepLines = []string{
+	`set -euo pipefail`,
+	`if [ -z "${gomod_go:-}" ]; then`,
+	`  echo "::error title=Audit checks::go.mod's Go read by the install step did not reach this step"`,
+	`  exit 1`,
+	`fi`,
+	`want="go${gomod_go}"`,
+}
+
+// auditGoModGoSteps returns the checks job a case of
+// TestAuditGoModGoOncePerJobRejectsALoosenedShapeOrWrite reads: the
+// install step, with the read and its two checks of issue #710 and the case's own
+// lines above the install, and the modules step with the case's script (issue
+// #713).
+func auditGoModGoSteps(install, modules []string) []auditJobStep {
+	installStep := auditGovulncheckToolchainStep(auditGovulncheckToolchainCase{
+		derive:  slices.Concat(auditGoModReadStep, install),
+		install: auditGoModReadInstall,
+	})
+
+	modulesStep := auditJobStep{
+		name: auditGoModulesStepName,
+		lines: []string{
+			"      - name: " + auditGoModulesStepName,
+			"        run: |",
+		},
+	}
+
+	for _, line := range modules {
+		modulesStep.lines = append(modulesStep.lines, "          "+line)
+	}
+
+	return []auditJobStep{installStep, modulesStep}
+}
+
+// TestAuditGoModGoOncePerJobRejectsALoosenedShapeOrWrite pins the two checks the
+// job's one read of go.mod's Go adds to issue #710's (issue #713): the
+// install step holds the value it read to the shapes go.mod's go line takes, and
+// writes that checked value to $GITHUB_ENV for the modules step. A check that
+// keeps the shape somewhere in its line lets every value through with an
+// alternation beside it, as ^1\.[0-9]+(\.[0-9]+)?$|^.*$ does, and a write whose
+// braces do not match is a path of another name that hands the job nothing: each
+// is a case here.
+func TestAuditGoModGoOncePerJobRejectsALoosenedShapeOrWrite(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		install []string // the install step's lines from the shape check on
+		want    int
+	}{
+		{
+			name:    "the step holds the value to a Go version and writes it to $GITHUB_ENV",
+			install: auditGoModGoShapeCheckLines,
+		},
+		{
+			name: "the Go-version check lets every value through with an alternation beside the shape",
+			install: slices.Concat(
+				[]string{`if ! [[ "${gomod_go}" =~ ^1\.[0-9]+(\.[0-9]+)?$|^.*$ ]]; then`},
+				auditGoModGoShapeCheckLines[1:],
+			),
+			want: 1,
+		},
+		{
+			name: "the Go-version check tests another variable than the read filled",
+			install: slices.Concat(
+				[]string{`if ! [[ "${want}" =~ ^1\.[0-9]+(\.[0-9]+)?$ ]]; then`},
+				auditGoModGoShapeCheckLines[1:],
+			),
+			want: 1,
+		},
+		{
+			name: "the write closes a brace it never opened",
+			install: slices.Concat(
+				auditGoModGoShapeCheckLines[:4],
+				[]string{`echo "gomod_go=${gomod_go}" >> "$GITHUB_ENV}"`},
+			),
+			want: 2,
+		},
+		{
+			name: "the write opens a brace it never closes",
+			install: slices.Concat(
+				auditGoModGoShapeCheckLines[:4],
+				[]string{`echo "gomod_go=${gomod_go}" >> "${GITHUB_ENV"`},
+			),
+			want: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			steps := auditGoModGoSteps(tc.install, auditGoModulesStepLines)
+
+			problems := auditGoModGoOncePerJob(t, steps)
+			if len(problems) != tc.want {
+				t.Errorf("auditGoModGoOncePerJob(a step whose install step holds %q from the shape check on) reported %d problem(s), want %d:\n%s",
+					tc.install, len(problems), tc.want, strings.Join(problems, "\n"))
 			}
 		})
 	}
