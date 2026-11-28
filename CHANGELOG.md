@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.18.0](https://github.com/timothymamo/shift2eu/compare/v0.17.0...v0.18.0) (2026-11-28)
+
+
+### Features
+
+* **cli:** write the assessment as a PDF with --format pdf (PRD [#584](https://github.com/timothymamo/shift2eu/issues/584) M1) ([#695](https://github.com/timothymamo/shift2eu/issues/695)) ([f8a49fd](https://github.com/timothymamo/shift2eu/commit/f8a49fd78a9a434a81b4617c894e9ecd8d06faf3))
+* **guide:** classify and size GCP Managed Kafka clusters (PRD [#571](https://github.com/timothymamo/shift2eu/issues/571) M3) ([#665](https://github.com/timothymamo/shift2eu/issues/665)) ([2cf86bc](https://github.com/timothymamo/shift2eu/commit/2cf86bc9c1d346f2d758a176bde3bde24921bf37))
+* **guide:** classify AWS OpenSearch and MSK (PRD [#571](https://github.com/timothymamo/shift2eu/issues/571) M2) ([#639](https://github.com/timothymamo/shift2eu/issues/639)) ([17aaa57](https://github.com/timothymamo/shift2eu/commit/17aaa5730a1c4cdbfae2f30e8f6a7327160357fb))
+* **guide:** classify Azure HDInsight Kafka clusters (PRD [#571](https://github.com/timothymamo/shift2eu/issues/571) M4) ([#685](https://github.com/timothymamo/shift2eu/issues/685)) ([2995458](https://github.com/timothymamo/shift2eu/commit/29954587b5793e2e1ab107bfad2b1fce142f6982))
+* **guide:** classify Azure public DNS zones as network.dns (PRD [#581](https://github.com/timothymamo/shift2eu/issues/581) M4) ([#714](https://github.com/timothymamo/shift2eu/issues/714)) ([27647cd](https://github.com/timothymamo/shift2eu/commit/27647cd1a26c35419c7f2b0361466ecd8bdd9528))
+* **guide:** classify Cloud DNS public managed zones as network.dns (PRD [#581](https://github.com/timothymamo/shift2eu/issues/581) M3) ([#708](https://github.com/timothymamo/shift2eu/issues/708)) ([9115869](https://github.com/timothymamo/shift2eu/commit/91158692f9751e763622e7a311dc5e1118871ac1))
+* **guide:** classify Route 53 public hosted zones as network.dns (PRD [#581](https://github.com/timothymamo/shift2eu/issues/581) M2) ([#696](https://github.com/timothymamo/shift2eu/issues/696)) ([0f265a5](https://github.com/timothymamo/shift2eu/commit/0f265a5b593fb22b2979397db993db52f72f7e32))
+* **ovhcloud:** serve search.opensearch and messaging.kafka (PRD [#571](https://github.com/timothymamo/shift2eu/issues/571) M5) ([#686](https://github.com/timothymamo/shift2eu/issues/686)) ([69323bd](https://github.com/timothymamo/shift2eu/commit/69323bdd72a15fd4c2f374cd7ac4d636fb3e4c6e))
+* **pdfreport:** write the PDF report with a standard-library writer ([#678](https://github.com/timothymamo/shift2eu/issues/678)) ([6bddd3f](https://github.com/timothymamo/shift2eu/commit/6bddd3f4119e3d9046356a3c6b8ebd461ca21d2a))
+* **scaleway:** serve the cache, MongoDB, load balancer, topic, serverless container and registry categories (PRD [#552](https://github.com/timothymamo/shift2eu/issues/552) M6) ([#681](https://github.com/timothymamo/shift2eu/issues/681)) ([f7c2fe9](https://github.com/timothymamo/shift2eu/commit/f7c2fe93d2161f24460455acd0a5dc06524128f1))
+* **scaleway:** serve the OpenSearch and Kafka categories (PRD [#571](https://github.com/timothymamo/shift2eu/issues/571) M7) ([#701](https://github.com/timothymamo/shift2eu/issues/701)) ([ee2f8af](https://github.com/timothymamo/shift2eu/commit/ee2f8afa8e537895e6a78e36689adcba6ff8f6a8))
+* **site:** close PRD [#297](https://github.com/timothymamo/shift2eu/issues/297) milestone 4 — the scheduled live check and the first deploy's records ([#631](https://github.com/timothymamo/shift2eu/issues/631)) ([b575c68](https://github.com/timothymamo/shift2eu/commit/b575c682a8db3d96a44df4979dac6ebd633e2c76))
+* **upcloud:** serve the Valkey, load balancer and File Storage categories (PRD [#552](https://github.com/timothymamo/shift2eu/issues/552) M7) ([#700](https://github.com/timothymamo/shift2eu/issues/700)) ([9c30bc4](https://github.com/timothymamo/shift2eu/commit/9c30bc4572f538eb8a8a9c515f887dfb346730ae))
+
+
+### Bug Fixes
+
+* **audit:** accept dot-leading path segments in the result schema ([#684](https://github.com/timothymamo/shift2eu/issues/684)) ([f21464a](https://github.com/timothymamo/shift2eu/commit/f21464ac348707f99860d3e2a45f873119fa5f08))
+* **audit:** build govulncheck with go.mod's Go, pass trivy only accepted flags, ignore 11 false gitleaks history hits ([#680](https://github.com/timothymamo/shift2eu/issues/680)) ([7cb0ff7](https://github.com/timothymamo/shift2eu/commit/7cb0ff7e8e081b5bcc2cadbe18b24802997f8f58))
+* **audit:** each CLI session runs in its own empty directory, and ADR 0040 accepts the CLI's read-only commands (issues [#615](https://github.com/timothymamo/shift2eu/issues/615), [#614](https://github.com/timothymamo/shift2eu/issues/614)) ([#628](https://github.com/timothymamo/shift2eu/issues/628)) ([8a2b401](https://github.com/timothymamo/shift2eu/commit/8a2b4010eac6fb62677a4929e81948b898b25a63))
+* **audit:** list Renovate's open pull requests through the pulls endpoint ([#693](https://github.com/timothymamo/shift2eu/issues/693)) ([d296a28](https://github.com/timothymamo/shift2eu/commit/d296a289a49d0bf0d372731a3c703bdba4cfc2c6))
+* **audit:** mint the audit App's token with no permission-* input, inheriting the App's grants (issue [#632](https://github.com/timothymamo/shift2eu/issues/632)) ([#633](https://github.com/timothymamo/shift2eu/issues/633)) ([141b4f3](https://github.com/timothymamo/shift2eu/commit/141b4f380b1460fe3c6f0eae66cb7edf4900c518))
+* **audit:** the audit's launch records and repairs every GitHub file command, and the model job runs its tools from a root-owned directory (issue [#614](https://github.com/timothymamo/shift2eu/issues/614), part 2) ([#635](https://github.com/timothymamo/shift2eu/issues/635)) ([5ed158a](https://github.com/timothymamo/shift2eu/commit/5ed158a7d5b67617871186ee63f3f4aad4ced5f0))
+* **audit:** the publish summary names the failed check, and the workflow passes the reports directory absolutely (issue [#640](https://github.com/timothymamo/shift2eu/issues/640)) ([#651](https://github.com/timothymamo/shift2eu/issues/651)) ([49770e2](https://github.com/timothymamo/shift2eu/commit/49770e2746497d1febae0bf350fc78faa83e84e1))
+* **deps:** update module github.com/chromedp/cdproto to v0.160.11 ([#675](https://github.com/timothymamo/shift2eu/issues/675)) ([22a4804](https://github.com/timothymamo/shift2eu/commit/22a48044cbcfbe201e8ec9db6ba92fa619651fa0))
+* **deps:** update module github.com/chromedp/cdproto to v0.160.12 ([#719](https://github.com/timothymamo/shift2eu/issues/719)) ([dfd9020](https://github.com/timothymamo/shift2eu/commit/dfd9020e6a8b906db9f100c0af20e743ad7ff463))
+* **devenv:** pin the tester's agent = pi and drop the deny extension's lexical glob check ([#691](https://github.com/timothymamo/shift2eu/issues/691)) ([#694](https://github.com/timothymamo/shift2eu/issues/694)) ([2dbd7cc](https://github.com/timothymamo/shift2eu/commit/2dbd7cc545b5ffb09a7d5e165968985af19b47ac))
+* **devenv:** pin the tester's pi --session-dir so the project's settings cannot choose it (issue [#717](https://github.com/timothymamo/shift2eu/issues/717)) ([#725](https://github.com/timothymamo/shift2eu/issues/725)) ([287b683](https://github.com/timothymamo/shift2eu/commit/287b6836fd8e934f5eba39656e23846357ea201a))
+* **devenv:** start the tester from a root-owned copy of its wrapper installed at provisioning (issue [#692](https://github.com/timothymamo/shift2eu/issues/692)) ([#705](https://github.com/timothymamo/shift2eu/issues/705)) ([6720865](https://github.com/timothymamo/shift2eu/commit/672086514b95ac59fcfb66112dd14f402641e702))
+* **devenv:** start the tester with only its model credential and fail closed without the deny extension ([#679](https://github.com/timothymamo/shift2eu/issues/679)) ([f4a15ba](https://github.com/timothymamo/shift2eu/commit/f4a15ba92c203b2940647d5faa5f12f0a8bb1d1c))
+* **devenv:** start the tester's pi with no project trust and no discovered extension (issue [#702](https://github.com/timothymamo/shift2eu/issues/702)) ([#715](https://github.com/timothymamo/shift2eu/issues/715)) ([b291732](https://github.com/timothymamo/shift2eu/commit/b291732d0a3ec5bfcac28f9761618e96b8613214))
+* **guide:** legacy Redis Enterprise HA without zones, the Azure namespace rule in the fixture check and the ADR 0046 sentence (issue [#610](https://github.com/timothymamo/shift2eu/issues/610)) ([#624](https://github.com/timothymamo/shift2eu/issues/624)) ([b0affb8](https://github.com/timothymamo/shift2eu/commit/b0affb8c98e5fc9942d4376eaaabeda9c0ff45c1))
+* **site:** no Via header from the front, and PR [#619](https://github.com/timothymamo/shift2eu/issues/619)'s and PR [#631](https://github.com/timothymamo/shift2eu/issues/631)'s late review points ([#643](https://github.com/timothymamo/shift2eu/issues/643)) ([03567c0](https://github.com/timothymamo/shift2eu/commit/03567c01d9ab1cada4763a4af631beea5d2badef))
+
 ## [0.17.0](https://github.com/timothymamo/shift2eu/compare/v0.16.1...v0.17.0) (2026-11-26)
 
 
