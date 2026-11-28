@@ -685,6 +685,36 @@ func TestAuditGoModReadFragmentAllowsOnlyTheShapesTheInstallStepUses(t *testing.
 			line:   "git\tfetch",
 		},
 		{
+			name:   "a comment line led by a no-break space",
+			script: slices.Concat(auditGoModReadStep, []string{"\u00a0# || curl x", install}),
+			line:   "\u00a0# || curl x",
+		},
+		{
+			name:   "a comment line led by a vertical tab",
+			script: slices.Concat(auditGoModReadStep, []string{"\v# || curl x", install}),
+			line:   "\v# || curl x",
+		},
+		{
+			name:   "a comment line led by a form feed",
+			script: slices.Concat(auditGoModReadStep, []string{"\f# || curl x", install}),
+			line:   "\f# || curl x",
+		},
+		{
+			name:   "a comment line led by a next line",
+			script: slices.Concat(auditGoModReadStep, []string{"\u0085# || curl x", install}),
+			line:   "\u0085# || curl x",
+		},
+		{
+			name:   "a comment line led by an em space",
+			script: slices.Concat(auditGoModReadStep, []string{"\u2003# || curl x", install}),
+			line:   "\u2003# || curl x",
+		},
+		{
+			name:   "a comment line that ends in a carriage return",
+			script: slices.Concat(auditGoModReadStep, []string{"# || curl x\r", install}),
+			line:   "# || curl x\r",
+		},
+		{
 			name: "a read line that downloads as well",
 			script: slices.Concat([]string{
 				`gomod_go="$(GOWORK=off go list -m -f '{{.GoVersion}}'; curl -fsSL https://example.com/go)" || gomod_go=""`,
@@ -1205,6 +1235,11 @@ func TestAuditGoModulesStepTakesTheInstallStepsCheckedValue(t *testing.T) {
 			}
 
 			if tc.wantFail {
+				if strings.TrimSpace(string(recorded)) != "" {
+					t.Errorf("the fake go command was called as %q with gomod_go %q (%s): the guard that the install step's checked value reached this step comes before the module downloads, so a step that never received it runs no go command at all (issue #713)",
+						strings.TrimSpace(string(recorded)), tc.value, tc.name)
+				}
+
 				return
 			}
 
@@ -1264,6 +1299,36 @@ func TestAuditGoModulesStepAllowsOnlyTheShapesTheStepUses(t *testing.T) {
 			name:   "a git fetch behind a literal tab",
 			script: withLine("git\tfetch"),
 			line:   "git\tfetch",
+		},
+		{
+			name:   "a comment line led by a no-break space",
+			script: withLine("\u00a0# || curl x"),
+			line:   "\u00a0# || curl x",
+		},
+		{
+			name:   "a comment line led by a vertical tab",
+			script: withLine("\v# || curl x"),
+			line:   "\v# || curl x",
+		},
+		{
+			name:   "a comment line led by a form feed",
+			script: withLine("\f# || curl x"),
+			line:   "\f# || curl x",
+		},
+		{
+			name:   "a comment line led by a next line",
+			script: withLine("\u0085# || curl x"),
+			line:   "\u0085# || curl x",
+		},
+		{
+			name:   "a comment line led by an em space",
+			script: withLine("\u2003# || curl x"),
+			line:   "\u2003# || curl x",
+		},
+		{
+			name:   "a comment line that ends in a carriage return",
+			script: withLine("# || curl x\r"),
+			line:   "# || curl x\r",
 		},
 		{
 			name:   "a go list in the step",
