@@ -549,6 +549,13 @@ func coAuthorNameProblems(names []coAuthorJobName) []coAuthorNameProblem {
 // escape, a quoted name key, a flow collection and a job that is not a block
 // mapping are each refused with an error, so a name that would report a check
 // beside the co-author check's own fails the test instead of passing it unseen.
+//
+// The job's id is read as GitHub reads it too: a quoted key is the id it holds,
+// and an id that is not GitHub's job-id grammar - ^[A-Za-z_][A-Za-z0-9_-]*$ - is
+// refused, since a job without a name: is reported by that id. A quoted escape,
+// a space before the colon, a quote on one side only and an empty key all report
+// an id no rule compares, so `"coauthor\x2Dtrailers":` and `"":` would report
+// the retired legacy check without ever being compared with it (issue #723).
 func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 	t.Parallel()
 
@@ -575,6 +582,12 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 			path:      ciWorkflowPath,
 			doc:       "jobs:\n  build:\n    name: Build\n    runs-on: ubuntu-latest\n",
 			wantNames: map[string]string{"build": "Build"},
+		},
+		{
+			name:      "a job id of the letters, digits, _ and - GitHub accepts",
+			path:      ciWorkflowPath,
+			doc:       "jobs:\n  build_2-x:\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantNames: map[string]string{"build_2-x": "Build"},
 		},
 		{
 			name:      "a double-quoted (base) name",
@@ -835,6 +848,42 @@ func TestCICoAuthorTrailersNameGuardReadsEverySpelling(t *testing.T) {
 			path:    ciWorkflowPath,
 			doc:     "jobs:\n  build:\n    {name: \"Co-author trailers (base)\", runs-on: ubuntu-latest}\n",
 			wantErr: "flow collection",
+		},
+		{
+			name:    "a legacy job id spelled with a double-quoted escape",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  \"coauthor\\x2Dtrailers\":\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantErr: "is not a job id GitHub accepts",
+		},
+		{
+			name:    "a single-quoted legacy job id with a space before the colon",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  'coauthor-trailers' :\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantErr: "is not a job id GitHub accepts",
+		},
+		{
+			name:    "a plain legacy job id with a space before the colon",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  coauthor-trailers :\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantErr: "is not a job id GitHub accepts",
+		},
+		{
+			name:    "a legacy job id quoted on one side only",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  \"coauthor-trailers:\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantErr: "is not a job id GitHub accepts",
+		},
+		{
+			name:    "an empty job id with a job after it",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  \"\":\n    name: Build\n    runs-on: ubuntu-latest\n  lint:\n    name: Lint\n    runs-on: ubuntu-latest\n",
+			wantErr: "is not a job id GitHub accepts",
+		},
+		{
+			name:    "an empty job id as the last job",
+			path:    ciWorkflowPath,
+			doc:     "jobs:\n  lint:\n    name: Lint\n    runs-on: ubuntu-latest\n  \"\":\n    name: Build\n    runs-on: ubuntu-latest\n",
+			wantErr: "is not a job id GitHub accepts",
 		},
 	}
 
