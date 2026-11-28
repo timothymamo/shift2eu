@@ -989,6 +989,18 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 			"```"),
 		want: []string{at(plantedLine+3, "--endpoint is a flag aws denies")},
 	}, {
+		// A full name wins over an earlier truncation on the same line, and no CLI
+		// need be named: the line is reported once, for the flag it names in full.
+		name:    "a denied flag's full name after its truncation with no CLI named",
+		mutated: appended("echo --endpoint --endpoint-url https://example.com"),
+		want:    []string{at(plantedLine, "--endpoint-url is a flag aws denies")},
+	}, {
+		// A truncation on another CLI's read line is still refused text-wide: the
+		// gcloud read itself is accepted, and the flag it carries is aws's.
+		name:    "a denied flag's truncation on another CLI's read line",
+		mutated: appended("gcloud compute instances list --endpoint https://example.com"),
+		want:    []string{at(plantedLine, "--endpoint is a flag aws denies")},
+	}, {
 		// A single quote is no field separator: the word a denied flag arrives
 		// with must be trimmed before the flag is read.
 		name:    "a denied flag in a bash -c argument that closes its quote",
@@ -1066,6 +1078,13 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 		name:    "an az rest whose method flag is truncated",
 		mutated: fence("```bash", "```", "az rest --meth put --url https://management.azure.com/x"),
 		want:    []string{at(plantedLine+1, "az rest --meth")},
+	}, {
+		// A short URL flag with its value run on: argparse reads `-uVALUE` as `-u
+		// VALUE`, so a check that skipped the run-on form would read the address the
+		// sequence gives nowhere and pass an address off the management endpoint.
+		name:    "an az rest whose url flag carries its value run on",
+		mutated: fence("```bash", "```", "az rest --method get -uhttps://example.com/x"),
+		want:    []string{at(plantedLine+1, "az rest --method get -uhttps://example.com/x")},
 	}, {
 		// A read that points the CLI somewhere else, feeds it input of the
 		// caller's choosing or turns its checks off writes to a cloud even where
@@ -1317,6 +1336,21 @@ func TestCloudReadDecisions(t *testing.T) {
 		{cli: "az", words: []string{"rest", "--method", "get", "--ur", "https://management.azure.com/x"}, verb: "rest --ur"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--u", "https://example.com/x"}, verb: "rest --u"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--ur=https://example.com/x"}, verb: "rest --ur"},
+		// A short URL flag with its value run on is refused as the method flag's
+		// run-on forms are: `-uhttps://example.com/x` is no `-u` with a value the
+		// check reads, so it is held to the endpoint rule nowhere. A run-on form is
+		// refused on the management endpoint too, as `--ur` is.
+		{cli: "az", words: []string{"rest", "--method", "get", "-uhttps://example.com/x"}, verb: "rest -uhttps://example.com/x"},
+		{cli: "az", words: []string{"rest", "--method", "get", "-uhttps://management.azure.com/x"}, verb: "rest -uhttps://management.azure.com/x"},
+		// `-b` is az rest's short alias of the denied --body, so it is refused
+		// inside an az rest sequence — with a value of its own or run on, as the
+		// method flag is — and nowhere else, since -b is a common short flag of
+		// other commands.
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "-b", "x"}, verb: "rest -b"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "-bx"}, verb: "rest -bx"},
+		// A truncation of --method that carries its value inline is refused as the
+		// split truncation is: `--meth=put` is no --method=put the check reads.
+		{cli: "az", words: []string{"rest", "--method", "get", "--meth=put", "--url", "https://management.azure.com/x"}, verb: "rest --meth"},
 		{cli: "az", words: []string{"rest", "--method=post", "--url", "https://management.azure.com/x"}, verb: "rest --method post"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--method", "post"}, verb: "rest --method get post"},
 		{cli: "az", words: []string{"rest", "--url", "https://management.azure.com/x"}, verb: "rest"},
