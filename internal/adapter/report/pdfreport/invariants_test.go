@@ -1244,28 +1244,53 @@ func TestContentStreamOperatorTableIsTheADRs(t *testing.T) {
 // TestReaderRejectsWhatTheOperatorTableDoesNotHold feeds hand-written content
 // streams through the reader the invariants use and requires every one of them to
 // fail: an operator outside the table, an operand of the wrong number or shape, a
-// number without its written form, and a colour outside 0.000 to 1.000.
+// number without its written form, and a colour outside 0.000 to 1.000. For every
+// unlisted operator it also requires the refusal to name the operator, so the
+// stream cannot pass for a syntax error of the case's own making.
 //
 // Criterion (PRD #584 milestone 1b, Unit): a content stream built in-test with an
-// operator outside the table fails the reader, for each of G, c, sh, gs, Do, BI
-// and TJ; so does a listed operator with an operand of the wrong shape (an integer
-// for rg, a decimal for re, a missing or an extra operand), a signed or exponent
-// number, and a colour component above 1.000.
+// operator outside the table fails the reader, for each of G, g, k, K, B, b, c, v,
+// y, F, f*, W, n, J, j, d, cs, scn, sh, gs, Do, BI, TJ, ' and "; so does a listed
+// operator with an operand of the wrong shape (an integer for rg, a decimal for
+// re, a missing or an extra operand), a signed or exponent number, and a colour
+// component above 1.000.
 func TestReaderRejectsWhatTheOperatorTableDoesNotHold(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name   string
 		stream string
+		// unlisted is the operator the stream uses outside the table, when the
+		// case is one; the refusal has to name it.
+		unlisted string
 	}{
-		{name: "the unlisted operator Do", stream: "q Do Q"},
-		{name: "the unlisted operator sh", stream: "q sh Q"},
-		{name: "the unlisted operator gs", stream: "q gs Q"},
-		{name: "milestone 1's grey operator G", stream: "q 0.500 G Q"},
-		{name: "the curve operator c", stream: "q 0.000 0.000 m 1.000 1.000 2.000 2.000 3.000 3.000 c S Q"},
-		{name: "the unlisted text operator TJ", stream: "BT /F1 8 Tf 1 0 0 1 50 700 Tm (a) TJ ET"},
-		{name: "the inline image operator BI", stream: "q BI Q"},
-		{name: "the clipping operator W", stream: "q 10 10 100 100 re W n Q"},
+		// ADR 0049's amended set, one case per operator of the PRD's list that is
+		// outside it, in the order the PRD gives them.
+		{name: "milestone 1's grey operator G", stream: "q 0.500 G Q", unlisted: "G"},
+		{name: "the grey fill operator g", stream: "q 0.500 g Q", unlisted: "g"},
+		{name: "the CMYK fill operator k", stream: "q 0.043 0.165 0.400 0.000 k Q", unlisted: "k"},
+		{name: "the CMYK stroke operator K", stream: "q 0.043 0.165 0.400 0.000 K Q", unlisted: "K"},
+		{name: "the fill-and-stroke operator B", stream: "q 10 10 100 100 re B Q", unlisted: "B"},
+		{name: "the close-fill-and-stroke operator b", stream: "q 10 10 100 100 re b Q", unlisted: "b"},
+		{name: "the curve operator c", stream: "q 0.000 0.000 m 1.000 1.000 2.000 2.000 3.000 3.000 c S Q", unlisted: "c"},
+		{name: "the curve operator v", stream: "q 0.000 0.000 m 1.000 1.000 2.000 2.000 v S Q", unlisted: "v"},
+		{name: "the curve operator y", stream: "q 0.000 0.000 m 1.000 1.000 2.000 2.000 y S Q", unlisted: "y"},
+		{name: "the obsolete fill operator F", stream: "q 10 10 100 100 re F Q", unlisted: "F"},
+		{name: "the even-odd fill operator f*", stream: "q 10 10 100 100 re f* Q", unlisted: "f*"},
+		{name: "the clipping operator W", stream: "q 10 10 100 100 re W n Q", unlisted: "W"},
+		{name: "the no-op path operator n", stream: "q 10 10 100 100 re n Q", unlisted: "n"},
+		{name: "the line cap operator J", stream: "q 1 J Q", unlisted: "J"},
+		{name: "the line join operator j", stream: "q 1 j Q", unlisted: "j"},
+		{name: "the dash operator d", stream: "q d Q", unlisted: "d"},
+		{name: "the colour space operator cs", stream: "q /DeviceRGB cs Q", unlisted: "cs"},
+		{name: "the colour operator scn", stream: "q 0.500 0.500 0.500 scn Q", unlisted: "scn"},
+		{name: "the shading operator sh", stream: "q sh Q", unlisted: "sh"},
+		{name: "the graphics state operator gs", stream: "q gs Q", unlisted: "gs"},
+		{name: "the XObject operator Do", stream: "q Do Q", unlisted: "Do"},
+		{name: "the inline image operator BI", stream: "q BI Q", unlisted: "BI"},
+		{name: "the unlisted text operator TJ", stream: "BT /F1 8 Tf 1 0 0 1 50 700 Tm (a) TJ ET", unlisted: "TJ"},
+		{name: "the unlisted text operator '", stream: "BT /F1 8 Tf 1 0 0 1 50 700 Tm (a) ' ET", unlisted: "'"},
+		{name: "the unlisted text operator \"", stream: "BT /F1 8 Tf 1 0 0 1 50 700 Tm 1.000 1.000 (a) \" ET", unlisted: "\""},
 		{name: "a missing operand of rg", stream: "q 0.500 0.500 rg Q"},
 		{name: "an extra operand of rg", stream: "q 0.500 0.500 0.500 0.500 rg Q"},
 		{name: "a missing operand of m", stream: "q 1.000 m 2.000 3.000 l S Q"},
@@ -1284,10 +1309,22 @@ func TestReaderRejectsWhatTheOperatorTableDoesNotHold(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			if err := checkContentStream(test.stream); err == nil {
+			err := checkContentStream(test.stream)
+			if err == nil {
 				t.Errorf("the reader accepted the content stream %q, want it refused", test.stream)
-			} else {
-				t.Logf("refused: %v", err)
+
+				return
+			}
+
+			t.Logf("refused: %v", err)
+
+			if test.unlisted == "" {
+				return
+			}
+
+			if want := fmt.Sprintf("the operator %q", test.unlisted); !strings.Contains(err.Error(), want) {
+				t.Errorf("the reader refused the stream %q without naming the unlisted operator %q, so it is refused for its syntax, not for the operator: %v",
+					test.stream, test.unlisted, err)
 			}
 		})
 	}

@@ -1200,6 +1200,10 @@ func TestContactBannerPlacement(t *testing.T) {
 				// Nothing of the Comparison section's own tables stands after the
 				// banner: the banner follows the section whole.
 				for index := at + 1; index < firstTarget; index++ {
+					if isPageFurniture(file, lines[index]) {
+						continue
+					}
+
 					if !bannerLineHolds(banner, lines[index]) {
 						t.Errorf("the line %q stands after the banner but before the first per-target section (line %d), so the banner is not after the Comparison section",
 							squash(lines[index].Text), index)
@@ -1225,6 +1229,24 @@ func bannerLineHolds(banner pdfBanner, line pdfLine) bool {
 	}
 
 	return false
+}
+
+// isPageFurniture reports whether the line is one of its page's furniture lines:
+// its header above the page's top rule or its footer below its bottom rule. The
+// writer draws a page's body first and its header and footer after it, so in the
+// document's own order they stand between the body lines of the page they belong
+// to, and a check on what follows a body line has to pass over them.
+func isPageFurniture(file *testPDF, line pdfLine) bool {
+	if line.Page < 0 || line.Page >= len(file.pages) {
+		return false
+	}
+
+	lowest, highest, ok := pageBand(file.pages[line.Page])
+	if !ok {
+		return false
+	}
+
+	return line.Y <= lowest || line.Y >= highest
 }
 
 // TestContactBannerMovesWholeToTheNextPage pins the PRD's rule that the banner is
