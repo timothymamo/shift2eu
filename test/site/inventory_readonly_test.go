@@ -939,6 +939,18 @@ func TestReadOnlyCheckFlagsPlantedWrites(t *testing.T) {
 			"```"),
 		want: []string{at(plantedLine+3, "--no-verify-ssl")},
 	}, {
+		// The whole-text rule holds a denied flag's truncation too: the CLI's
+		// parser completes `--endpoint` to --endpoint-url, so the flag does what
+		// the full name does wherever it stands, and this line names no CLI, so
+		// no field sequence reads it.
+		name: "a denied flag's truncation after a multi-line quote",
+		mutated: appended("```bash",
+			"aws ec2 describe-instances --query '",
+			"  Reservations[].Instances[].InstanceId",
+			"}' --endpoint https://example.com",
+			"```"),
+		want: []string{at(plantedLine+3, "--endpoint is a flag aws denies")},
+	}, {
 		// A single quote is no field separator: the word a denied flag arrives
 		// with must be trimmed before the flag is read.
 		name:    "a denied flag in a bash -c argument that closes its quote",
@@ -1258,6 +1270,15 @@ func TestCloudReadDecisions(t *testing.T) {
 		{cli: "az", words: []string{"rest", "-mpost", "--url", "https://management.azure.com/x"}, verb: "rest -mpost"},
 		{cli: "az", words: []string{"rest", "-m=post", "--url", "https://management.azure.com/x"}, verb: "rest -m=post"},
 		{cli: "az", words: []string{"rest", "--meth", "put", "--url", "https://management.azure.com/x"}, verb: "rest --meth"},
+		// A shortened URL flag is refused rather than read, as the method flag's
+		// abbreviations are: `--ur` is a prefix of --url and of --url-parameters,
+		// and `--u` of --uri and --uri-parameters, so what the Azure CLI completes
+		// it to is nothing the check can rely on. A shortened flag is refused on
+		// the management endpoint too.
+		{cli: "az", words: []string{"rest", "--method", "get", "--ur", "https://example.com/x"}, verb: "rest --ur"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--ur", "https://management.azure.com/x"}, verb: "rest --ur"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--u", "https://example.com/x"}, verb: "rest --u"},
+		{cli: "az", words: []string{"rest", "--method", "get", "--ur=https://example.com/x"}, verb: "rest --ur"},
 		{cli: "az", words: []string{"rest", "--method=post", "--url", "https://management.azure.com/x"}, verb: "rest --method post"},
 		{cli: "az", words: []string{"rest", "--method", "get", "--url", "https://management.azure.com/x", "--method", "post"}, verb: "rest --method get post"},
 		{cli: "az", words: []string{"rest", "--url", "https://management.azure.com/x"}, verb: "rest"},
