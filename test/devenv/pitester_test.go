@@ -2315,15 +2315,84 @@ func TestPiTesterRefusesAnAgentDirectoryThatCouldBeTheUnitFolder(t *testing.T) {
 	}
 }
 
+// TestPiTesterEncodesAnAwkwardWorkingDirectoryIntoItsSessionDirectory pins the encoding the wrapper gives the
+// working directory in the session directory it hands pi (issue #717): every slash, backslash and colon becomes a
+// dash, as pi's own default does (its getDefaultSessionDirPath), so a tester session the deck resumes is still found
+// where pi wrote it. The unit folder is named with the two characters a slash hides behind, and the expected tail is
+// written out by hand - `-a-b-c--` - because piTesterSessionDir re-implements the same rule: a wrapper whose
+// `tr '/\\:' '---'` lost a character would still agree with the helper on a name the helper encodes.
+// The name holds no `=`: the wrapper hands the fake pi's path to `env -i`, which reads a word holding an `=` as a
+// variable assignment and never runs the command (TestPiTesterDropsTheSessionDirArguments records the same limit),
+// so a `=` would pin the harness rather than the wrapper.
+func TestPiTesterEncodesAnAwkwardWorkingDirectoryIntoItsSessionDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	binDir := filepath.Join(root, "bin")
+	homeDir := filepath.Join(root, "home")
+	record := filepath.Join(root, "pi-record")
+
+	for _, dir := range []string{binDir, homeDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
+	}
+
+	writePiTesterBin(t, binDir, record)
+	writePiTesterDeck(t, homeDir)
+
+	installed := writePiTesterInstalled(t, root,
+		piFile{present: true, content: readRepoFile(t, denyExtensionFile)},
+		piFile{present: true, content: readRepoFile(t, denyListFile)})
+
+	// The unit folder, named with the colon and the backslash the wrapper has to encode beside the slash. Its copies
+	// of the three files are the installed ones, so the wrapper prints no line about a copy that differs.
+	project := filepath.Join(root, `a:b\c`)
+	if err := os.MkdirAll(project, 0o700); err != nil {
+		t.Fatalf("create %s, the unit folder whose name holds a colon and a backslash: %v", project, err)
+	}
+
+	for _, file := range []struct{ path, content string }{
+		{denyExtensionFile, readRepoFile(t, denyExtensionFile)},
+		{piTesterScript, readRepoFile(t, piTesterScript)},
+		{denyListFile, readRepoFile(t, denyListFile)},
+	} {
+		writeFileMode(t, filepath.Join(project, file.path), []byte(file.content), 0o644)
+	}
+
+	stdout, stderr, err := runPiTester(t, installed.script, project, piTesterArgs, piTesterEnv(binDir, homeDir, piTesterBasePath(t)))
+	if err != nil {
+		t.Fatalf("the wrapper exited non-zero in a unit folder named %s, which is no reason to refuse it: %v\nstdout: %s\nstderr: %s",
+			filepath.Base(project), err, stdout, stderr)
+	}
+
+	got := readPiRecord(t, record)
+
+	at := slices.Index(got.argv, "--session-dir")
+	if at < 0 || at+1 >= len(got.argv) {
+		t.Fatalf("pi's argv holds no --session-dir with a value, so the unit folder's .pi/settings.json chooses where pi writes its sessions (issue #717): %q", got.argv)
+	}
+
+	// Only the t.TempDir() part comes from the helper, and it holds neither a backslash nor a colon: the tail below is
+	// written out by hand, so the wrapper's own encoding of those two characters is what this case pins.
+	want := filepath.Join(piTesterSessionsRoot(homeDir), "--"+piTesterSessionPrefix(resolvePiTesterDir(t, root))+`-a-b-c--`)
+
+	if gotDir := got.argv[at+1]; gotDir != want {
+		t.Errorf("pi's --session-dir is %q, want %q: the working directory `a:b\\c` has to be encoded the way pi's own default encodes it - one dash per slash, per backslash and per colon - or pi looks for the tester's sessions in a directory other than the one it writes them to (issue #717)",
+			gotDir, want)
+	}
+}
+
 // piTesterSessionRefusalPrefix starts the one line the wrapper prints when the directory it pins pi's sessions to
 // cannot be used (issue #717).
 const piTesterSessionRefusalPrefix = "pi-tester: pi's session directory "
 
 // TestPiTesterRefusesASessionDirectoryItCannotUse pins issue #717's third item: the wrapper pins pi's session
-// directory so the unit folder's .pi/settings.json cannot choose it, and a pinned path that is a symbolic link, or
-// one whose physical path lies in the working directory a branch writes, would hand that choice back. The wrapper
-// then exits 1 with one line naming the path, and pi never starts. A missing directory is no refusal - pi creates
-// it - which every case that starts pi here pins, none of them creating one.
+// directory so the unit folder's .pi/settings.json cannot choose it, and a pinned path that is a symbolic link, that
+// is not a directory, or whose physical path lies in the working directory a branch writes, would hand that choice
+// back. The wrapper then exits 1 with one line naming the path, and pi never starts. A missing directory is no
+// refusal - pi creates it - which every case that starts pi here pins, none of them creating one.
 func TestPiTesterRefusesASessionDirectoryItCannotUse(t *testing.T) {
 	t.Parallel()
 
@@ -2379,7 +2448,12 @@ func TestPiTesterRefusesASessionDirectoryItCannotUse(t *testing.T) {
 			},
 		},
 		{
-			name: "the unit's session directory is a symbolic link into the working directory",
+			// Refused by the -L check, like the case above, and not by the in-unit one: a link from outside to a
+			// directory inside the unit folder is still a link, and pi never writes one. The in-unit branch is
+			// defence in depth: the wrapper builds the path under ${HOME}, and an agent directory inside the unit
+			// folder is refused before this check runs, so a real directory there is unreachable without a bind
+			// mount - which stays the one way a branch could get one.
+			name: "the unit's session directory is a symbolic link to a directory in the unit folder",
 			layout: func(t *testing.T, root, project string) (string, string) {
 				t.Helper()
 
@@ -2401,6 +2475,39 @@ func TestPiTesterRefusesASessionDirectoryItCannotUse(t *testing.T) {
 				if err := os.Symlink(inUnit, sessions); err != nil {
 					t.Fatalf("link %s to %s: %v", sessions, inUnit, err)
 				}
+
+				return home, sessions
+			},
+		},
+		{
+			name: "the sessions root is a regular file",
+			layout: func(t *testing.T, root, _ string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				// A file where the directory pi keeps its sessions under has to be: pi cannot write a session into it,
+				// and a wrapper that started pi would leave the pane with a pi that fails on its first write.
+				writeFileMode(t, piTesterSessionsRoot(home), []byte("not a directory, invented for this test (issue #717)\n"), 0o644)
+
+				return home, piTesterSessionsRoot(home)
+			},
+		},
+		{
+			name: "the unit's session directory is a regular file",
+			layout: func(t *testing.T, root, project string) (string, string) {
+				t.Helper()
+
+				home := filepath.Join(root, "home")
+				writePiTesterDeck(t, home)
+
+				if err := os.MkdirAll(piTesterSessionsRoot(home), 0o700); err != nil {
+					t.Fatalf("create %s: %v", piTesterSessionsRoot(home), err)
+				}
+
+				sessions := piTesterSessionDir(t, home, project)
+				writeFileMode(t, sessions, []byte("not a directory, invented for this test (issue #717)\n"), 0o644)
 
 				return home, sessions
 			},
