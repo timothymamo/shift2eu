@@ -101,9 +101,18 @@ import (
 //     --method get --url` with no value, so a `--url` whose next word is no address
 //     (it starts with no scheme, and holds no `.` or `/`) and is followed by more
 //     words counts as no address given, and the one method, get, is what decides.
-//     The scan splits on `$`, so `--url $X` and `-u$X` reach the check as `--url X`
-//     and `-u X` and give no address either. A value-less URL flag never clears an
-//     address the sequence has already read.
+//     The scan splits on `$`, so `--url $X` and `-u$X` followed by more words reach
+//     the check as `--url X` and `-u X` and give no address either. A value-less URL
+//     flag never clears an address the sequence has already read.
+//   - A field separator inside a quoted `az rest` address: bash keeps `=`, `,` and
+//     `"` literal inside single quotes, while the scan splits on them, so in
+//     `--url 'https://management.azure.com=@example.com/x'` (also with `,@` or
+//     `"@`) the address the check reads is the management host's and the one az
+//     calls is example.com's. It is a GET only, from a deliberate disguise.
+//   - A URL flag after a pipe: an `az rest` sequence runs to the end of its logical
+//     line, pipes included, so the last URL flag with a value on the line gives the
+//     address: `az rest --method get --url https://example.com/x | grep -u
+//     https://management.azure.com/y` is accepted. It is a GET only, and contrived.
 //   - A flag inside a parameter expansion's default: `${M:--mput}`,
 //     `${U:--uhttps://example.com/x}` and `${H:---headers} a=b` reach the check as
 //     the fields `M:--mput`, `U:--uhttps:` and `H:---headers`, which name no flag.
@@ -235,8 +244,9 @@ var cloudCLIs = []cloudCLI{{
 	// choosing: no read passes any of them. --body's short alias -b is refused
 	// in azRestReads, in an az rest sequence only, since -b is a common short flag
 	// of other commands. The sequence runs to the end of its logical line, pipes
-	// included, so a `| jq -b .a` after an az rest is refused as rest -b: the
-	// check fails closed there. The variables make the CLI skip TLS
+	// included, so a `| jq -b .a`, a run-on `-u…` or a run-on `-m…` after an
+	// az rest is refused as an az rest flag: the check fails closed there. The
+	// variables make the CLI skip TLS
 	// verification and trust another CA bundle where it has no flag to, and
 	// AZURE_CONFIG_DIR's config directory holds the cloud's endpoints and the
 	// caller's cached login.
@@ -478,11 +488,11 @@ func deniedToken(file string, line logicalLine) (problem string, denied, truncat
 // `--meth put` — is refused rather than read, since the check would otherwise take
 // it for one with no method at all and let the write through. Every single quote in
 // a word is removed, as bash removes it, since the field scan keeps it on the word:
-// `-'m'put` is `-mput`. A shortened URL flag
-// — `--u`, `--ur`, also with an inline value — is refused too, never completed to
-// `--url` or `--uri`: `--ur` is also a prefix of az rest's `--url-parameters` and
-// `--uri-parameters`, so what az's parser makes of it is nothing the check can rely
-// on, and a write it hid would skip the management-endpoint rule. A short URL flag
+// `-'m'put` is `-mput`. A shortened URL flag — `--u`, `--ur`, also with an inline
+// value — is refused too, never completed to `--url` or `--uri`: `--ur` is also a
+// prefix of az rest's `--url-parameters` and `--uri-parameters`, so what az's
+// parser makes of it is nothing the check can rely on, and a write it hid would
+// skip the management-endpoint rule. A short URL flag
 // with its value run on — `-uhttps://example.com/x`, which argparse reads as `-u
 // https://example.com/x` — is refused as the method flag's run-on forms are, on the
 // management endpoint too. `-b`, az rest's short alias of the denied --body, is
@@ -493,7 +503,8 @@ func deniedToken(file string, line logicalLine) (problem string, denied, truncat
 // `az rest --method get --url https://example.com/x | sort -u` holds the address
 // to the management endpoint, whatever `sort -u` gives. A URL flag with a value
 // replaces the address, as az's parser keeps the last one, so the address the
-// endpoint check holds is the one az would call. The inline `=` branches are a
+// endpoint check holds is the last URL flag's on the logical line, pipes included.
+// The inline `=` branches are a
 // defence for reads called on unsplit words: the scan splits `=` into a
 // separator, so `--method=post` reaches it as `--method` and `post`.
 func azRestReads(words []string) (string, bool) {
@@ -1623,7 +1634,13 @@ func scanLine(scan *fieldScan, file string, lines []logicalLine, at int, line lo
 			continue
 		}
 
-		if slices.Contains(guideBareMentions, path.Base(words[0])) {
+		// An empty first word is the empty argument a `''` after the name
+		// unquotes to, no bare mention: path.Base gives `.` for it, one of
+		// guideBareMentions, so it is read as the CLI's first argument and the
+		// sequence is held to the command path that starts with it, which no
+		// read has. The check fails closed: `aws '' ec2 describe-instances` is
+		// refused too, rather than read with the empty word skipped.
+		if words[0] != "" && slices.Contains(guideBareMentions, path.Base(words[0])) {
 			continue
 		}
 
@@ -1786,8 +1803,8 @@ var guideBareMentions = []string{
 // on: white space, the double quote, the backtick, `$`, the shell's braces,
 // parentheses and operators, `=` and `,`, and the backslash. A single quote is no
 // separator: the guide's programs write a possessive through one — gcp.jq's
-// "gcloud's" — so it splits no word, and cliNameField strips the quote a shell text
-// puts before a command's name.
+// "gcloud's" — so it splits no word, and cliNameField removes every single quote
+// in the field, as bash does.
 const lineFieldSeparators = " \t\r\f\v`\"$(){};|&<>=,\\"
 
 // lineFields returns the fields of a line, in the line's order.
