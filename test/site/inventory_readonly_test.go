@@ -204,6 +204,7 @@ var cloudCLIs = []cloudCLI{{
 	readCommands: []string{
 		"account show",
 		"graph query",
+		"network dns dnssec-config show",
 		azREST,
 		"servicebus namespace list",
 		"servicebus queue list",
