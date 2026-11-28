@@ -98,10 +98,11 @@ programs below classify into the seven categories ADR 0046 adds, on every source
 service: AWS and Azure into all seven, GCP into all but `database.mongodb` (its program classifies no
 GCP service as one; Firestore stays `unclassified`, PRD #552); each source's *classification* table
 names the types. Of the two categories ADR 0047 adds (PRD #571), the AWS program classifies into
-both, the GCP and Azure programs into `messaging.kafka` (neither source runs a managed OpenSearch),
-and no program into `network.dns`: a search service on Azure, an Event Hubs namespace whose clients
-all use its Kafka endpoint, or a DNS zone on any source, is listed as `unclassified`, or not at all,
-so set its category (`search.opensearch`, `messaging.kafka` or `network.dns`) by hand.
+both, the GCP and Azure programs into `messaging.kafka` (neither source runs a managed OpenSearch):
+a search service on Azure, or an Event Hubs namespace whose clients all use its Kafka endpoint, is
+listed as `unclassified`, so set its category (`search.opensearch` or `messaging.kafka`) by hand.
+Every program classifies a public DNS zone (a Route 53 hosted zone, a Cloud DNS managed zone, an
+Azure DNS zone) into `network.dns` (ADR 0048, PRD #581).
 
 The **capabilities** are features a resource depends on:
 
@@ -215,8 +216,10 @@ query keeps whole. It still holds full ARNs and resource IDs, which carry the ac
 subscription, and can hold IP addresses, tag keys, and an AKS node pool's labels, tags (keys and
 values), taints, subnet ID and node image version. It also holds the names of your Route 53 hosted
 zones, which are your domains, public and private, and their zone IDs, and the names of your Cloud
-DNS managed zones, public and private, which often spell your domains; of a zone's records, only a
-count of routed record sets per zone, never a record's name or value, and of its DNSSEC configuration
+DNS managed zones, public and private, which often spell your domains, and the names of your Azure DNS
+zones, public and private, which are your domains, with their resource groups; of a zone's records
+only a count of routed record sets per zone (on AWS and GCP; no Azure command reads a record), never
+a record's name or value, and of its DNSSEC configuration
 only whether it is signed, never a key. Share only the reviewed inventory file, never the
 directory, and delete the directory once the inventory is built (see [Privacy](#privacy)).
 
@@ -1308,6 +1311,12 @@ subscriptions and Azure Managed Redis are the actions
 `Microsoft.Cache/redisEnterprise/databases/read`, all within `*/read`. An HDInsight cluster is read
 only through what the Resource Graph query below projects, which `*/read` covers: no HDInsight
 command, and no action that reads a cluster's configuration or credentials, is needed or granted.
+The DNS zones come from Resource Graph, and the DNSSEC loop reads
+`Microsoft.Network/dnszones/dnssecConfigs/default/read` (beside `Microsoft.Network/dnszones/read`),
+both within `*/read`. `*/read` also covers every record read of a zone
+(`Microsoft.Network/dnszones/recordsets/read`, `Microsoft.Network/dnszones/all/read` and one per
+record type, such as `Microsoft.Network/dnszones/A/read`), so its holder can read every record of
+every zone; no command here reads one.
 
 ### Collect from Azure
 
@@ -1397,6 +1406,8 @@ query="Resources
       bag_pack('protocol', properties.protocol,
         'provisionedStorageGiB', properties.provisionedStorageGiB,
         'redundancy', properties.redundancy),
+    type =~ 'microsoft.network/dnszones',
+      bag_pack('zoneType', properties.zoneType),
     dynamic(null)))
 | project id, name, type, kind, location, zones, sku, properties"
 page=1
@@ -1467,6 +1478,18 @@ jq -r '[.data[] | select(.type == "microsoft.compute/virtualmachines"
   while read -r location; do
     az vm list-sizes --location "$location" --output json
   done > "$out/vm-sizes.json"
+
+# Whether each public DNS zone is signed with DNSSEC: its provisioning state alone, never its keys.
+# An unsigned zone answers "(NotFound) DNSSEC is not enabled for DNS zone ...": that error is expected,
+# as is the warning that the dnssec-config command group is experimental.
+jq -r '.data[] | select(.type == "microsoft.network/dnszones"
+    and ((.properties.zoneType // "Public") | ascii_downcase) != "private")
+  | [(.id | split("/")[4]), .name] | @tsv' "$out"/graph-*.json |
+  while read -r rg zone; do
+    az network dns dnssec-config show --resource-group="$rg" --zone-name="$zone" \
+      --query "{id: id, type: type, provisioningState: provisioningState || properties.provisioningState}" \
+      --output json || :
+  done > "$out/dns-dnssec.json"
 ```
 
 The query keeps no admin user names, SSH keys, server logins or host names. Of a cache's
@@ -1498,6 +1521,25 @@ queues or shares, or a Redis Enterprise cluster with more databases, than one re
 `az rest --method get --url` as well. The shares call
 lists each share snapshot as one more element with its share's ID and a `snapshotTime`; the program
 counts it as a snapshot of the share, not as a share.
+
+Of a DNS zone, the query keeps only its `zoneType` (`Public` or `Private`; a zone without one is
+public, the API's default), never its name servers, its record set counts or its signing keys, which
+the zone resource carries. Resource Graph does not list a zone's DNSSEC configuration, hence the
+DNSSEC loop: it runs only for the public zones of the Resource Graph pages, as only a public zone can
+be signed, reads each zone's resource group (from its resource ID) and name from one line, separated
+by a tab (neither holds one), and asks for that zone's configuration. Its calls run in the
+subscription the Resource Graph query read, the one the CLI is set to, so none needs `--subscription`.
+It passes both values in the
+attached form (`--resource-group="$rg"`), as a resource group's name may start with `-`, which the CLI
+would read as an option if it came as a separate word. The `--query` keeps its ID, its
+type and its `provisioningState` (the program reads `Succeeded` as signed), never a key or the
+delegation signer data. An unsigned zone has no configuration: its call prints
+`(NotFound) DNSSEC is not enabled for DNS zone ...` on stderr and writes nothing, and `|| :` lets the
+loop go on and end with status 0 whatever the last zone is (a shell running with `set -e` would stop
+there otherwise). The CLI also warns that the `dnssec-config` command group is experimental. Both
+messages are expected. Any other error on stderr (such as `AuthorizationFailed`, throttling or a
+network error) means that zone's signed state was not read, as `|| :` hides every failure: run the
+loop again, or add `dnssec` to that zone by hand. No command reads a zone's record sets.
 
 ### Build the Azure inventory
 
@@ -1599,6 +1641,10 @@ Graph writes types in lower case).
 | `Microsoft.HDInsight/clusters`, any other kind (Spark, Hadoop, HBase, ...) | `unclassified` |
 | `Microsoft.EventHub/namespaces` (Event Hubs) | `unclassified` |
 | `Microsoft.Search/searchServices` (Azure AI Search) | `unclassified` |
+| `Microsoft.Network/dnszones` (Azure DNS), zone type `Public` or none | `network.dns`, with no region |
+| `Microsoft.Network/dnszones`, zone type `Private` (a legacy private zone) | `unclassified` |
+| `Microsoft.Network/privateDnsZones`, `Microsoft.Network/dnsResolvers` (and their children) | `unclassified` |
+| `Microsoft.Network/trafficManagerProfiles` (Traffic Manager) | `unclassified` |
 | any other type | `unclassified` |
 
 An Event Hubs namespace stays `unclassified` even when its Kafka endpoint is on: most Event Hubs
@@ -1608,6 +1654,14 @@ a Kafka endpoint; a Basic namespace has none and stays `unclassified`. Change a 
 Dedicated namespace's category to `messaging.kafka` by hand only when every client of the namespace
 uses its Kafka endpoint. Azure AI Search is no OpenSearch
 service, so it stays `unclassified`.
+
+Azure DNS public zones are classified; private DNS zones (and legacy private `dnszones` zones), which
+answer only inside the virtual networks linked to them and move with the network design, DNS Private
+Resolvers and Traffic Manager profiles stay `unclassified`, so the report shows them as blockers. A
+zone's ID in the inventory is its name, the domain. Azure DNS has no routing policies of its own; a
+record set that is an alias to, or linked to, a Traffic Manager profile answers by that profile's
+routing method and endpoint health. The program does not read record sets, so add `dns-routing` by
+hand to a zone with a record set that is an alias to, or linked to, a Traffic Manager profile.
 
 An HDInsight Kafka cluster's virtual machines and disks are not separate resources in the listing:
 the cluster stands for them, and its size is its worker nodes'. No cluster setting gives a topic's
@@ -1700,6 +1754,7 @@ holds data, and stays; so does a share of such a FileStorage account, a persiste
 | `storage.file` (`Microsoft.FileShares`) | `zone-high-availability` | `redundancy` `Zone` |
 | `messaging.kafka` (HDInsight) | `encryption-at-rest` | always: Azure encrypts the cluster's managed disks |
 | `messaging.kafka` (HDInsight) | `node-high-availability` | the worker role's `targetInstanceCount` is 3 or more |
+| `network.dns` (public zone) | `dnssec` | its DNSSEC configuration's `provisioningState` is `Succeeded` (any casing): the zone is signed, whether or not the parent zone holds its DS record yet (`Succeeded` means signed, not delegated); a zone with no configuration, or one in another state (such as `Creating` or `Deleting`), gets none |
 | `messaging.kafka` (HDInsight) | `zone-high-availability` | never: a cluster with `zones` set is zonal, every node in the one zone chosen, not zone redundant, and does not survive that zone's loss (Microsoft Learn, *Create an Azure HDInsight cluster that uses Availability Zones*) |
 
 A frontend is IPv6 when its `privateIPAddressVersion` or its public IP address's
@@ -1744,10 +1799,11 @@ scripts.
 DNS zones are named after your domains: a hosted zone's name is a domain you run, public or private,
 and it is both the zone's ID in the inventory and a value in the collected directory. A Cloud DNS
 managed zone's name is chosen by you and often spells the domain (`example-com`); it too is the zone's
-ID and a value in the collected directory. Rename it in the inventory if the domain should not leave
-your organisation. The record-set output is a count per zone
-only, and the DNSSEC output a zone's signed state only: neither file holds a record, a record's name or
-value, or a DNSSEC key.
+ID and a value in the collected directory. An Azure DNS zone's name, public or private, is your
+domain, the zone's ID in the inventory and a value in the collected directory, with its resource group
+in the resource ID. Rename it in the inventory if the domain should not leave your organisation. The
+record-set output is a count per zone only, and the DNSSEC output a zone's signed state only: neither
+file holds a record, a record's name or value, or a DNSSEC key. No Azure command reads a record.
 
 - Share only the reviewed inventory file, never the collected directory.
 - Delete the collected directory right after the build (`rm -r inventories/<source>`).

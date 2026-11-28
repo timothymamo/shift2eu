@@ -1350,6 +1350,58 @@ func inventoryGuides() []inventoryGuideCase {
 					id: "srch-shop-catalog", rawType: "Microsoft.Search/searchServices", category: "unclassified",
 					capabilities: []string{},
 				},
+				// A public DNS zone is a public authoritative DNS zone: one resource per
+				// zone, network.dns, with no region, since Azure serves a zone from name
+				// servers it picks and not from a region the user chooses (PRD #581,
+				// milestone 4). Resource Graph writes a zone's location as `global`, which
+				// the program turns into no region.
+				//
+				// A zone Azure signs with DNSSEC is dnssec: its DNSSEC configuration's
+				// provisioningState is Succeeded, and the config ID writes the type as
+				// `dnszones` while Resource Graph writes the zone as `dnsZones`, so the two
+				// only join when the casing is ignored.
+				{
+					id: "shop.example.com", rawType: "Microsoft.Network/dnsZones", category: "network.dns",
+					noRegion: true, capabilities: []string{"dnssec"},
+				},
+				// A public zone whose zoneType is missing: `Public` is the API's default for
+				// a zone, so the program has to treat a missing type as public rather than
+				// leave the zone unclassified.
+				{
+					id: "legacy.example.com", rawType: "Microsoft.Network/dnsZones", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
+				// A public zone with no DNSSEC configuration at all (the guide's per-zone
+				// read answers (NotFound) for it, and nothing joins it): network.dns with no
+				// capability. A program that presumed a zone signed, or that joined the
+				// Deleting configuration of another zone to it, gives it dnssec.
+				{
+					id: "blog.example.com", rawType: "Microsoft.Network/dnsZones", category: "network.dns",
+					noRegion: true, capabilities: []string{},
+				},
+				// A legacy private zone of the dnszones type answers only inside the
+				// virtual networks it is attached to and moves with the network design, so
+				// it stays unclassified with its rawType, as a privateDnsZones zone does
+				// (PRD #581, *What does not, and why*).
+				{
+					id: "old-internal.example.com", rawType: "Microsoft.Network/dnsZones", category: "unclassified",
+					noRegion: true, capabilities: []string{},
+				},
+				{
+					id: "internal.example.com", rawType: "Microsoft.Network/privateDnsZones", category: "unclassified",
+					noRegion: true, capabilities: []string{},
+				},
+				// A DNS Private Resolver resolves inside a network rather than hosting a
+				// zone, and a Traffic Manager profile is the separate resource a zone's
+				// records may depend on: both stay unclassified under their own type.
+				{
+					id: "dnsr-shop", rawType: "Microsoft.Network/dnsResolvers", category: "unclassified",
+					region: "westeurope", capabilities: []string{},
+				},
+				{
+					id: "tm-shop", rawType: "Microsoft.Network/trafficManagerProfiles", category: "unclassified",
+					noRegion: true, capabilities: []string{},
+				},
 			},
 			sized: []sizeFact{
 				// A Standard_D2s_v3 is 2 cores and 8192 MB, from az vm list-sizes.
@@ -1413,6 +1465,12 @@ func inventoryGuides() []inventoryGuideCase {
 				// worker role is the one the recorded query packs either way.
 				{id: "kafka-shop-resizing", vcpus: 2, memoryGiB: 8, storageGiB: 1023, count: 3},
 			},
+			// network.dns takes no size field: a zone is billed by the zone, not by a
+			// node or a GiB, and no recorded call gives one (PRD #581).
+			unsized: []string{
+				"shop.example.com", "legacy.example.com", "blog.example.com",
+				"old-internal.example.com", "internal.example.com",
+			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
 			// with it: the member's scale set stands for all of them. So does a
@@ -1454,6 +1512,12 @@ func inventoryGuides() []inventoryGuideCase {
 				"kafka-shop-deltimeout",
 				"kafka-shop-error",
 				"kafka-shop-timeout",
+			},
+			absentRawTypes: []string{
+				// Azure writes a zone's DNSSEC configuration as a child of the zone, and
+				// the guide's per-zone read keeps its provisioning state alone: the config
+				// is no resource of its own (PRD #581, milestone 4).
+				"Microsoft.Network/dnszones/dnssecConfigs",
 			},
 		},
 	}
@@ -1543,6 +1607,9 @@ func taxonomyCategories(source string) []string {
 			// PRD #571's Azure classification: HDInsight runs Kafka, and Azure runs
 			// no managed OpenSearch.
 			"messaging.kafka",
+			// PRD #581's Azure classification: the public DNS zones its fixtures
+			// record, which Azure serves from no region the user picks.
+			"network.dns",
 		}
 	default:
 		return nil
